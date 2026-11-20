@@ -1,0 +1,56 @@
+# Cargo workspace: the library crates (`tilefab-core`, `tilefab-cli`, `tilefab-widget`,
+# `tilefab-input`), the `tilefab` façade that gathers them, and the demo application
+# (`tilefab-demo`, binary `tilefab`). Dependencies only go downward:
+# core ← cli, widget, input ← tilefab ← tilefab-demo.
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Minimum supported Rust version: let chains (crates/tilefab/examples/inline.rs) and the
+# `backtrace` / `gimli` / `addr2line` dependencies of the demo need 1.88. Checked by the
+# `msrv` job of .github/workflows/ci.yml.
+rust-version = "1.88"
+license = "MIT"
+readme = "README.md"
+keywords = ["tui", "terminal", "crossterm", "inline", "viewport"]
+categories = ["command-line-interface"]
+# Not published yet: set `repository`, then remove this line once the public repository exists.
+publish = false
+
+[workspace.dependencies]
+# The workspace crates. With a version, so that each one can be published on its own.
+tilefab = { path = "crates/tilefab", version = "0.1.0" }
+tilefab-cli = { path = "crates/tilefab-cli", version = "0.1.0" }
+tilefab-core = { path = "crates/tilefab-core", version = "0.1.0" }
+tilefab-input = { path = "crates/tilefab-input", version = "0.1.0" }
+tilefab-widget = { path = "crates/tilefab-widget", version = "0.1.0" }
+
+color-eyre = "0.6.5"
+crossterm = "0.29"
+# Property tests; without the default `fork` and `timeout` features (fewer dependencies).
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }
+rand = "0.10.4"
+# Counting allocator for the allocation example and test (keeps `unsafe` out of this project).
+stats_alloc = "0.1.10"
+tokio = "1.54.1"
+# Without the default `attributes` feature: `#[instrument]` is not used, and its
+# proc-macro crate (`tracing-attributes`) would only add build time.
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+tracing-subscriber = "0.3.23"
+# Disable default features (which pull in ratatui): only crossterm support is needed.
+tui-input = { version = "0.15.5", default-features = false, features = ["crossterm"] }
+unicode-segmentation = "1.13"
+unicode-width = "0.2"
+
+# Lints for every crate (lib, bin, examples, tests); each crate opts in with
+# `[lints] workspace = true`. `missing_docs` stays in each library's `lib.rs`, because it
+# only makes sense for a library API.
+[workspace.lints.rust]
+# The project has no `unsafe` code: keep it that way.
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }

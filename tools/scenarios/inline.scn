@@ -1,0 +1,9 @@
+# For crates/tilefab/examples/inline.rs: logs every 300 ms, viewport height changes every 2 seconds.
+# Type some text at the prompt while everything moves, then quit with `q`.
+wait 3
+line abc
+wait 9
+mark observation-end
+stop
+line q
+wait 1

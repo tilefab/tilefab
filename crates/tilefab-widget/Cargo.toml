@@ -1,0 +1,21 @@
+[package]
+name = "tilefab-widget"
+description = "Widgets of tilefab (gauges, blocks, lists, paragraphs), drawn in a buffer without I/O"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+
+[dependencies]
+tilefab-core.workspace = true
+unicode-segmentation.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

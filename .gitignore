@@ -1,0 +1,88 @@
+# Editor settings: personal, not shared.
+.vscode/
+
+# Rust: generated builds, documentation, coverage reports, and test recordings.
+# Match target directories at any depth, including standalone crate builds.
+target/
+# Keep Cargo.lock: it pins dependencies for the workspace and demo application.
+
+# Rust tooling: formatter backups, compiler crash reports, and profiling data.
+*.rs.bk
+rustc-ice-*.txt
+*.profraw
+*.profdata
+# Mutation-testing output can be recreated from the source.
+mutants.out*/
+
+# Python tooling: local environments, bytecode, and disposable analysis caches.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+# Python coverage data and generated HTML reports.
+.coverage
+.coverage.*
+htmlcov/
+
+# macOS: Finder metadata and resource-fork files created when copying files.
+.DS_Store
+.localized
+.AppleDouble/
+.LSOverride
+._*
+__MACOSX/
+
+# Windows: Explorer thumbnail caches, folder preferences, and recycle bins.
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Linux desktop: trash folders and filesystem-created directory metadata.
+.Trash-*/
+.directory
+
+# Editors: swap files, autosave files, and backup copies.
+*.swp
+*.swo
+*~
+.\#*
+\#*\#
+# JetBrains: user-specific workspace state and local HTTP request history.
+.idea/**/workspace.xml
+.idea/**/tasks.xml
+.idea/**/shelf/
+.idea/**/httpRequests/
+# Local file history (VS Code "Local History" extension).
+.history/
+
+# Local environment values may contain credentials; keep documented templates.
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# AI agent instructions and configurations (MCP servers, Serena project and memories):
+# personal tooling, kept local.
+.bob/
+.claude/
+CLAUDE.md
+.codex/
+AGENTS.md
+.continue/
+.serena/
+.mcp.json
+
+# Localized documentation
+*-fr.md
+
+# Private construction documents are maintained locally, outside the repository.
+/specifications/
+
+# Do not blanket-ignore logs, JSON, images or archives: they can be useful fixtures
+# or documentation.

@@ -1,0 +1,47 @@
+[package]
+name = "tilefab"
+description = "Small TUI library on crossterm with an inline viewport: façade over the tilefab-* crates"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+
+[features]
+default = ["widget", "input"]
+# The widget library (`Block`, `Paragraph`, `Gauge`, `List`…).
+widget = ["dep:tilefab-widget"]
+# The prompt input line (`InputLine`).
+input = ["dep:tilefab-input"]
+
+[dependencies]
+tilefab-cli.workspace = true
+tilefab-core.workspace = true
+tilefab-input = { workspace = true, optional = true }
+tilefab-widget = { workspace = true, optional = true }
+
+[dev-dependencies]
+crossterm.workspace = true
+stats_alloc.workspace = true
+
+[[example]]
+name = "fullscreen"
+required-features = ["widget"]
+
+[[example]]
+name = "inline"
+required-features = ["widget"]
+
+[[example]]
+name = "cell_alloc"
+required-features = ["widget"]
+
+[[test]]
+name = "terminal_alloc"
+required-features = ["widget"]
+
+[lints]
+workspace = true

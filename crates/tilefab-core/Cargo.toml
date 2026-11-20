@@ -1,0 +1,21 @@
+[package]
+name = "tilefab-core"
+description = "Common base of tilefab: cells, buffer, styles, geometry, styled text, widget traits"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+
+[dependencies]
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,14 @@
+# Launch 5 tasks in a burst, then type while tasks finish.
+wait 1
+mark start
+line start alpha
+line start beta
+line start gamma
+line start delta
+line start epsilon
+wait 2
+line help
+wait 12
+mark tasks-done
+line quit
+wait 1

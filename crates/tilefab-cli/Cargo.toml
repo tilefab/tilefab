@@ -1,0 +1,26 @@
+[package]
+name = "tilefab-cli"
+description = "Terminal side of tilefab: crossterm backend, double-buffered terminal, inline viewport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+
+[dependencies]
+crossterm.workspace = true
+tilefab-core.workspace = true
+# One warning, when the cursor position query fails after a resize; the application
+# chooses where it goes (or drops it) by installing a subscriber.
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+# The terminal simulator of the frame-commit tests splits text into graphemes.
+unicode-segmentation.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,8 @@
+# One task, one command, exit.
+wait 1
+line start alpha
+wait 1
+line help
+wait 12
+line quit
+wait 1

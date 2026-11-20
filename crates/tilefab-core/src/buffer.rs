@@ -1,0 +1,809 @@
+//! `Cell` and `Buffer`: the cell grid in which widgets draw.
+//!
+//! # Wide characters
+//!
+//! An emoji or ideograph occupies **two columns**. It is stored as follows:
+//!
+//! ```text
+//! column:     0     1    2
+//! content:  "😀"   ""   "a"
+//!            └head └─ continuation cell (empty symbol)
+//! ```
+//!
+//! The *head* holds the grapheme; the next cell, with an empty symbol, is its *continuation*.
+//! The backend never prints a continuation: the terminal already covered it when printing
+//! the head. Writing over either half of a wide character replaces the other half
+//! with a space, so half an emoji is never left on screen.
+
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
+use super::convert::saturating_u16;
+use super::layout::Rect;
+use super::style::{Color, Modifier, Style};
+
+/// Number of screen columns occupied by a grapheme: 0, 1, or 2.
+///
+/// Control characters count as 0 (the buffer ignores them), as do zero-width
+/// graphemes; a grapheme never occupies more than two columns.
+pub fn grapheme_width(grapheme: &str) -> usize {
+    if grapheme.chars().any(char::is_control) {
+        return 0;
+    }
+    grapheme.width().min(2)
+}
+
+/// Bytes a symbol holds without a heap allocation: enough for nearly every grapheme
+/// (accented letters, CJK, most emoji). Longer ones (some emoji sequences) use the heap.
+const INLINE_SYMBOL: usize = 22;
+
+/// A cell's symbol, stored in the cell itself when it is short.
+///
+/// Same size as a `String`, but creating or copying a short symbol never allocates: a
+/// frame clones and compares thousands of cells. The representation is canonical (inline
+/// whenever it fits, unused bytes zeroed), so the derived equality compares contents.
+#[derive(Clone, PartialEq, Eq)]
+enum Symbol {
+    /// The first `len` bytes of `bytes`, valid UTF-8.
+    Inline { len: u8, bytes: [u8; INLINE_SYMBOL] },
+    /// Longer than `INLINE_SYMBOL` bytes.
+    Heap(Box<str>),
+}
+
+impl Symbol {
+    /// A continuation (second half of a wide character).
+    const EMPTY: Self = Self::Inline {
+        len: 0,
+        bytes: [0; INLINE_SYMBOL],
+    };
+    /// A space, the default symbol.
+    const SPACE: Self = {
+        let mut bytes = [0; INLINE_SYMBOL];
+        bytes[0] = b' ';
+        Self::Inline { len: 1, bytes }
+    };
+
+    fn new(symbol: &str) -> Self {
+        if let Ok(len) = u8::try_from(symbol.len())
+            && symbol.len() <= INLINE_SYMBOL
+        {
+            let mut bytes = [0; INLINE_SYMBOL];
+            bytes[..symbol.len()].copy_from_slice(symbol.as_bytes());
+            Self::Inline { len, bytes }
+        } else {
+            Self::Heap(symbol.into())
+        }
+    }
+
+    /// `symbol`, or a space if it contains a control character (see [`Cell`]).
+    fn printable(symbol: &str) -> Self {
+        if symbol.chars().any(char::is_control) {
+            Self::SPACE
+        } else {
+            Self::new(symbol)
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        match self {
+            // Always valid: the bytes come from a `&str` cut at its end. Without `unsafe`
+            // (forbidden in this project), the check is redone; it is cheap on 22 bytes.
+            Self::Inline { len, bytes } => {
+                std::str::from_utf8(&bytes[..usize::from(*len)]).unwrap_or_default()
+            }
+            Self::Heap(symbol) => symbol,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        matches!(self, Self::Inline { len: 0, .. })
+    }
+}
+
+impl std::fmt::Debug for Symbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self.as_str(), f)
+    }
+}
+
+/// A screen cell: a symbol (a grapheme) and a *complete* style.
+///
+/// # Invariant: a symbol is a printable grapheme
+///
+/// A symbol is one printable grapheme, or empty for a continuation. The symbol can only be
+/// set through [`Cell::new`] and [`Cell::set_symbol`], which replace a string containing a
+/// control character (such as `ESC`, `BEL` or a line feed) with a space: no escape
+/// sequence can reach the terminal through a cell. `Buffer::set_string`
+/// and its variants also cut text into graphemes and skip control characters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cell {
+    /// The displayed grapheme. Empty for a continuation cell.
+    symbol: Symbol,
+    /// Foreground color.
+    pub fg: Color,
+    /// Background color.
+    pub bg: Color,
+    /// Bold, italic, underlined…
+    pub modifier: Modifier,
+}
+
+impl Default for Cell {
+    /// An unstyled space.
+    fn default() -> Self {
+        Self {
+            symbol: Symbol::SPACE,
+            fg: Color::Reset,
+            bg: Color::Reset,
+            modifier: Modifier::empty(),
+        }
+    }
+}
+
+impl Cell {
+    /// An unstyled cell displaying `symbol` (a space if it contains a control character).
+    #[must_use]
+    pub fn new(symbol: &str) -> Self {
+        Self {
+            symbol: Symbol::printable(symbol),
+            ..Self::default()
+        }
+    }
+
+    /// The displayed grapheme: empty for a continuation, never a control character.
+    #[must_use]
+    pub fn symbol(&self) -> &str {
+        self.symbol.as_str()
+    }
+
+    /// Change the symbol without changing the style (a space if it contains a control
+    /// character).
+    pub fn set_symbol(&mut self, symbol: &str) -> &mut Self {
+        self.symbol = Symbol::printable(symbol);
+        self
+    }
+
+    /// Apply a partial style: only fields set by `style` change.
+    pub fn set_style(&mut self, style: Style) -> &mut Self {
+        if let Some(fg) = style.fg {
+            self.fg = fg;
+        }
+        if let Some(bg) = style.bg {
+            self.bg = bg;
+        }
+        self.modifier.remove(style.sub_modifier);
+        self.modifier.insert(style.add_modifier);
+        self
+    }
+
+    /// The cell's style as a `Style` with every field set.
+    #[must_use]
+    pub fn style(&self) -> Style {
+        Style {
+            fg: Some(self.fg),
+            bg: Some(self.bg),
+            add_modifier: self.modifier,
+            sub_modifier: Modifier::empty(),
+        }
+    }
+
+    /// Reset the cell to its default state (an unstyled space).
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// True for the second half of a wide character.
+    #[must_use]
+    pub fn is_continuation(&self) -> bool {
+        self.symbol.is_empty()
+    }
+
+    /// Number of columns occupied by the symbol: 0 for a continuation, 2 for a wide
+    /// character.
+    #[must_use]
+    pub fn width(&self) -> usize {
+        self.symbol().width()
+    }
+}
+
+/// A cell grid covering the rectangle `area`.
+///
+/// Coordinates are screen coordinates: the top-left cell is at
+/// `(area.x, area.y)`. Cells are stored in row-major order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Buffer {
+    /// The covered area, in screen coordinates.
+    pub area: Rect,
+    /// Cells in row-major order (`area.area()` elements).
+    pub content: Vec<Cell>,
+}
+
+impl Buffer {
+    /// A buffer with all cells set to spaces.
+    #[must_use]
+    pub fn empty(area: Rect) -> Self {
+        Self::filled(area, Cell::default())
+    }
+
+    /// Make this an empty buffer covering `area` (all cells unstyled spaces), reusing its
+    /// memory: no allocation once it has held that many cells. `Terminal` keeps its
+    /// buffers from one frame to the next this way.
+    pub fn reset_to(&mut self, area: Rect) {
+        self.area = area;
+        self.content.clear();
+        self.content.resize(area.area() as usize, Cell::default());
+    }
+
+    /// A buffer with all cells set to copies of `cell`.
+    #[must_use]
+    pub fn filled(area: Rect, cell: Cell) -> Self {
+        Self {
+            area,
+            content: vec![cell; area.area() as usize],
+        }
+    }
+
+    /// A buffer built from text lines, in ratatui's style: convenient for
+    /// writing expected test output. Its width is that of the widest line
+    /// (in display columns); shorter lines are padded with spaces.
+    pub fn with_lines<S: AsRef<str>>(lines: impl IntoIterator<Item = S>) -> Self {
+        let lines: Vec<S> = lines.into_iter().collect();
+        let width = lines.iter().map(|l| l.as_ref().width()).max().unwrap_or(0);
+        let mut buffer = Self::empty(Rect::new(
+            0,
+            0,
+            saturating_u16(width),
+            saturating_u16(lines.len()),
+        ));
+        // Lines beyond `u16::MAX` are outside the buffer: `zip` stops there.
+        for (y, line) in (0..=u16::MAX).zip(&lines) {
+            buffer.set_string(0, y, line.as_ref(), Style::new());
+        }
+        buffer
+    }
+
+    /// The content, one string per line (continuations add nothing).
+    #[must_use]
+    pub fn lines(&self) -> Vec<String> {
+        if self.area.is_empty() {
+            return vec![String::new(); self.area.height as usize];
+        }
+        self.content
+            .chunks(self.area.width as usize)
+            .map(|row| row.iter().map(Cell::symbol).collect())
+            .collect()
+    }
+
+    /// Index of cell `(x, y)` in `content`.
+    ///
+    /// # Panics
+    ///
+    /// If `(x, y)` is outside the buffer.
+    #[must_use]
+    pub fn index_of(&self, x: u16, y: u16) -> usize {
+        assert!(
+            x >= self.area.left()
+                && x < self.area.right()
+                && y >= self.area.top()
+                && y < self.area.bottom(),
+            "cell ({x}, {y}) outside the buffer {:?}",
+            self.area
+        );
+        (y - self.area.y) as usize * self.area.width as usize + (x - self.area.x) as usize
+    }
+
+    /// Coordinates `(x, y)` of the cell at `index`.
+    #[must_use]
+    pub fn pos_of(&self, index: usize) -> (u16, u16) {
+        let width = self.area.width as usize;
+        (
+            self.area.x + saturating_u16(index % width),
+            self.area.y + saturating_u16(index / width),
+        )
+    }
+
+    /// The cell at `(x, y)`.
+    ///
+    /// # Panics
+    ///
+    /// If `(x, y)` is outside the buffer.
+    #[must_use]
+    pub fn get(&self, x: u16, y: u16) -> &Cell {
+        &self.content[self.index_of(x, y)]
+    }
+
+    /// Mutable access to the cell at `(x, y)`.
+    ///
+    /// # Panics
+    ///
+    /// If `(x, y)` is outside the buffer.
+    pub fn get_mut(&mut self, x: u16, y: u16) -> &mut Cell {
+        let index = self.index_of(x, y);
+        &mut self.content[index]
+    }
+
+    /// Reset all cells to their default state.
+    pub fn reset(&mut self) {
+        for cell in &mut self.content {
+            cell.reset();
+        }
+    }
+
+    /// Apply `style` to all cells in `area` (ignore the portion outside the buffer).
+    pub fn set_style(&mut self, area: Rect, style: Style) {
+        let area = self.area.intersection(area);
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                self.get_mut(x, y).set_style(style);
+            }
+        }
+    }
+
+    /// Write `string` starting at `(x, y)`, with no width limit other than the buffer edge.
+    /// Return the position after the last character written.
+    pub fn set_string(&mut self, x: u16, y: u16, string: &str, style: Style) -> (u16, u16) {
+        self.set_stringn(x, y, string, usize::MAX, style)
+    }
+
+    /// Like [`Buffer::set_string`], but write at most `max_width` columns.
+    ///
+    /// Writing stops at the first grapheme that does not fit, whether at `max_width` or
+    /// the buffer edge: a wide character is never split in half. Control characters
+    /// and zero-width graphemes are ignored.
+    pub fn set_stringn(
+        &mut self,
+        x: u16,
+        y: u16,
+        string: &str,
+        max_width: usize,
+        style: Style,
+    ) -> (u16, u16) {
+        let area = self.area;
+        if y < area.top() || y >= area.bottom() || x < area.left() || x >= area.right() {
+            return (x, y);
+        }
+        let mut x = x;
+        let mut remaining = max_width.min((area.right() - x) as usize);
+        for grapheme in string.graphemes(true) {
+            let width = grapheme_width(grapheme);
+            if width == 0 {
+                continue;
+            }
+            if width > remaining {
+                break;
+            }
+            self.write_grapheme(x, y, grapheme, width, style);
+            x += saturating_u16(width);
+            remaining -= width;
+        }
+        (x, y)
+    }
+
+    /// Write a grapheme of `width` columns at `(x, y)`; the caller has already checked the
+    /// available space (`Paragraph` uses it to write graphemes it has already measured).
+    ///
+    /// Unlike [`Buffer::set_stringn`], nothing is measured or clipped: `width` must be the
+    /// display width of `grapheme` (1 or 2).
+    ///
+    /// # Panics
+    ///
+    /// If `(x, y)`, or `(x + 1, y)` for a wide grapheme, is outside the buffer.
+    pub fn write_grapheme(&mut self, x: u16, y: u16, grapheme: &str, width: usize, style: Style) {
+        // Overwriting half a wide character: the other half becomes a space.
+        self.break_wide(x, y);
+        if width == 2 {
+            self.break_wide(x + 1, y);
+        }
+        let head = self.get_mut(x, y);
+        head.set_symbol(grapheme);
+        head.set_style(style);
+        if width == 2 {
+            // The continuation copies the head's style to keep the background uniform.
+            let (fg, bg, modifier) = (head.fg, head.bg, head.modifier);
+            let tail = self.get_mut(x + 1, y);
+            tail.symbol = Symbol::EMPTY;
+            tail.fg = fg;
+            tail.bg = bg;
+            tail.modifier = modifier;
+        }
+    }
+
+    /// If `(x, y)` is part of a wide character, replace the *other* half with a space.
+    /// Cell `(x, y)` itself is unchanged: the caller will overwrite it.
+    fn break_wide(&mut self, x: u16, y: u16) {
+        let cell = self.get(x, y);
+        if cell.is_continuation() {
+            // Second half: the head is immediately left (a continuation is never in the first column).
+            if x > self.area.left() {
+                self.get_mut(x - 1, y).set_symbol(" ");
+            }
+        } else if cell.width() == 2 && x + 1 < self.area.right() {
+            self.get_mut(x + 1, y).set_symbol(" ");
+        }
+    }
+
+    /// Cells to rewrite to go from `previous` to `self`, in screen order.
+    ///
+    /// Both buffers must cover the same area. Continuations are never
+    /// returned: writing a wide character's head is enough for the terminal.
+    ///
+    /// There is no need to “redraw neighbors” when replacing a wide character with a
+    /// narrow one (or vice versa): a continuation has an empty symbol, so it always differs
+    /// from a real cell, and the remaining half is detected like any other change.
+    ///
+    /// # Panics
+    ///
+    /// If `self` and `previous` do not cover the same area.
+    #[must_use]
+    pub fn diff<'a>(&'a self, previous: &Buffer) -> Vec<(u16, u16, &'a Cell)> {
+        self.diff_iter(previous).collect()
+    }
+
+    /// [`Buffer::diff`] as an iterator, without collecting it: `Terminal` hands it straight
+    /// to `Backend::draw`.
+    ///
+    /// # Panics
+    ///
+    /// If `self` and `previous` do not cover the same area (checked at the call, not lazily).
+    pub fn diff_iter<'a, 'b>(
+        &'a self,
+        previous: &'b Buffer,
+    ) -> impl Iterator<Item = (u16, u16, &'a Cell)> + use<'a, 'b> {
+        assert_eq!(
+            self.area, previous.area,
+            "diff between two buffers with different areas"
+        );
+        self.content
+            .iter()
+            .zip(&previous.content)
+            .enumerate()
+            .filter(|(_, (current, previous))| !current.is_continuation() && current != previous)
+            .map(|(i, (current, _))| {
+                let (x, y) = self.pos_of(i);
+                (x, y, current)
+            })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn buf(width: u16, height: u16) -> Buffer {
+        Buffer::empty(Rect::new(0, 0, width, height))
+    }
+
+    #[test]
+    fn symbols_with_control_characters_become_a_space() {
+        assert_eq!(Cell::new("a").symbol(), "a");
+        assert_eq!(Cell::new("😀").symbol(), "😀");
+        assert_eq!(Cell::new("").symbol(), "");
+        assert_eq!(Cell::new("a\nb").symbol(), " ");
+        let mut cell = Cell::new("x");
+        cell.set_symbol("\x1b[2J");
+        assert_eq!(cell.symbol(), " ");
+        assert_eq!(cell.width(), 1);
+    }
+
+    #[test]
+    fn short_symbols_are_inline_and_long_ones_round_trip_through_the_heap() {
+        assert_eq!(std::mem::size_of::<Symbol>(), std::mem::size_of::<String>());
+        assert!(matches!(Cell::default().symbol, Symbol::Inline { .. }));
+        // 22 bytes: the longest inline symbol.
+        let longest = "é".repeat(11);
+        assert!(matches!(Symbol::new(&longest), Symbol::Inline { .. }));
+        assert_eq!(Symbol::new(&longest).as_str(), longest);
+        // A family emoji: 25 bytes, one grapheme.
+        let family = "👨\u{200d}👩\u{200d}👧\u{200d}👦";
+        assert!(family.len() > INLINE_SYMBOL);
+        let cell = Cell::new(family);
+        assert!(matches!(cell.symbol, Symbol::Heap(_)));
+        assert_eq!(cell.symbol(), family);
+        assert_eq!(
+            cell,
+            Cell::new(family),
+            "equality across clones of a heap symbol"
+        );
+        // Canonical form: the same text always compares equal, whatever was there before.
+        let mut reused = Cell::new("abcdefgh");
+        reused.set_symbol("a");
+        assert_eq!(reused, Cell::new("a"));
+    }
+
+    #[test]
+    fn cell_debug_shows_the_symbol_text_and_style_is_complete() {
+        let mut cell = Cell::new("a");
+        cell.set_style(Style::new().fg(Color::Red));
+        assert!(format!("{cell:?}").contains("symbol: \"a\""), "{cell:?}");
+        assert_eq!(
+            cell.style(),
+            Style {
+                fg: Some(Color::Red),
+                bg: Some(Color::Reset),
+                add_modifier: Modifier::empty(),
+                sub_modifier: Modifier::empty(),
+            }
+        );
+    }
+
+    #[test]
+    fn overwriting_hand_made_wide_cells_at_the_edges_stays_in_the_buffer() {
+        // `set_string` never puts a wide head in the last column nor a continuation in
+        // the first one, but the `Cell` API can: overwriting them must not reach outside.
+        let mut b = buf(3, 1);
+        b.get_mut(2, 0).set_symbol("日");
+        b.set_string(2, 0, "x", Style::new());
+        assert_eq!(b.lines(), ["  x"]);
+        let mut c = buf(3, 1);
+        c.get_mut(0, 0).set_symbol("");
+        c.set_string(0, 0, "y", Style::new());
+        assert_eq!(c.lines(), ["y  "]);
+    }
+
+    #[test]
+    fn writes_ascii_and_returns_next_position() {
+        let mut b = buf(6, 2);
+        let next = b.set_string(1, 0, "abc", Style::new());
+        assert_eq!(next, (4, 0));
+        assert_eq!(b, Buffer::with_lines([" abc  ", "      "]));
+    }
+
+    #[test]
+    fn writes_accented_text_and_combining_marks() {
+        let mut b = buf(5, 1);
+        b.set_string(0, 0, "été", Style::new());
+        assert_eq!(b, Buffer::with_lines(["été  "]));
+        // “e” + combining accent = one grapheme, one column.
+        let mut c = buf(3, 1);
+        c.set_string(0, 0, "e\u{301}x", Style::new());
+        assert_eq!(c.get(0, 0).symbol(), "e\u{301}");
+        assert_eq!(c.get(1, 0).symbol(), "x");
+    }
+
+    #[test]
+    fn writes_wide_characters_with_continuation_cells() {
+        let mut b = buf(6, 1);
+        let next = b.set_string(0, 0, "a😀b日", Style::new());
+        assert_eq!(next, (6, 0));
+        assert_eq!(b.get(1, 0).symbol(), "😀");
+        assert!(b.get(2, 0).is_continuation());
+        assert_eq!(b.get(3, 0).symbol(), "b");
+        assert_eq!(b.get(4, 0).symbol(), "日");
+        assert!(b.get(5, 0).is_continuation());
+        assert_eq!(b, Buffer::with_lines(["a😀b日"]));
+        assert_eq!(b.lines(), ["a😀b日"]);
+    }
+
+    #[test]
+    fn emoji_sequences_are_one_wide_grapheme() {
+        let mut b = buf(4, 1);
+        b.set_string(0, 0, "👍🏽🇫🇷", Style::new());
+        assert_eq!(b.get(0, 0).symbol(), "👍🏽");
+        assert!(b.get(1, 0).is_continuation());
+        assert_eq!(b.get(2, 0).symbol(), "🇫🇷");
+        assert!(b.get(3, 0).is_continuation());
+    }
+
+    #[test]
+    fn wide_character_is_cut_at_the_edge_not_split() {
+        // “a” fits; the emoji (2 columns) has only one column left: it is omitted.
+        let mut b = buf(2, 1);
+        let next = b.set_string(0, 0, "a😀", Style::new());
+        assert_eq!(b, Buffer::with_lines(["a "]));
+        assert_eq!(next, (1, 0));
+        // Starting in the last column: nothing can be written.
+        let mut c = buf(5, 1);
+        c.set_string(4, 0, "日本", Style::new());
+        assert_eq!(c, Buffer::with_lines(["     "]));
+        // An area that is exactly wide enough.
+        let mut d = buf(4, 1);
+        d.set_string(0, 0, "日本语", Style::new());
+        assert_eq!(d, Buffer::with_lines(["日本"]));
+    }
+
+    #[test]
+    fn set_stringn_limits_the_width() {
+        let mut b = buf(10, 1);
+        b.set_stringn(0, 0, "abcdef", 3, Style::new());
+        assert_eq!(b, Buffer::with_lines(["abc       "]));
+        let mut c = buf(10, 1);
+        c.set_stringn(0, 0, "日本語", 5, Style::new()); // 2 + 2, then the third character (2) does not fit
+        assert_eq!(c, Buffer::with_lines(["日本      "]));
+    }
+
+    #[test]
+    fn ignores_control_characters_and_out_of_range_positions() {
+        let mut b = buf(4, 2);
+        b.set_string(0, 0, "a\tb\nc", Style::new());
+        assert_eq!(b.lines(), ["abc ", "    "]);
+        assert_eq!(b.set_string(0, 5, "x", Style::new()), (0, 5));
+        assert_eq!(b.set_string(9, 0, "x", Style::new()), (9, 0));
+        assert_eq!(b.lines(), ["abc ", "    "]);
+    }
+
+    #[test]
+    fn respects_a_buffer_that_does_not_start_at_the_origin() {
+        let mut b = Buffer::empty(Rect::new(3, 2, 4, 2));
+        b.set_string(4, 3, "ab", Style::new());
+        assert_eq!(b.get(4, 3).symbol(), "a");
+        assert_eq!(b.lines(), ["    ", " ab "]);
+        assert_eq!(
+            b.set_string(2, 2, "x", Style::new()),
+            (2, 2),
+            "left of the area"
+        );
+    }
+
+    #[test]
+    fn overwriting_half_of_a_wide_character_blanks_the_other_half() {
+        // Right half overwritten: the head becomes a space.
+        let mut b = buf(3, 1);
+        b.set_string(0, 0, "😀", Style::new());
+        b.set_string(1, 0, "x", Style::new());
+        assert_eq!(b.lines(), [" x "]);
+        // Left half overwritten: the continuation becomes a space.
+        let mut c = buf(3, 1);
+        c.set_string(0, 0, "😀", Style::new());
+        c.set_string(0, 0, "x", Style::new());
+        assert_eq!(c.lines(), ["x  "]);
+        // A wide character straddling two others destroys both.
+        let mut d = buf(4, 1);
+        d.set_string(0, 0, "日本", Style::new());
+        d.set_string(1, 0, "😀", Style::new());
+        assert_eq!(d.lines(), [" 😀 "]);
+        assert!(d.get(2, 0).is_continuation());
+    }
+
+    #[test]
+    fn set_string_patches_style_and_keeps_the_rest() {
+        let mut b = buf(3, 1);
+        b.set_style(b.area, Style::new().bg(Color::Blue));
+        b.set_string(
+            0,
+            0,
+            "ab",
+            Style::new().fg(Color::Red).add_modifier(Modifier::BOLD),
+        );
+        let a = b.get(0, 0);
+        assert_eq!(
+            (a.fg, a.bg, a.modifier),
+            (Color::Red, Color::Blue, Modifier::BOLD)
+        );
+        assert_eq!(b.get(2, 0).bg, Color::Blue);
+        assert_eq!(b.get(2, 0).fg, Color::Reset);
+    }
+
+    #[test]
+    fn wide_character_continuation_shares_the_style() {
+        let mut b = buf(2, 1);
+        b.set_string(0, 0, "😀", Style::new().fg(Color::Green).bg(Color::Black));
+        assert_eq!(b.get(1, 0).fg, Color::Green);
+        assert_eq!(b.get(1, 0).bg, Color::Black);
+    }
+
+    #[test]
+    fn set_style_is_clipped_to_the_buffer() {
+        let mut b = buf(2, 2);
+        b.set_style(Rect::new(1, 1, 10, 10), Style::new().fg(Color::Cyan));
+        assert_eq!(b.get(1, 1).fg, Color::Cyan);
+        assert_eq!(b.get(0, 0).fg, Color::Reset);
+    }
+
+    #[test]
+    fn reset_clears_symbols_and_styles() {
+        let mut b = buf(3, 1);
+        b.set_string(0, 0, "abc", Style::new().fg(Color::Red));
+        b.reset();
+        assert_eq!(b, buf(3, 1));
+    }
+
+    #[test]
+    fn with_lines_pads_short_lines_and_measures_display_width() {
+        let b = Buffer::with_lines(["ab", "日本x", ""]);
+        assert_eq!(b.area, Rect::new(0, 0, 5, 3));
+        assert_eq!(b.lines(), ["ab   ", "日本x", "     "]);
+        assert_eq!(
+            Buffer::with_lines(Vec::<&str>::new()).area,
+            Rect::new(0, 0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn index_and_position_round_trip() {
+        let b = Buffer::empty(Rect::new(2, 3, 4, 2));
+        let i = b.index_of(5, 4);
+        assert_eq!(i, 7);
+        assert_eq!(b.pos_of(i), (5, 4));
+    }
+
+    #[test]
+    #[should_panic(expected = "outside the buffer")]
+    fn get_outside_the_buffer_panics() {
+        let _ = buf(2, 2).get(2, 0);
+    }
+
+    fn diff_positions(next: &Buffer, prev: &Buffer) -> Vec<(u16, u16, String)> {
+        next.diff(prev)
+            .into_iter()
+            .map(|(x, y, c)| (x, y, c.symbol().to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn diff_of_identical_buffers_is_empty() {
+        let a = Buffer::with_lines(["abc", "日本"]);
+        assert!(a.diff(&a.clone()).is_empty());
+    }
+
+    #[test]
+    fn diff_reports_changed_cells_in_screen_order() {
+        let prev = Buffer::with_lines(["abc", "def"]);
+        let next = Buffer::with_lines(["aXc", "deZ"]);
+        assert_eq!(
+            diff_positions(&next, &prev),
+            [(1, 0, "X".to_string()), (2, 1, "Z".to_string())]
+        );
+    }
+
+    #[test]
+    fn diff_detects_style_only_changes() {
+        let prev = Buffer::with_lines(["ab"]);
+        let mut next = prev.clone();
+        next.set_style(Rect::new(1, 0, 1, 1), Style::new().fg(Color::Red));
+        assert_eq!(diff_positions(&next, &prev), [(1, 0, "b".to_string())]);
+    }
+
+    #[test]
+    fn diff_never_returns_continuation_cells() {
+        let prev = Buffer::with_lines(["ab "]);
+        let next = Buffer::with_lines(["😀 "]);
+        // The head changes; the continuation (column 1) is covered by the head.
+        assert_eq!(diff_positions(&next, &prev), [(0, 0, "😀".to_string())]);
+    }
+
+    #[test]
+    fn diff_wide_replaced_by_narrow_redraws_the_freed_cell() {
+        // “😀” (columns 0-1) replaced by “a” + space: column 1 must be redrawn,
+        // otherwise the right half of the emoji would remain visible.
+        let prev = Buffer::with_lines(["😀x"]);
+        let mut next = prev.clone();
+        next.set_string(0, 0, "a", Style::new());
+        assert_eq!(
+            diff_positions(&next, &prev),
+            [(0, 0, "a".to_string()), (1, 0, " ".to_string())]
+        );
+    }
+
+    #[test]
+    fn diff_narrow_replaced_by_wide_and_wide_replaced_by_wide() {
+        let prev = Buffer::with_lines(["abx"]);
+        let mut next = prev.clone();
+        next.set_string(0, 0, "日", Style::new());
+        assert_eq!(diff_positions(&next, &prev), [(0, 0, "日".to_string())]);
+
+        let wide_prev = Buffer::with_lines(["日x"]);
+        let mut wide_next = wide_prev.clone();
+        wide_next.set_string(0, 0, "本", Style::new());
+        assert_eq!(
+            diff_positions(&wide_next, &wide_prev),
+            [(0, 0, "本".to_string())]
+        );
+    }
+
+    #[test]
+    fn diff_after_shifting_a_wide_character_by_one_column() {
+        // “日” in columns 0-1 becomes “日” in columns 1-2.
+        let prev = Buffer::with_lines(["日 "]);
+        let mut next = buf(3, 1);
+        next.set_string(1, 0, "日", Style::new());
+        assert_eq!(
+            diff_positions(&next, &prev),
+            [(0, 0, " ".to_string()), (1, 0, "日".to_string())]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "different areas")]
+    fn diff_requires_same_area() {
+        let _ = buf(2, 1).diff(&buf(3, 1));
+    }
+}

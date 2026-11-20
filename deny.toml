@@ -1,0 +1,44 @@
+# cargo-deny configuration: `cargo deny check` runs every section below
+# (advisories, bans, licenses, sources).
+
+[graph]
+all-features = true
+
+# RustSec advisories: vulnerabilities always fail the check; unmaintained
+# and unsound crates fail too, yanked versions in Cargo.lock as well.
+[advisories]
+unmaintained = "all"
+yanked = "deny"
+ignore = []
+
+# Crates that are banned or present in several versions.
+[bans]
+# Known duplicate: `syn` 2 (tracing-attributes, derive_more-impl) and `syn` 3
+# (tokio-macros). Only costs build time, so warn instead of failing.
+multiple-versions = "warn"
+wildcards = "deny"
+# This crate is not published: path dependencies without a version are fine.
+allow-wildcard-paths = true
+highlight = "all"
+
+# All dependencies must use a license from this list
+# (for an “A OR B” expression, allowing either license is enough).
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+# This crate (`publish = false`) has no license: skip checking it.
+ignore = true
+
+# Dependencies may only come from crates.io: no other registry, no git.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
