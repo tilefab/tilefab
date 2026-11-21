@@ -43,9 +43,9 @@
 //! ignores lines while the known width is 0 (there is no buffer to render them into): the
 //! caller keeps them until then (see `Terminal::insert_before`).
 //!
-//! A screen with no rows is transient too: while its height is 0, `draw` draws nothing
-//! (the render closure is not called) and keeps the pending lines; the first `draw` with
-//! rows again repositions the viewport and applies them.
+//! A screen with no rows is transient too: while its height is 0, `draw` writes nothing
+//! (the render closure is not called, and nothing is erased) and keeps the pending lines;
+//! the first `draw` with rows again repositions the viewport and applies them.
 
 use std::io::{self, Write};
 
@@ -281,10 +281,21 @@ impl<W: Write> Terminal<W> {
             );
             return;
         }
-        // Between two draws the known width does not change, and lines kept pending at a
-        // zero width are applied before any new one can be queued: all pending lines
-        // share one width.
-        debug_assert!(self.pending.is_empty() || self.pending_width == width);
+        // Lines kept pending by a `draw` on a screen with no rows were queued at the width
+        // known before it, which that `draw` may have changed: bring them to the current
+        // width (truncated or padded, as `commit` would; it also replaces a wide character
+        // clipped at the right edge), so that all pending lines share one width. Rare:
+        // the allocation does not matter.
+        if !self.pending.is_empty() && self.pending_width != width {
+            let queued = std::mem::take(&mut self.pending);
+            for row in queued.chunks(self.pending_width.max(1)) {
+                self.pending.extend(row.iter().take(width).cloned());
+                self.pending.extend(std::iter::repeat_n(
+                    Cell::default(),
+                    width.saturating_sub(row.len()),
+                ));
+            }
+        }
         self.pending.extend_from_slice(self.insert.content());
         self.pending_width = width;
     }
@@ -352,6 +363,15 @@ impl<W: Write> Terminal<W> {
         // Query the terminal (size, cursor position) **before** opening the synchronized
         // block: the reply arrives on input, not in our output stream.
         let size = self.backend.size()?;
+        // A screen with no rows (a pty whose height is set to 0) has no room for the
+        // viewport: write nothing at all. No cursor query, and above all no erase: the
+        // terminal may still display its rows, logs included. Only the size is noted (for
+        // the width `insert_before` uses); the pending lines are kept. When rows come back,
+        // the resize repositions the viewport and the lines are applied.
+        if size.height == 0 {
+            self.screen = size;
+            return Ok(());
+        }
         let resized = if size == self.screen {
             None
         } else {
@@ -361,13 +381,6 @@ impl<W: Write> Terminal<W> {
         self.backend.begin_sync()?;
         if let Some((size, cursor)) = resized {
             self.resize_inline(size, cursor)?;
-        }
-        // A screen with no rows (a pty whose height is set to 0) has no room for the
-        // viewport: draw nothing and keep the pending lines until rows come back (the
-        // resize at that point repositions the viewport).
-        if self.screen.height == 0 {
-            self.backend.end_sync()?;
-            return self.backend.flush();
         }
 
         let screen_height = self.screen.height;
@@ -449,12 +462,9 @@ impl<W: Write> Terminal<W> {
             .cursor_row
             .saturating_sub(self.area.y)
             .min(self.area.height.saturating_sub(1));
+        // Never a screen with no rows here (see `draw_inline`).
         let height = self.wanted_height.clamp(1, size.height.max(1));
-        // With no rows, nothing is drawn (see `draw_inline`): keep the requested height for
-        // when rows come back instead of collapsing it to 1.
-        if size.height > 0 {
-            self.wanted_height = height;
-        }
+        self.wanted_height = height;
         let top = cursor
             .y
             .saturating_sub(offset)
@@ -954,11 +964,8 @@ mod tests {
         term.draw(|_| rendered = true).unwrap();
         term.draw(|_| rendered = true).unwrap();
         assert!(!rendered, "a frame was rendered on a screen with no rows");
-        // Nothing but the empty synchronized blocks: no scrolling, no cell written.
-        assert_eq!(
-            take(&mut term),
-            "\x1b[?2026h\x1b[?2026l\x1b[?2026h\x1b[?2026l"
-        );
+        // Nothing at all: no scrolling, no cell written, no erase.
+        assert_eq!(take(&mut term), "");
     }
 
     #[test]
@@ -976,15 +983,13 @@ mod tests {
         term.insert_before(1, |b| {
             "kept-line".render(b.area(), b);
         });
+        take(&mut term);
         term.backend_mut().set_fixed_size(Size::new(10, 0));
         term.draw(|_| {}).unwrap();
         term.draw(|_| {}).unwrap();
-        let out = take(&mut term);
-        assert!(
-            !out.contains("kept-line"),
-            "line written with no rows: {out:?}"
-        );
-        assert!(!out.contains("65535"), "out-of-range sequence: {out:?}");
+        // Nothing written with no rows, and above all nothing erased: the terminal may
+        // still display its rows, logs included.
+        assert_eq!(take(&mut term), "", "output on a screen with no rows");
 
         term.backend_mut().set_fixed_size(Size::new(10, 10));
         term.draw(|f| f.render_widget("ui", f.area())).unwrap();
@@ -1070,5 +1075,40 @@ mod tests {
         term.draw(|_| {}).unwrap();
         assert!(!take(&mut term).contains("changed"), "lines not ignored");
         assert_eq!(term.area(), Rect::new(0, 0, 10, 2), "viewport moved");
+    }
+
+    #[test]
+    fn lines_kept_at_zero_rows_take_the_new_width_of_the_next_insertion() {
+        // Found by proptest: the draw that discovers a screen with no rows also changes the
+        // known width, while it keeps a line queued at the old width.
+        let backend = Backend::with_fixed(Vec::new(), Size::new(14, 9), Position::new(0, 0));
+        let mut term = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Inline(2),
+                scroll_mode: ScrollMode::Region,
+            },
+        )
+        .unwrap();
+        term.draw(|_| {}).unwrap();
+        term.backend_mut().set_fixed_size(Size::new(6, 0));
+        term.insert_before(1, |b| {
+            "first-line".render(b.area(), b);
+        });
+        term.draw(|_| {}).unwrap();
+        // Queued at width 6, after one at width 14: no panic, and both are written.
+        term.insert_before(1, |b| {
+            "second".render(b.area(), b);
+        });
+        take(&mut term);
+        term.backend_mut().set_fixed_size(Size::new(6, 9));
+        term.draw(|_| {}).unwrap();
+        let out = take(&mut term);
+        assert!(out.contains("first-"), "first line lost: {out:?}");
+        assert!(out.contains("second"), "second line lost: {out:?}");
+        assert!(
+            !out.contains("line"),
+            "first line not cut to 6 columns: {out:?}"
+        );
     }
 }

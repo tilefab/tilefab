@@ -122,7 +122,7 @@ End to end, in a pty with a terminal emulator (local only, not part of the CI; o
 cargo build --examples && cargo build
 tools/.venv/bin/python tools/check_inline.py   # height cycle 1 → 5 → 1 with logs: a single synchronized block per commit,
                                                # no ESC[J / ESC[2J, no log lost or duplicated, prompt not moving
-tools/.venv/bin/python tools/check_app.py      # Unicode input, burst of 5 tasks, resize, zero width, signals, panic, degraded mode
+tools/.venv/bin/python tools/check_app.py      # Unicode input, burst of 5 tasks, resize, zero width, zero height, signals, panic, degraded mode
 ```
 
 Coverage, unit tests and pty harness combined (`main.rs` and `headless.rs` only run in the real binary, so unit tests alone under-report them); requires `cargo-llvm-cov` (once: `rustup component add llvm-tools-preview && cargo install --locked cargo-llvm-cov`):

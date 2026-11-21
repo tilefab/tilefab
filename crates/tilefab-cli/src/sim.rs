@@ -41,6 +41,10 @@ pub struct Sim {
     current: BlockStats,
     /// Bytes received outside any synchronized block (excluding `?2026h` and `?2026l` themselves).
     pub outside_sync: Vec<u8>,
+    /// Sequences that reach past the screen (a cursor move, a scroll region or a scroll
+    /// amount beyond its size): the simulator clamps them like a terminal, but the backend
+    /// should never emit them. Tests check that this stays empty.
+    pub out_of_range: Vec<String>,
     pending: Vec<u8>,
 }
 
@@ -62,6 +66,7 @@ impl Sim {
             blocks: Vec::new(),
             current: BlockStats::default(),
             outside_sync: Vec::new(),
+            out_of_range: Vec::new(),
             pending: Vec::new(),
         }
     }
@@ -86,7 +91,11 @@ impl Sim {
 
     /// Resize the screen like a terminal without reflow: truncate content or
     /// pad it with blanks.
+    ///
+    /// A pty can report 0 rows or 0 columns, but a terminal emulator still has at least
+    /// one cell: a zero size is kept at 1, so the simulator never has an empty screen.
     pub fn resize(&mut self, width: u16, height: u16) {
+        let (width, height) = (width.max(1), height.max(1));
         for row in &mut self.screen {
             row.resize(width as usize, " ".to_string());
         }
@@ -156,6 +165,11 @@ impl Sim {
                 i = end;
             }
         }
+    }
+
+    fn note_out_of_range(&mut self, seq: &Csi) {
+        self.out_of_range
+            .push(String::from_utf8_lossy(&seq.raw).into_owned());
     }
 
     fn note_outside(&mut self, bytes: &[u8]) {
@@ -241,6 +255,9 @@ impl Sim {
             }
             (false, b'H') => {
                 self.note_outside(&seq.raw);
+                if p(0, 1) > self.height || p(1, 1) > self.width {
+                    self.note_out_of_range(seq);
+                }
                 let row = p(0, 1).min(self.height) - 1;
                 let col = p(1, 1).min(self.width) - 1;
                 self.cursor = (col, row);
@@ -276,16 +293,25 @@ impl Sim {
             }
             (false, b'r') => {
                 self.note_outside(&seq.raw);
+                if p(1, self.height) > self.height || p(0, 1) > p(1, self.height) {
+                    self.note_out_of_range(seq);
+                }
                 self.region = (p(0, 1) - 1, p(1, self.height).min(self.height) - 1);
                 self.cursor = (0, 0);
             }
             (false, b'S') => {
                 self.note_outside(&seq.raw);
-                self.scroll_up(p(0, 1));
+                if p(0, 1) > self.height {
+                    self.note_out_of_range(seq);
+                }
+                self.scroll_up(p(0, 1).min(self.height));
             }
             (false, b'T') => {
                 self.note_outside(&seq.raw);
-                self.scroll_down(p(0, 1));
+                if p(0, 1) > self.height {
+                    self.note_out_of_range(seq);
+                }
+                self.scroll_down(p(0, 1).min(self.height));
             }
             (false, b'm') => self.note_outside(&seq.raw),
             (_, other) => panic!("sequence not handled by the simulator: {seq:?} ({other})"),

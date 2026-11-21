@@ -94,6 +94,11 @@ impl Rig {
             "bytes emitted outside a synchronized block: {:?}",
             String::from_utf8_lossy(&self.sim.outside_sync)
         );
+        assert!(
+            self.sim.out_of_range.is_empty(),
+            "sequences beyond the screen: {:?}",
+            self.sim.out_of_range
+        );
         self.sim.blocks.last().unwrap().clone()
     }
 
@@ -565,4 +570,160 @@ fn clear_erases_only_the_viewport_and_leaves_the_cursor_at_its_top() {
     assert_eq!(screen[6], "log");
     assert_eq!(rig.sim.cursor, (0, 7));
     assert_eq!(rig.sim.outside_sync, b"");
+}
+
+// --- random operation sequences ----------------------------------------------------------------
+
+/// One step of a random session on an inline terminal.
+#[derive(Debug, Clone)]
+enum Op {
+    /// The terminal reports a new size (0 rows or 0 columns included); `reply` is false
+    /// when it does not answer the cursor position query that follows.
+    Resize {
+        width: u16,
+        height: u16,
+        reply: bool,
+    },
+    /// Queue that many one-row lines above the viewport.
+    Insert(u8),
+    /// Request a viewport height.
+    SetHeight(u16),
+    /// Draw a frame (applies the queued lines and the height).
+    Draw,
+}
+
+fn op() -> impl proptest::strategy::Strategy<Value = Op> {
+    use proptest::prelude::*;
+    prop_oneof![
+        1 => (0u16..=14, 0u16..=9, proptest::bool::weighted(0.8))
+            .prop_map(|(width, height, reply)| Op::Resize { width, height, reply }),
+        2 => (1u8..=3).prop_map(Op::Insert),
+        1 => (1u16..=9).prop_map(Op::SetHeight),
+        3 => Just(Op::Draw),
+    ]
+}
+
+/// Run `ops` on a 14x9 inline terminal and its simulator, then restore a normal size and
+/// draw. After every draw: no error, nothing outside a synchronized block, no sequence
+/// beyond the screen, and (when the screen has rows and columns) a viewport on screen.
+/// At the end, each inserted line appears at most once.
+fn run_session(
+    mode: ScrollMode,
+    prefill: usize,
+    ops: &[Op],
+) -> Result<(), proptest::test_runner::TestCaseError> {
+    use proptest::{prop_assert, prop_assert_eq};
+
+    let (mut width, mut height) = (14u16, 9u16);
+    let mut sim = Sim::new(width, height);
+    for i in 0..prefill {
+        sim.feed_str(&format!("avant{i}\r\n"));
+    }
+    sim.outside_sync.clear();
+    let (x, y) = sim.cursor;
+    let backend = Backend::with_fixed(Vec::new(), Size::new(width, height), Position::new(x, y));
+    let mut term = Terminal::with_options(
+        backend,
+        TerminalOptions {
+            viewport: Viewport::Inline(2),
+            scroll_mode: mode,
+        },
+    )
+    .unwrap();
+    // The initialization (rows reserved for the viewport) reaches the screen right away.
+    let bytes = std::mem::take(term.backend_mut().writer_mut());
+    sim.feed(&bytes);
+    let mut labels = Vec::new();
+
+    let final_ops = [
+        Op::Resize {
+            width: 14,
+            height: 9,
+            reply: true,
+        },
+        Op::SetHeight(1),
+        Op::Draw,
+        Op::Draw,
+    ];
+    for op in ops.iter().chain(&final_ops) {
+        match *op {
+            Op::Resize {
+                width: w,
+                height: h,
+                reply,
+            } => {
+                (width, height) = (w, h);
+                sim.resize(w, h);
+                let backend = term.backend_mut();
+                backend.set_fixed_size(Size::new(w, h));
+                if reply {
+                    // What a terminal reports: its cursor, within the reported size.
+                    let (cx, cy) = sim.cursor;
+                    backend.set_fixed_cursor(Position::new(
+                        cx.min(w.saturating_sub(1)),
+                        cy.min(h.saturating_sub(1)),
+                    ));
+                } else {
+                    backend.fail_cursor_queries();
+                }
+            }
+            Op::Insert(count) => {
+                for _ in 0..count {
+                    // Same length for every label: none is a substring of another.
+                    let label = format!("#{:03}", labels.len());
+                    term.insert_before(1, |buf| {
+                        buf.set_string(0, 0, &label, Style::new());
+                    });
+                    labels.push(label);
+                }
+            }
+            Op::SetHeight(h) => term.set_height(h),
+            Op::Draw => {
+                let drawn = term.draw(|frame| {
+                    let area = frame.area();
+                    for y in area.top()..area.bottom() {
+                        frame.buffer_mut().set_string(area.x, y, "~", Style::new());
+                    }
+                    frame.set_cursor_position((area.x, area.bottom().saturating_sub(1)));
+                });
+                prop_assert!(drawn.is_ok(), "draw failed: {drawn:?}");
+                let bytes = std::mem::take(term.backend_mut().writer_mut());
+                sim.feed(&bytes);
+                prop_assert!(
+                    sim.outside_sync.is_empty(),
+                    "bytes outside a synchronized block: {:?}",
+                    String::from_utf8_lossy(&sim.outside_sync)
+                );
+                prop_assert!(
+                    sim.out_of_range.is_empty(),
+                    "sequences beyond the {width}x{height} screen: {:?}",
+                    sim.out_of_range
+                );
+                if width > 0 && height > 0 {
+                    let area = term.area();
+                    prop_assert_eq!(area.width, width);
+                    prop_assert!(area.height >= 1 && area.bottom() <= height, "{area:?}");
+                }
+            }
+        }
+    }
+
+    let text = sim.all_lines().join("\n");
+    for label in &labels {
+        let count = text.matches(label.as_str()).count();
+        prop_assert!(count <= 1, "{label} written {count} times:\n{text}");
+    }
+    Ok(())
+}
+
+proptest::proptest! {
+    #[test]
+    fn random_sessions_with_zero_sizes_keep_the_terminal_consistent(
+        region in proptest::bool::ANY,
+        prefill in 0usize..12,
+        ops in proptest::collection::vec(op(), 1..40),
+    ) {
+        let mode = if region { ScrollMode::Region } else { ScrollMode::Fallback };
+        run_session(mode, prefill, &ops)?;
+    }
 }

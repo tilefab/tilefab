@@ -10,6 +10,8 @@ Scenarios:
   * resize: resizing while tasks run;
   * zero-width: the pty loses all its columns while a line is pending:
     no panic, and the line is shown once the width is back;
+  * zero-height: the same with all the rows: no panic while nothing can be drawn,
+    and the line is shown once the rows are back;
   * signals: SIGTERM, SIGINT and SIGHUP exit cleanly, with code 0;
   * panic: the hidden `panic` command leaves a clean terminal;
   * headless: no terminal (stdin or stdout redirected), no UI; input escape
@@ -251,6 +253,40 @@ def scenario_zero_width(rows: int, cols: int, prefill: int) -> list:
     return check.failures
 
 
+def scenario_zero_height(rows: int, cols: int, prefill: int) -> list:
+    """The pty loses all its rows (ws_row = 0) while a line is pending.
+
+    Symmetric of `scenario_zero_width`: each round queues a "task started" line, then
+    sets the pty to 0 rows (ioctl only, no SIGWINCH) just before Enter, and lets several
+    ticks draw on the screen with no rows. Nothing can be drawn meanwhile: the application
+    must keep running, keep the line, and show it exactly once when the rows are back.
+    """
+    check = Check()
+    term = launch(rows, cols, prefill)
+    for name in NAMES[:3]:
+        term.send("start %s" % name)
+        term.wait_idle(0.3)
+        fcntl.ioctl(term.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 0, cols, 0, 0))
+        term.send("\r")
+        term.run_for(0.5)
+        check.ok(term.alive(), "the application stopped at height 0 (task %s)" % name)
+        if not term.alive():
+            break
+        term.resize(rows, cols)
+        term.wait_for('task "%s" started' % name, timeout=10.0)
+        term.run_for(0.3)
+    if term.alive():
+        check.ok(prompt_row(term) is not None, "prompt missing after restoring the rows")
+        text = term.all_text()
+        for name in NAMES[:3]:
+            count = text.count('task "%s" started' % name)
+            check.ok(count == 1, "task %s started line seen %d times after a zero height" % (name, count))
+        quit_app(term, check)
+    check.ok("panicked" not in term.all_text(), "panic report after a zero height")
+    term.close()
+    return check.failures
+
+
 def scenario_signals(rows: int, cols: int, prefill: int) -> list:
     """A signal from another process goes through the normal exit path."""
     check = Check()
@@ -332,6 +368,7 @@ def main() -> int:
         ("burst", lambda: scenario_burst(args.rows, args.cols, args.prefill)),
         ("resize", lambda: scenario_resize(args.rows, args.cols, args.prefill)),
         ("zero-width", lambda: scenario_zero_width(args.rows, args.cols, args.prefill)),
+        ("zero-height", lambda: scenario_zero_height(args.rows, args.cols, args.prefill)),
         ("signals", lambda: scenario_signals(args.rows, args.cols, args.prefill)),
         ("panic", lambda: scenario_panic(args.rows, args.cols, args.prefill)),
         ("degraded", scenario_degraded),
