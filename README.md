@@ -139,7 +139,10 @@ Mutation testing of the inline placement code (`cargo install --locked cargo-mut
 
 ```sh
 cargo mutants -p tilefab-cli -f crates/tilefab-cli/src/terminal.rs -f crates/tilefab-cli/src/viewport.rs -j 3   # report in mutants.out/
+cargo mutants -p tilefab-widget -j 4   # widgets: about 3 minutes
 ```
+
+On the widgets, three mutants survive because they do not change the behavior (equivalent mutants); a comment marks each one in the code (`block.rs`, `gauge.rs`, `paragraph.rs`). The timeouts are mutants that loop forever: the tests catch them too.
 
 The frame commit tests (`crates/tilefab-cli/src/inline_tests.rs`) replay the emitted bytes in a small terminal simulator (`crates/tilefab-cli/src/sim.rs`): they cover every case of the placement rule, both scroll modes, lines inserted in batches and resizing.
 

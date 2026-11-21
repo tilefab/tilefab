@@ -176,6 +176,8 @@ impl Widget for Gauge<'_> {
             .unwrap_or_else(|| Span::raw(percent_label(self.ratio)));
         let width = inner.width as usize;
         let offset = width.saturating_sub(label.width()) / 2;
+        // The limit `width - offset` only matters when `offset` is 0: a centered label fits.
+        // So `width + offset` would be equivalent (`cargo mutants` sees it survive).
         let row = inner.y + inner.height / 2;
         buf.set_stringn(
             inner.x + saturating_u16(offset),
@@ -397,6 +399,16 @@ mod tests {
     }
 
     #[test]
+    fn gauge_percent_is_a_fraction_of_100() {
+        let half = Gauge::default()
+            .percent(50)
+            .filled_symbol("#")
+            .unfilled_symbol(".")
+            .label("");
+        assert_eq!(render(half, 4, 1).lines(), ["##.."]);
+    }
+
+    #[test]
     fn gauge_styles_apply_to_each_part() {
         let buf = render(
             gauge(0.5)
@@ -492,6 +504,22 @@ mod tests {
             .lines(),
             [" ####"]
         );
+    }
+
+    #[test]
+    fn line_gauge_percent_is_a_fraction_of_100() {
+        let half = LineGauge::default()
+            .percent(50)
+            .label("")
+            .filled_symbol("#")
+            .unfilled_symbol(".");
+        assert_eq!(render(half, 5, 1).lines(), [" ##.."]);
+    }
+
+    #[test]
+    fn line_gauge_style_covers_the_whole_area() {
+        let buf = render(line_gauge(0.5).style(Style::new().bg(Color::Black)), 5, 2);
+        assert!(buf.content().iter().all(|c| c.bg == Color::Black));
     }
 
     #[test]

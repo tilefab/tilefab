@@ -460,7 +460,35 @@ mod tests {
         let buf = render(List::new(Vec::<&str>::new()), &mut state, 3, 2);
         assert_eq!(buf, Buffer::empty(Rect::new(0, 0, 3, 2)));
         assert!(List::new(Vec::<&str>::new()).is_empty());
+        assert!(!List::new(["a"]).is_empty());
         assert_eq!(List::new(["a"]).len(), 1);
+        assert_eq!(List::new(["a", "b", "c"]).len(), 3);
+    }
+
+    #[test]
+    fn out_of_range_offset_without_selection_shows_the_last_item() {
+        let mut state = ListState::default();
+        *state.offset_mut() = 10;
+        assert_eq!(state.offset(), 10, "offset_mut writes the offset");
+        let buf = render(List::new(["a", "b", "c"]), &mut state, 2, 2);
+        assert_eq!(state.offset(), 2);
+        assert_eq!(buf.lines(), ["c ", "  "]);
+    }
+
+    #[test]
+    fn indent_of_unselected_items_overwrites_what_was_there() {
+        let mut buf = Buffer::with_lines(["xxxxx", "xxxxx"]);
+        let list = List::new(["a", "b"]).highlight_symbol("> ");
+        list.render(buf.area(), &mut buf, &mut ListState::with_selected(Some(1)));
+        assert_eq!(buf.lines(), ["  axx", "> bxx"]);
+    }
+
+    #[test]
+    fn last_item_is_cut_at_the_bottom_of_the_block() {
+        let mut state = ListState::default();
+        let list = List::new(["a", "b\nc\nd"]).block(Block::bordered());
+        let buf = render(list, &mut state, 4, 4);
+        assert_eq!(buf.lines(), ["┌──┐", "│a │", "│b │", "└──┘"]);
     }
 
     #[test]

@@ -311,7 +311,8 @@ fn draw_glyphs(
         }
     };
     let mut x = row.x + saturating_u16(offset);
-    // Only limits anything when `offset` is 0: an offset means the whole line fits.
+    // Only limits anything when `offset` is 0: an offset means the whole line fits. So
+    // `available + offset` would be equivalent (`cargo mutants` sees it survive).
     let mut remaining = available - offset;
     // Stop at the first grapheme that does not fit, like `Buffer::set_stringn`.
     for glyph in visible_glyphs(visual.glyphs(), scroll_x) {

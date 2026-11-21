@@ -319,6 +319,8 @@ impl<'a> Block<'a> {
         if let Some(title) = &self.title {
             let first = left + u16::from(self.borders.contains(Borders::LEFT));
             let end = area.right() - u16::from(self.borders.contains(Borders::RIGHT));
+            // `<=` would be equivalent (`cargo mutants` sees it survive): a title rendered
+            // in a zero-width area writes nothing.
             if first < end {
                 title.render_to_with_default_alignment(
                     Rect::new(first, top, end - first, 1),
@@ -381,6 +383,17 @@ mod tests {
             Buffer::empty(Rect::new(0, 0, 3, 2))
         );
         assert!(Borders::NONE.is_empty());
+        assert!(!Borders::TOP.is_empty());
+        assert!(!Borders::ALL.is_empty());
+    }
+
+    #[test]
+    fn combining_borders_is_a_union() {
+        // A side present on both sides of `|` stays present (a XOR would remove it).
+        let top_left = Borders::TOP | Borders::LEFT;
+        assert_eq!(top_left | Borders::TOP, top_left);
+        assert_eq!(Borders::ALL | Borders::ALL, Borders::ALL);
+        assert!((Borders::TOP | Borders::BOTTOM).contains(Borders::BOTTOM));
     }
 
     #[test]
