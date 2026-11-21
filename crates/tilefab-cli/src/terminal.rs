@@ -32,10 +32,14 @@
 //!   enough to stay on screen (anchored at the bottom) when the screen shrinks. A warning is
 //!   logged.
 //!
-//! # Limitation
+//! # Lines that cannot be shown yet
 //!
 //! If the viewport fills the entire screen (`height == terminal height`), there is no room
-//! for inserted lines: they are ignored.
+//! for inserted lines: they stay pending, and are applied on the first `draw` that leaves
+//! room for them (smaller viewport, taller screen), in chunks if there are many. At most
+//! [`MAX_PENDING_LINES`] lines wait from one `draw` to the next this way: beyond that, the
+//! oldest are dropped (with one warning until the lines can be shown again), so that the
+//! memory used stays bounded. The same limit applies on a screen with no rows or columns.
 //!
 //! A screen with no columns (a pty whose size is not set reports a width of 0) cannot show
 //! inserted lines either, but this is transient: lines already queued stay pending and are
@@ -55,6 +59,12 @@ use tilefab_core::buffer::{Buffer, Cell};
 use tilefab_core::convert::saturating_u16;
 use tilefab_core::layout::{Position, Rect, Size};
 use tilefab_core::widget::{StatefulWidget, Widget};
+
+/// Maximum number of inserted lines kept pending from one inline `draw` to the next while
+/// they cannot be shown (viewport filling the screen, screen with no rows or columns):
+/// beyond that, `draw` drops the oldest. Lines queued between two draws are not limited:
+/// when there is room, a large batch is applied in full, in chunks.
+pub const MAX_PENDING_LINES: usize = 1_000;
 
 /// View of the current buffer passed to the rendering function of `Terminal::draw`.
 #[derive(Debug)]
@@ -125,6 +135,10 @@ pub struct Terminal<W: Write> {
     /// `pending_width` cells wide (the screen width when they were queued).
     pending: Vec<Cell>,
     pending_width: usize,
+    /// True once lines were dropped because more than `MAX_PENDING_LINES` were pending:
+    /// warn once until the pending lines are applied (a warning per `draw` could feed
+    /// itself, in an application that shows its logs with `insert_before`).
+    pending_overflowed: bool,
     /// Buffers kept from one frame to the next, so that a frame allocates nothing once they
     /// have the right size (see `Buffer::reset_to`): `next` is the one the frame renders
     /// into (in fullscreen mode, swapped with `previous` afterwards); `model` and `target`
@@ -173,6 +187,7 @@ impl<W: Write> Terminal<W> {
                     wanted_height: screen.height,
                     pending: Vec::new(),
                     pending_width: 0,
+                    pending_overflowed: false,
                     next: Buffer::empty(Rect::default()),
                     model: Buffer::empty(Rect::default()),
                     target: Buffer::empty(Rect::default()),
@@ -219,6 +234,7 @@ impl<W: Write> Terminal<W> {
                     wanted_height: height,
                     pending: Vec::new(),
                     pending_width: 0,
+                    pending_overflowed: false,
                     next: Buffer::empty(Rect::default()),
                     model: Buffer::empty(Rect::default()),
                     target: Buffer::empty(Rect::default()),
@@ -300,6 +316,24 @@ impl<W: Write> Terminal<W> {
         self.pending_width = width;
     }
 
+    /// Called by a `draw` that keeps the pending lines (no room to show them): keep only
+    /// the newest `MAX_PENDING_LINES`, so that the memory used stays bounded.
+    fn limit_pending(&mut self) {
+        let lines = self.pending.len() / self.pending_width.max(1);
+        if lines <= MAX_PENDING_LINES {
+            return;
+        }
+        let dropped = lines - MAX_PENDING_LINES;
+        self.pending.drain(..dropped * self.pending_width);
+        if !self.pending_overflowed {
+            self.pending_overflowed = true;
+            tracing::warn!(
+                "more than {MAX_PENDING_LINES} inserted lines waiting for room on screen: \
+                 the oldest are dropped"
+            );
+        }
+    }
+
     /// Draw a frame: `render` fills the buffer, then send the difference to the terminal.
     ///
     /// # Errors
@@ -370,6 +404,7 @@ impl<W: Write> Terminal<W> {
         // the resize repositions the viewport and the lines are applied.
         if size.height == 0 {
             self.screen = size;
+            self.limit_pending();
             return Ok(());
         }
         let resized = if size == self.screen {
@@ -385,21 +420,21 @@ impl<W: Write> Terminal<W> {
 
         let screen_height = self.screen.height;
         let new_height = self.wanted_height.clamp(1, screen_height.max(1));
+        // How many inserted lines fit on screen with the viewport: apply larger batches
+        // in chunks.
+        let per_chunk = usize::from(screen_height.saturating_sub(new_height));
         // A zero-width screen (possible after a resize since `insert_before`) cannot show
-        // the inserted lines: keep them pending for the first draw with columns again.
-        let taken = self.screen.width > 0;
+        // the inserted lines, nor a viewport filling the screen: keep them pending for the
+        // first draw with room for them (see the module header).
+        let taken = self.screen.width > 0 && per_chunk > 0;
         let mut rows = if taken {
+            self.pending_overflowed = false;
             std::mem::take(&mut self.pending)
         } else {
+            self.limit_pending();
             Vec::new()
         };
         let row_width = self.pending_width.max(1);
-        // How many inserted lines fit on screen with the viewport: apply larger batches
-        // in chunks. No space at all: ignore them (see the module header).
-        let per_chunk = usize::from(screen_height.saturating_sub(new_height));
-        if per_chunk == 0 {
-            rows.clear();
-        }
         // The last chunk is applied with the frame; the earlier ones, in order, before it.
         let mut chunks = rows.chunks(per_chunk.max(1) * row_width);
         let last = chunks.next_back().unwrap_or(&[]);
@@ -909,6 +944,90 @@ mod tests {
             "kept line garbled or lost: {out:?}"
         );
         assert!(!out.contains("ignored"));
+    }
+
+    /// An inline terminal on a 10x`rows` screen, viewport `height` rows, first frame drawn.
+    fn inline_terminal(rows: u16, height: u16) -> Terminal<Vec<u8>> {
+        let backend = Backend::with_fixed(Vec::new(), Size::new(10, rows), Position::new(0, 0));
+        let mut term = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Inline(height),
+                scroll_mode: ScrollMode::Region,
+            },
+        )
+        .unwrap();
+        term.draw(|_| {}).unwrap();
+        take(&mut term);
+        term
+    }
+
+    /// Queue `count` one-row lines labelled `#0`, `#1`…, from `first`.
+    fn insert_numbered(term: &mut Terminal<Vec<u8>>, first: usize, count: usize) {
+        for n in first..first + count {
+            term.insert_before(1, |b| {
+                format!("#{n}").as_str().render(b.area(), b);
+            });
+        }
+    }
+
+    #[test]
+    fn lines_wait_while_the_viewport_fills_the_screen() {
+        let mut term = inline_terminal(3, 3);
+        insert_numbered(&mut term, 0, 2);
+        term.draw(|_| {}).unwrap();
+        term.draw(|_| {}).unwrap();
+        let out = take(&mut term);
+        assert!(
+            !out.contains("#0") && !out.contains("#1"),
+            "no room, yet written: {out:?}"
+        );
+        // Room again: both lines are written, exactly once.
+        term.set_height(1);
+        term.draw(|_| {}).unwrap();
+        let out = take(&mut term);
+        assert!(
+            out.contains("#0") && out.contains("#1"),
+            "pending lines lost: {out:?}"
+        );
+        term.draw(|_| {}).unwrap();
+        assert!(
+            !take(&mut term).contains('#'),
+            "pending lines written twice"
+        );
+    }
+
+    #[test]
+    fn lines_waiting_for_room_are_limited_to_the_newest() {
+        let mut term = inline_terminal(3, 3);
+        insert_numbered(&mut term, 0, MAX_PENDING_LINES + 5);
+        term.draw(|_| {}).unwrap();
+        assert_eq!(term.pending.len(), MAX_PENDING_LINES * 10);
+        assert_eq!(term.pending[0].symbol(), "#");
+        assert_eq!(
+            term.pending[1].symbol(),
+            "5",
+            "the oldest lines are dropped first"
+        );
+        assert!(term.pending_overflowed);
+        // Applied once there is room; the next overflow warns again.
+        term.set_height(1);
+        term.draw(|_| {}).unwrap();
+        assert!(term.pending.is_empty(), "pending lines not applied");
+        assert!(!term.pending_overflowed);
+    }
+
+    #[test]
+    fn a_large_batch_is_applied_in_full_when_there_is_room() {
+        let mut term = inline_terminal(5, 1);
+        insert_numbered(&mut term, 0, MAX_PENDING_LINES + 5);
+        term.draw(|_| {}).unwrap();
+        let out = take(&mut term);
+        assert!(
+            out.contains("#0") && out.contains("#1004"),
+            "batch truncated"
+        );
+        assert!(term.pending.is_empty(), "lines left pending");
     }
 
     #[test]

@@ -165,7 +165,7 @@ The frame commit tests (`crates/tilefab-cli/src/inline_tests.rs`) replay the emi
 ## Known limits
 
 - **Window shrinking**: Terminal.app and iTerm2 rewrap the existing lines when the window shrinks, which makes the viewport position uncertain. The cursor position is queried, everything from the top of the viewport to the bottom of the screen is erased (`ESC[J`, the only case besides exit) and everything is redrawn: copies of the old viewport may remain above, and log lines already displayed may disappear from the screen (depending on the terminal, they may or may not stay in the scrollback).
-- **Terminal as short as the viewport**: with no room for log lines, they are ignored as long as the viewport fills the whole screen.
+- **Terminal as short as the viewport**: with no room for log lines, they wait as long as the viewport fills the whole screen, and are shown once tasks end and the viewport shrinks. At most `MAX_PENDING_LINES` (1,000) lines wait: beyond that, the oldest are dropped, with a warning.
 - **Maximum height**: `MAX_TASKS + 1` lines (6); below 6 terminal lines, the viewport is capped to the screen height.
 - **A task ending with fewer log lines than freed lines**: a blank line may appear below the viewport (case `d > n`). In `tilefab` every task end produces a line, so this does not happen.
 - **Synchronized update** (mode 2026): terminals that do not know it ignore it; the frame is then displayed as it is written (still in a single `write`).
