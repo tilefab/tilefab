@@ -118,7 +118,7 @@ impl ListState {
 /// let mut buf = Buffer::empty(Rect::new(0, 0, 6, 3));
 /// let mut state = ListState::with_selected(Some(1));
 /// List::new(["one", "two", "three"]).highlight_symbol("> ")
-///     .render(buf.area, &mut buf, &mut state);
+///     .render(buf.area(), &mut buf, &mut state);
 /// assert_eq!(buf.lines(), ["  one ", "> two ", "  three"].map(|l| l.chars().take(6).collect::<String>()));
 /// ```
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -185,7 +185,7 @@ impl StatefulWidget for List<'_> {
     type State = ListState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut ListState) {
-        let area = buf.area.intersection(area);
+        let area = buf.area().intersection(area);
         if area.is_empty() {
             return;
         }
@@ -338,7 +338,7 @@ mod tests {
 
     fn render(list: List, state: &mut ListState, width: u16, height: u16) -> Buffer {
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
-        list.render(buf.area, &mut buf, state);
+        list.render(buf.area(), &mut buf, state);
         buf
     }
 

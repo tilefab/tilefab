@@ -44,7 +44,7 @@ fn percent_label(ratio: f64) -> String {
 ///
 /// let mut buf = Buffer::empty(Rect::new(0, 0, 10, 1));
 /// Gauge::default().ratio(0.5).label("50").filled_symbol("#").unfilled_symbol(".")
-///     .render(buf.area, &mut buf);
+///     .render(buf.area(), &mut buf);
 /// assert_eq!(buf.lines(), ["####50...."]);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
@@ -141,7 +141,7 @@ impl<'a> Gauge<'a> {
 
 impl Widget for Gauge<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let area = buf.area.intersection(area);
+        let area = buf.area().intersection(area);
         if area.is_empty() {
             return;
         }
@@ -198,7 +198,7 @@ impl Widget for Gauge<'_> {
 ///
 /// let mut buf = Buffer::empty(Rect::new(0, 0, 10, 1));
 /// LineGauge::default().ratio(0.5).label("ab").filled_symbol("#").unfilled_symbol(".")
-///     .render(buf.area, &mut buf);
+///     .render(buf.area(), &mut buf);
 /// assert_eq!(buf.lines(), ["ab ###...."]);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
@@ -294,7 +294,7 @@ impl<'a> LineGauge<'a> {
 
 impl Widget for LineGauge<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let area = buf.area.intersection(area);
+        let area = buf.area().intersection(area);
         if area.is_empty() {
             return;
         }
@@ -344,7 +344,7 @@ mod tests {
 
     fn render(widget: impl Widget, width: u16, height: u16) -> Buffer {
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
-        widget.render(buf.area, &mut buf);
+        widget.render(buf.area(), &mut buf);
         buf
     }
 
@@ -410,7 +410,7 @@ mod tests {
         assert_eq!(buf.get(0, 0).fg, Color::Cyan);
         assert_eq!(buf.get(1, 0).fg, Color::Cyan);
         assert_eq!(buf.get(2, 0).fg, Color::DarkGray);
-        assert!(buf.content.iter().all(|c| c.bg == Color::Black));
+        assert!(buf.content().iter().all(|c| c.bg == Color::Black));
     }
 
     #[test]

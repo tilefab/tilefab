@@ -73,7 +73,7 @@ impl Glyph<'_> {
 /// let mut buf = Buffer::empty(Rect::new(0, 0, 6, 3));
 /// Paragraph::new("one two three")
 ///     .wrap(Wrap { trim: true })
-///     .render(buf.area, &mut buf);
+///     .render(buf.area(), &mut buf);
 /// assert_eq!(buf.lines(), ["one   ", "two   ", "three "]);
 /// ```
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -175,7 +175,7 @@ impl<'a> Paragraph<'a> {
 
 impl Widget for Paragraph<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let area = buf.area.intersection(area);
+        let area = buf.area().intersection(area);
         if area.is_empty() {
             return;
         }
@@ -292,7 +292,7 @@ fn draw_glyphs(
     row: Rect,
     buf: &mut Buffer,
 ) {
-    let row = buf.area.intersection(row);
+    let row = buf.area().intersection(row);
     if row.is_empty() {
         return;
     }
@@ -484,7 +484,7 @@ mod tests {
 
     fn render(paragraph: Paragraph, width: u16, height: u16) -> Buffer {
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
-        paragraph.render(buf.area, &mut buf);
+        paragraph.render(buf.area(), &mut buf);
         buf
     }
 
@@ -603,7 +603,7 @@ mod tests {
                         wrapped(text, width, wrap).len(),
                         "{text:?} largeur {width}"
                     );
-                    assert_eq!(full.area.height as usize, n);
+                    assert_eq!(full.area().height as usize, n);
                 }
             }
         }
@@ -690,7 +690,7 @@ mod tests {
             3,
             2,
         );
-        assert!(buf.content.iter().all(|c| c.fg == Color::Cyan));
+        assert!(buf.content().iter().all(|c| c.fg == Color::Cyan));
         assert_eq!(
             buf.get(2, 1).bg,
             Color::Green,
@@ -762,7 +762,10 @@ mod tests {
         ]);
         let buf = render(Paragraph::new(line), 3, 1);
         assert_eq!(buf.lines(), ["x  "]);
-        assert!(buf.content.iter().all(|c| c.modifier.is_empty()), "{buf:?}");
+        assert!(
+            buf.content().iter().all(|c| c.modifier.is_empty()),
+            "{buf:?}"
+        );
         // At the very end of a full row: nothing is written past its right edge.
         let mut buf = Buffer::empty(Rect::new(0, 0, 3, 2));
         Paragraph::new("abc\t").render(Rect::new(0, 0, 3, 1), &mut buf);
@@ -846,7 +849,7 @@ mod tests {
 
         /// `Paragraph::render`, as it was.
         pub fn render(paragraph: &Paragraph<'_>, area: Rect, buf: &mut Buffer) {
-            let area = buf.area.intersection(area);
+            let area = buf.area().intersection(area);
             if area.is_empty() {
                 return;
             }

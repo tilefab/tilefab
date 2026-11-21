@@ -209,15 +209,53 @@ impl Cell {
 ///
 /// Coordinates are screen coordinates: the top-left cell is at
 /// `(area.x, area.y)`. Cells are stored in row-major order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The fields are private to keep the invariant `content().len() == area().area()`: cells
+/// can be changed in place ([`Buffer::content_mut`], [`Buffer::get_mut`]…), but only
+/// [`Buffer::reset_to`] changes the area, together with the number of cells.
+#[derive(Debug, PartialEq, Eq)]
 pub struct Buffer {
     /// The covered area, in screen coordinates.
-    pub area: Rect,
+    area: Rect,
     /// Cells in row-major order (`area.area()` elements).
-    pub content: Vec<Cell>,
+    content: Vec<Cell>,
+}
+
+impl Clone for Buffer {
+    fn clone(&self) -> Self {
+        Self {
+            area: self.area,
+            content: self.content.clone(),
+        }
+    }
+
+    /// Reuses this buffer's memory (the derived version would allocate a new `Vec`):
+    /// `Terminal` copies buffers this way on every frame.
+    fn clone_from(&mut self, source: &Self) {
+        self.area = source.area;
+        self.content.clone_from(&source.content);
+    }
 }
 
 impl Buffer {
+    /// The covered area, in screen coordinates.
+    #[must_use]
+    pub fn area(&self) -> Rect {
+        self.area
+    }
+
+    /// Cells in row-major order (`area().area()` elements).
+    #[must_use]
+    pub fn content(&self) -> &[Cell] {
+        &self.content
+    }
+
+    /// Cells in row-major order, to change in place: a slice, so that their number (tied to
+    /// the area) cannot change.
+    pub fn content_mut(&mut self) -> &mut [Cell] {
+        &mut self.content
+    }
+
     /// A buffer with all cells set to spaces.
     #[must_use]
     pub fn empty(area: Rect) -> Self {
@@ -805,5 +843,25 @@ mod tests {
     #[should_panic(expected = "different areas")]
     fn diff_requires_same_area() {
         let _ = buf(2, 1).diff(&buf(3, 1));
+    }
+
+    #[test]
+    fn clone_from_copies_area_and_cells_into_the_kept_memory() {
+        let source = Buffer::with_lines(["ab", "cd"]);
+        let mut copy = Buffer::empty(Rect::new(0, 0, 10, 10));
+        let capacity = copy.content.capacity();
+        copy.clone_from(&source);
+        assert_eq!(copy, source);
+        assert_eq!(copy.content.capacity(), capacity, "memory not reused");
+        assert_eq!(source.clone(), source);
+    }
+
+    #[test]
+    fn accessors_expose_the_area_and_the_cells() {
+        let mut buf = Buffer::empty(Rect::new(1, 2, 3, 1));
+        assert_eq!(buf.area(), Rect::new(1, 2, 3, 1));
+        assert_eq!(buf.content().len(), 3);
+        buf.content_mut()[1].set_symbol("x");
+        assert_eq!(buf.lines(), [" x "]);
     }
 }

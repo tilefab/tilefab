@@ -5,7 +5,7 @@
 //!
 //! let line = Line::from(vec![Span::raw("name"), "45%".fg(Color::Cyan).bold()]).right_aligned();
 //! let mut buf = Buffer::empty(Rect::new(0, 0, 10, 1));
-//! line.render_to(buf.area, &mut buf);
+//! line.render_to(buf.area(), &mut buf);
 //! assert_eq!(buf.lines(), ["   name45%"]);
 //! assert_eq!(buf.get(7, 0).fg, Color::Cyan);
 //! ```
@@ -174,7 +174,7 @@ impl<'a> Line<'a> {
 
     /// Like [`Line::render_to`], with a default alignment from the parent `Text`.
     fn render_aligned(&self, area: Rect, buf: &mut Buffer, default: Option<Alignment>) {
-        let area = buf.area.intersection(area);
+        let area = buf.area().intersection(area);
         if area.is_empty() {
             return;
         }
@@ -323,7 +323,7 @@ impl<'a> Text<'a> {
     /// Draw one text line per row of `area`, truncating overflow
     /// (on the right and bottom).
     pub fn render_to(&self, area: Rect, buf: &mut Buffer) {
-        let area = buf.area.intersection(area);
+        let area = buf.area().intersection(area);
         if area.is_empty() {
             return;
         }
@@ -528,7 +528,7 @@ mod tests {
 
     fn render_line(line: &Line, width: u16) -> Buffer {
         let mut buf = Buffer::empty(Rect::new(0, 0, width, 1));
-        line.render_to(buf.area, &mut buf);
+        line.render_to(buf.area(), &mut buf);
         buf
     }
 
@@ -572,7 +572,7 @@ mod tests {
         let line = Line::from(vec![Span::raw("ab"), "cd".fg(Color::Red)]).bg(Color::Blue);
         let buf = render_line(&line, 6);
         assert!(
-            buf.content.iter().all(|c| c.bg == Color::Blue),
+            buf.content().iter().all(|c| c.bg == Color::Blue),
             "background on the whole row"
         );
         assert_eq!(buf.get(0, 0).fg, Color::Reset);
@@ -655,7 +655,7 @@ mod tests {
     #[test]
     fn only_the_first_row_of_the_area_is_used_by_a_line() {
         let mut buf = Buffer::empty(Rect::new(0, 0, 3, 2));
-        Line::from("abc").render_to(buf.area, &mut buf);
+        Line::from("abc").render_to(buf.area(), &mut buf);
         assert_eq!(buf, Buffer::with_lines(["abc", "   "]));
     }
 
@@ -665,11 +665,11 @@ mod tests {
         assert_eq!(text.height(), 3);
         assert_eq!(text.width(), 5);
         let mut buf = Buffer::empty(Rect::new(0, 0, 5, 3));
-        text.render_to(buf.area, &mut buf);
+        text.render_to(buf.area(), &mut buf);
         assert_eq!(buf, Buffer::with_lines(["un   ", "deux ", "trois"]));
         // Area too short: the last lines are lost.
         let mut small = Buffer::empty(Rect::new(0, 0, 5, 2));
-        text.render_to(small.area, &mut small);
+        text.render_to(small.area(), &mut small);
         assert_eq!(small, Buffer::with_lines(["un   ", "deux "]));
     }
 
@@ -686,7 +686,7 @@ mod tests {
             Text::from(vec![Line::from("a"), Line::from("b").right_aligned()]).centered();
         text.push_line("cc");
         let mut buf = Buffer::empty(Rect::new(0, 0, 5, 3));
-        text.render_to(buf.area, &mut buf);
+        text.render_to(buf.area(), &mut buf);
         assert_eq!(buf, Buffer::with_lines(["  a  ", "    b", " cc  "]));
     }
 
@@ -694,8 +694,8 @@ mod tests {
     fn text_style_covers_the_whole_area() {
         let text = Text::from("a").bg(Color::Green);
         let mut buf = Buffer::empty(Rect::new(0, 0, 3, 2));
-        text.render_to(buf.area, &mut buf);
-        assert!(buf.content.iter().all(|c| c.bg == Color::Green));
+        text.render_to(buf.area(), &mut buf);
+        assert!(buf.content().iter().all(|c| c.bg == Color::Green));
     }
 
     #[test]

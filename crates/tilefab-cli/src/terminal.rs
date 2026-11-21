@@ -94,6 +94,9 @@ impl Frame<'_> {
     }
 
     /// Direct buffer access for drawing without a widget.
+    ///
+    /// Change the cells, not the buffer area: a buffer replaced or reset to another area is
+    /// discarded (the frame is drawn blank) and `Terminal::draw` returns an error.
     pub fn buffer_mut(&mut self) -> &mut Buffer {
         self.buffer
     }
@@ -270,12 +273,19 @@ impl<W: Write> Terminal<W> {
         }
         self.insert
             .reset_to(Rect::new(0, 0, self.screen.width, height));
+        let area = self.insert.area();
         render(&mut self.insert);
+        if self.insert.area() != area {
+            tracing::warn!(
+                "insert_before: the render function changed the buffer area: lines ignored"
+            );
+            return;
+        }
         // Between two draws the known width does not change, and lines kept pending at a
         // zero width are applied before any new one can be queued: all pending lines
         // share one width.
         debug_assert!(self.pending.is_empty() || self.pending_width == width);
-        self.pending.extend_from_slice(&self.insert.content);
+        self.pending.extend_from_slice(self.insert.content());
         self.pending_width = width;
     }
 
@@ -283,7 +293,10 @@ impl<W: Write> Terminal<W> {
     ///
     /// # Errors
     ///
-    /// Returns an error if writing to the terminal fails.
+    /// Returns an error if writing to the terminal fails, or an
+    /// [`io::ErrorKind::InvalidInput`] error if `render` changed the frame buffer area
+    /// (see [`Frame::buffer_mut`]): that frame is then drawn blank, and the terminal state
+    /// stays consistent for the next one.
     pub fn draw(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> io::Result<()> {
         match self.viewport {
             Viewport::Fullscreen => self.draw_fullscreen(render),
@@ -313,7 +326,8 @@ impl<W: Write> Terminal<W> {
             buffer: &mut self.next,
             cursor_position: None,
         };
-        render(&mut frame);
+        let mut replaced = false;
+        render_checked(render, &mut frame, &mut replaced);
         let wanted_cursor = frame.cursor_position;
 
         let mut changed = false;
@@ -329,7 +343,7 @@ impl<W: Write> Terminal<W> {
         // What was just drawn becomes “what the terminal displays”; the old buffer is
         // reused for the next frame (double buffering).
         std::mem::swap(&mut self.previous, &mut self.next);
-        Ok(())
+        replaced_frame_result(replaced)
     }
 
     // --- inline --------------------------------------------------------------------------
@@ -386,7 +400,10 @@ impl<W: Write> Terminal<W> {
                 .commit(chunk, row_width, new_height, None::<fn(&mut Frame<'_>)>)?
                 .1;
         }
-        let (wanted_cursor, last_moved) = self.commit(last, row_width, new_height, Some(render))?;
+        let mut replaced = false;
+        let checked = |frame: &mut Frame<'_>| render_checked(render, frame, &mut replaced);
+        let (wanted_cursor, last_moved) =
+            self.commit(last, row_width, new_height, Some(checked))?;
         self.place_cursor(wanted_cursor, moved | last_moved)?;
         if taken {
             // Give the (now applied) lines' memory back for the next ones.
@@ -395,7 +412,8 @@ impl<W: Write> Terminal<W> {
         }
 
         self.backend.end_sync()?;
-        self.backend.flush()
+        self.backend.flush()?;
+        replaced_frame_result(replaced)
     }
 
     /// Cursor position after a resize: queried from the terminal, or estimated if the query
@@ -512,23 +530,22 @@ impl<W: Write> Terminal<W> {
             for y in lo.max(top)..old_bottom.min(span.bottom()) {
                 let from = usize::from(y - top) * width;
                 let to = usize::from(y - lo) * width;
-                self.model.content[to..to + width]
-                    .clone_from_slice(&self.previous.content[from..from + width]);
+                self.model.content_mut()[to..to + width]
+                    .clone_from_slice(&self.previous.content()[from..from + width]);
             }
         }
 
         // The target: the model (copied into the kept buffer's memory) with inserted lines
         // at the top…
-        self.target.area = span;
-        self.target.content.clone_from(&self.model.content);
-        let target = &mut self.target;
+        self.target.clone_from(&self.model);
+        let target = self.target.content_mut();
         for (i, row) in rows.chunks(row_width).enumerate() {
             for x in 0..width {
-                target.content[i * width + x] = row.get(x).cloned().unwrap_or_default();
+                target[i * width + x] = row.get(x).cloned().unwrap_or_default();
             }
             // A wide character clipped at the right edge would not fit: replace it. The last
             // cell of row `i` is the last one before row `i + 1` (none if the width is 0).
-            if let Some(last) = target.content[..(i + 1) * width].last_mut()
+            if let Some(last) = target[..(i + 1) * width].last_mut()
                 && last.width() == 2
             {
                 last.reset();
@@ -546,7 +563,8 @@ impl<W: Write> Terminal<W> {
             };
             render(&mut frame);
             wanted_cursor = frame.cursor_position;
-            self.target.content[usize::from(lines) * width..].clone_from_slice(&self.next.content);
+            self.target.content_mut()[usize::from(lines) * width..]
+                .clone_from_slice(self.next.content());
         }
 
         let mut last_row = None;
@@ -569,11 +587,10 @@ impl<W: Write> Terminal<W> {
         }
 
         self.area = new_area;
-        self.previous.area = new_area;
-        self.previous.content.clear();
+        self.previous.reset_to(new_area);
         self.previous
-            .content
-            .extend_from_slice(&self.target.content[usize::from(lines) * width..]);
+            .content_mut()
+            .clone_from_slice(&self.target.content()[usize::from(lines) * width..]);
         Ok((wanted_cursor, moved))
     }
 
@@ -630,6 +647,29 @@ impl<W: Write> Terminal<W> {
         self.previous.reset_to(self.area);
         self.backend.flush()
     }
+}
+
+/// Run `render`, then check that it left the frame buffer covering the frame area. A buffer
+/// replaced or reset through [`Frame::buffer_mut`] would no longer match the screen model
+/// (diff length, viewport rows): it is reset, so the frame is drawn blank, and `*replaced`
+/// is set for `draw` to report it.
+fn render_checked(render: impl FnOnce(&mut Frame<'_>), frame: &mut Frame<'_>, replaced: &mut bool) {
+    render(frame);
+    if frame.buffer.area() != frame.area {
+        frame.buffer.reset_to(frame.area);
+        *replaced = true;
+    }
+}
+
+/// The result of `draw` once the frame is written: an error if `render` replaced the buffer.
+fn replaced_frame_result(replaced: bool) -> io::Result<()> {
+    if replaced {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the render function changed the frame buffer area: frame drawn blank",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -769,7 +809,7 @@ mod tests {
         term.draw(|_| {}).unwrap();
         // No buffer to render into: the caller keeps the line (see `queue_output`).
         term.insert_before(1, |b| {
-            "lost".render(b.area, b);
+            "lost".render(b.area(), b);
         });
         term.backend_mut().set_fixed_size(Size::new(10, 10));
         term.draw(|_| {}).unwrap();
@@ -790,7 +830,7 @@ mod tests {
         term.draw(|_| {}).unwrap();
         // At width 4, "ab漢" fills the row: the wide character takes columns 2 and 3.
         term.insert_before(1, |b| {
-            "ab漢".render(b.area, b);
+            "ab漢".render(b.area(), b);
         });
         take(&mut term);
         // The screen narrows to 3 columns before the line is applied: half of the wide
@@ -840,14 +880,14 @@ mod tests {
         .unwrap();
         term.draw(|_| {}).unwrap();
         term.insert_before(1, |b| {
-            "kept-line".render(b.area, b);
+            "kept-line".render(b.area(), b);
         });
         term.backend_mut().set_fixed_size(Size::new(0, 10));
         term.draw(|_| {}).unwrap();
         // While the width is 0, a new insertion is ignored, and must not disturb the line
         // already kept (its width is still that of the screen when it was queued).
         term.insert_before(1, |b| {
-            "ignored".render(b.area, b);
+            "ignored".render(b.area(), b);
         });
         take(&mut term);
         term.backend_mut().set_fixed_size(Size::new(10, 10));
@@ -874,7 +914,7 @@ mod tests {
         .unwrap();
         term.draw(|_| {}).unwrap();
         term.insert_before(1, |b| {
-            "log".render(b.area, b);
+            "log".render(b.area(), b);
         });
         // The screen loses all its columns between `insert_before` and `draw`: no panic
         // (width 0 from crossterm), and the line is not lost.
@@ -934,7 +974,7 @@ mod tests {
         .unwrap();
         term.draw(|_| {}).unwrap();
         term.insert_before(1, |b| {
-            "kept-line".render(b.area, b);
+            "kept-line".render(b.area(), b);
         });
         term.backend_mut().set_fixed_size(Size::new(10, 0));
         term.draw(|_| {}).unwrap();
@@ -967,5 +1007,68 @@ mod tests {
         term.draw(|_| {}).unwrap();
         assert_eq!(take(&mut term), "\x1b[?2026h\x1b[?2026l");
         assert_eq!(term.area(), Rect::new(0, 0, 5, 3));
+    }
+
+    #[test]
+    fn a_replaced_buffer_in_fullscreen_is_an_error_not_a_panic() {
+        let mut term = terminal(6, 2);
+        term.draw(|f| f.render_widget("hi", f.area())).unwrap();
+        take(&mut term);
+        let error = term
+            .draw(|f| *f.buffer_mut() = Buffer::empty(Rect::new(0, 0, 3, 1)))
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        // The frame is drawn blank: "hi" is erased, in a closed synchronized block.
+        assert_eq!(take(&mut term), "\x1b[?2026h\x1b[1;1H  \x1b[?2026l");
+        // The next frame draws normally.
+        term.draw(|f| f.render_widget("ok", f.area())).unwrap();
+        assert_eq!(*term.buffer(), Buffer::with_lines(["ok    ", "      "]));
+    }
+
+    #[test]
+    fn a_buffer_reset_to_another_area_inline_is_an_error_not_a_panic() {
+        let backend = Backend::with_fixed(Vec::new(), Size::new(10, 10), Position::new(0, 0));
+        let mut term = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Inline(2),
+                scroll_mode: ScrollMode::Region,
+            },
+        )
+        .unwrap();
+        term.draw(|_| {}).unwrap();
+        term.insert_before(1, |b| {
+            "kept-line".render(b.area(), b);
+        });
+        let error = term
+            .draw(|f| f.buffer_mut().reset_to(Rect::new(0, 0, 3, 1)))
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        // The inserted line was still applied, and the viewport is consistent.
+        assert!(take(&mut term).contains("kept-line"));
+        assert_eq!(term.area(), Rect::new(0, 1, 10, 2));
+        term.draw(|f| f.render_widget("ui", f.area())).unwrap();
+        assert!(take(&mut term).contains("ui"));
+    }
+
+    #[test]
+    fn insert_before_ignores_lines_whose_buffer_area_was_changed() {
+        let backend = Backend::with_fixed(Vec::new(), Size::new(10, 10), Position::new(0, 0));
+        let mut term = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Inline(2),
+                scroll_mode: ScrollMode::Region,
+            },
+        )
+        .unwrap();
+        term.draw(|_| {}).unwrap();
+        term.insert_before(1, |b| {
+            *b = Buffer::with_lines(["changed-area"]);
+        });
+        take(&mut term);
+        term.draw(|_| {}).unwrap();
+        assert!(!take(&mut term).contains("changed"), "lines not ignored");
+        assert_eq!(term.area(), Rect::new(0, 0, 10, 2), "viewport moved");
     }
 }

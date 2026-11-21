@@ -78,7 +78,7 @@ fn inline() -> Report {
     .expect("in-memory terminal");
     measure(2_000, |i| {
         terminal.insert_before(1, |buf| {
-            Paragraph::new(format!("[INFO] log line {i:06}")).render(buf.area, buf);
+            Paragraph::new(format!("[INFO] log line {i:06}")).render(buf.area(), buf);
         });
         terminal
             .draw(|frame| {
@@ -150,7 +150,7 @@ fn paragraph() -> Report {
         Paragraph::new(log.as_str())
             .wrap(Wrap { trim: true })
             .scroll((u16::try_from(150 + i % 10).unwrap_or(0), 0))
-            .render(buf.area, &mut buf);
+            .render(buf.area(), &mut buf);
         black_box(&buf);
     })
 }

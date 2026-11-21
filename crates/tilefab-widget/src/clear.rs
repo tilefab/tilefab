@@ -11,7 +11,7 @@ pub struct Clear;
 
 impl Widget for Clear {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let area = buf.area.intersection(area);
+        let area = buf.area().intersection(area);
         for y in area.top()..area.bottom() {
             for x in area.left()..area.right() {
                 buf.get_mut(x, y).reset();
@@ -28,7 +28,7 @@ mod tests {
     #[test]
     fn clears_symbols_and_styles_only_inside_the_area() {
         let mut buf = Buffer::with_lines(["abcd", "efgh", "ijkl"]);
-        buf.set_style(buf.area, Style::new().fg(Color::Red));
+        buf.set_style(buf.area(), Style::new().fg(Color::Red));
         Clear.render(Rect::new(1, 1, 2, 5), &mut buf);
         assert_eq!(buf.lines(), ["abcd", "e  h", "i  l"]);
         assert_eq!(buf.get(1, 1).fg, Color::Reset);

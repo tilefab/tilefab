@@ -491,7 +491,7 @@ mod tests {
 
     /// Draw all of `buf` (by diffing against an empty buffer).
     fn draw_buffer(backend: &mut Backend<Vec<u8>>, buf: &Buffer) {
-        let blank = Buffer::empty(buf.area);
+        let blank = Buffer::empty(buf.area());
         backend.draw(buf.diff(&blank)).unwrap();
     }
 

@@ -219,7 +219,7 @@ fn queue_output<W: Write>(terminal: &mut Terminal<W>, app: &mut App) {
     let (paragraph, height) = ui::wrapped_lines(std::mem::take(&mut app.output), width);
     terminal.insert_before(height, |buf| {
         use tilefab::Widget;
-        paragraph.render(buf.area, buf);
+        paragraph.render(buf.area(), buf);
     });
 }
 

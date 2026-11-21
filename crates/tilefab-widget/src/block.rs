@@ -147,7 +147,7 @@ impl Padding {
 /// use tilefab_widget::{Block, Borders};
 ///
 /// let mut buf = Buffer::empty(Rect::new(0, 0, 7, 3));
-/// Block::new().borders(Borders::ALL).title("hi").render(buf.area, &mut buf);
+/// Block::new().borders(Borders::ALL).title("hi").render(buf.area(), &mut buf);
 /// assert_eq!(buf.lines(), ["┌hi───┐", "│     │", "└─────┘"]);
 /// ```
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -269,7 +269,7 @@ impl<'a> Block<'a> {
 
     /// Draw without consuming the block (used by widgets containing it).
     pub(crate) fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let area = buf.area.intersection(area);
+        let area = buf.area().intersection(area);
         if area.is_empty() {
             return;
         }
@@ -342,7 +342,7 @@ mod tests {
 
     fn render(block: Block, width: u16, height: u16) -> Buffer {
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
-        block.render(buf.area, &mut buf);
+        block.render(buf.area(), &mut buf);
         buf
     }
 
