@@ -1,0 +1,16 @@
+# Dependabot only updates the GitHub Actions of the workflows: they are pinned by commit
+# SHA, so without it a new release (or a security fix) would go unnoticed. Cargo
+# dependencies are not covered here: `Cargo.lock` and `cargo deny check` handle them.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # A single pull request for all the actions updated in the same week.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: ci
