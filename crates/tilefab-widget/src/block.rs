@@ -250,8 +250,11 @@ impl<'a> Block<'a> {
     /// Empty (size 0) if the block leaves no space.
     #[must_use]
     pub fn inner(&self, area: Rect) -> Rect {
-        let left = u16::from(self.borders.contains(Borders::LEFT)) + self.padding.left;
-        let top = u16::from(self.has_title_row()) + self.padding.top;
+        // Saturated like `horizontal_space`/`vertical_space`: a padding of `u16::MAX` must
+        // give an empty area, not an overflow.
+        let left =
+            u16::from(self.borders.contains(Borders::LEFT)).saturating_add(self.padding.left);
+        let top = u16::from(self.has_title_row()).saturating_add(self.padding.top);
         let (hs, vs) = (self.horizontal_space(), self.vertical_space());
         if area.width <= hs || area.height <= vs {
             return Rect::new(area.x, area.y, 0, 0);
@@ -419,6 +422,39 @@ mod tests {
                 .padding(Padding::uniform(5))
                 .inner(Rect::new(0, 0, 9, 9))
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn maximal_padding_gives_an_empty_area_without_overflow() {
+        let area = Rect::new(0, 0, 20, 10);
+        let block = Block::bordered()
+            .title("t")
+            .padding(Padding::uniform(u16::MAX));
+        assert!(block.inner(area).is_empty());
+        // Only on the left and top sides, which `inner` adds to the area position.
+        let block = Block::bordered()
+            .title("t")
+            .padding(Padding::new(u16::MAX, 0, u16::MAX, 0));
+        assert!(block.inner(area).is_empty());
+        // Rendering such a block, alone or inside a widget, must not panic either.
+        render(block.clone(), 20, 10);
+        let mut buf = Buffer::empty(area);
+        crate::paragraph::Paragraph::new("text")
+            .block(block.clone())
+            .render(area, &mut buf);
+        crate::gauge::Gauge::default()
+            .block(block.clone())
+            .render(area, &mut buf);
+        crate::gauge::LineGauge::default()
+            .block(block.clone())
+            .render(area, &mut buf);
+        let mut state = crate::list::ListState::default();
+        tilefab_core::widget::StatefulWidget::render(
+            crate::list::List::new(["item"]).block(block),
+            area,
+            &mut buf,
+            &mut state,
         );
     }
 
