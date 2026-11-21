@@ -42,6 +42,10 @@
 //! applied on the first `draw` where the screen has columns again. `insert_before` itself
 //! ignores lines while the known width is 0 (there is no buffer to render them into): the
 //! caller keeps them until then (see `Terminal::insert_before`).
+//!
+//! A screen with no rows is transient too: while its height is 0, `draw` draws nothing
+//! (the render closure is not called) and keeps the pending lines; the first `draw` with
+//! rows again repositions the viewport and applies them.
 
 use std::io::{self, Write};
 
@@ -344,6 +348,13 @@ impl<W: Write> Terminal<W> {
         if let Some((size, cursor)) = resized {
             self.resize_inline(size, cursor)?;
         }
+        // A screen with no rows (a pty whose height is set to 0) has no room for the
+        // viewport: draw nothing and keep the pending lines until rows come back (the
+        // resize at that point repositions the viewport).
+        if self.screen.height == 0 {
+            self.backend.end_sync()?;
+            return self.backend.flush();
+        }
 
         let screen_height = self.screen.height;
         let new_height = self.wanted_height.clamp(1, screen_height.max(1));
@@ -421,7 +432,11 @@ impl<W: Write> Terminal<W> {
             .saturating_sub(self.area.y)
             .min(self.area.height.saturating_sub(1));
         let height = self.wanted_height.clamp(1, size.height.max(1));
-        self.wanted_height = height;
+        // With no rows, nothing is drawn (see `draw_inline`): keep the requested height for
+        // when rows come back instead of collapsing it to 1.
+        if size.height > 0 {
+            self.wanted_height = height;
+        }
         let top = cursor
             .y
             .saturating_sub(offset)
@@ -456,8 +471,12 @@ impl<W: Write> Terminal<W> {
         let width = usize::from(screen.width);
         let lines = saturating_u16(rows.len().div_ceil(row_width));
         let (top, height) = (self.area.y, self.area.height);
+        // Outside the placement preconditions (callers do not commit on a screen with no
+        // rows, nor more lines than fit), committing nothing keeps the state consistent.
+        let Some(plan) = plan_commit(screen.height, top, height, lines, new_height) else {
+            return Ok((None, false));
+        };
         let old_bottom = top + height;
-        let plan = plan_commit(screen.height, top, height, lines, new_height);
 
         let mut moved = false;
         let mut erase = plan.erase.clone();
@@ -874,6 +893,66 @@ mod tests {
             !take(&mut term).contains("log"),
             "pending line written twice"
         );
+    }
+
+    #[test]
+    fn inline_draw_on_a_screen_without_rows_does_not_panic() {
+        let backend = Backend::with_fixed(Vec::new(), Size::new(10, 0), Position::new(0, 0));
+        let mut term = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Inline(1),
+                ..TerminalOptions::default()
+            },
+        )
+        .unwrap();
+        term.insert_before(1, |b| {
+            b.set_string(0, 0, "kept", Style::new());
+        });
+        take(&mut term);
+        let mut rendered = false;
+        term.draw(|_| rendered = true).unwrap();
+        term.draw(|_| rendered = true).unwrap();
+        assert!(!rendered, "a frame was rendered on a screen with no rows");
+        // Nothing but the empty synchronized blocks: no scrolling, no cell written.
+        assert_eq!(
+            take(&mut term),
+            "\x1b[?2026h\x1b[?2026l\x1b[?2026h\x1b[?2026l"
+        );
+    }
+
+    #[test]
+    fn rows_coming_back_after_zero_restore_the_viewport_and_pending_lines() {
+        let backend = Backend::with_fixed(Vec::new(), Size::new(10, 10), Position::new(0, 0));
+        let mut term = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Inline(2),
+                scroll_mode: ScrollMode::Region,
+            },
+        )
+        .unwrap();
+        term.draw(|_| {}).unwrap();
+        term.insert_before(1, |b| {
+            "kept-line".render(b.area, b);
+        });
+        term.backend_mut().set_fixed_size(Size::new(10, 0));
+        term.draw(|_| {}).unwrap();
+        term.draw(|_| {}).unwrap();
+        let out = take(&mut term);
+        assert!(
+            !out.contains("kept-line"),
+            "line written with no rows: {out:?}"
+        );
+        assert!(!out.contains("65535"), "out-of-range sequence: {out:?}");
+
+        term.backend_mut().set_fixed_size(Size::new(10, 10));
+        term.draw(|f| f.render_widget("ui", f.area())).unwrap();
+        let out = take(&mut term);
+        assert!(out.contains("kept-line"), "pending line lost: {out:?}");
+        assert!(out.contains("ui"), "viewport not redrawn: {out:?}");
+        assert_eq!(term.area().height, 2, "viewport height not restored");
+        assert!(term.area().bottom() <= 10, "viewport off screen");
     }
 
     #[test]

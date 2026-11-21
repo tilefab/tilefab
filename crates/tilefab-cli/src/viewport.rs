@@ -80,16 +80,21 @@ pub(crate) struct CommitPlan {
 /// - `new_height`: desired height.
 ///
 /// Requires `lines + new_height <= screen_height` (otherwise the caller splits the batch) and
-/// `top + height <= screen_height`.
+/// `top + height <= screen_height`. Returns `None` when these preconditions do not hold
+/// (for instance on a screen with no rows): there is no consistent placement, and the
+/// caller must not commit anything.
 pub(crate) fn plan_commit(
     screen_height: u16,
     top: u16,
     height: u16,
     lines: u16,
     new_height: u16,
-) -> CommitPlan {
-    debug_assert!(lines.saturating_add(new_height) <= screen_height);
-    debug_assert!(top.saturating_add(height) <= screen_height);
+) -> Option<CommitPlan> {
+    if u32::from(lines) + u32::from(new_height) > u32::from(screen_height)
+        || u32::from(top) + u32::from(height) > u32::from(screen_height)
+    {
+        return None;
+    }
 
     // The viewport starts below the inserted lines and may extend past the screen bottom:
     // the excess is the required scroll amount. Summed in `u32`: `top + lines + new_height`
@@ -110,11 +115,11 @@ pub(crate) fn plan_commit(
     } else {
         0..0
     };
-    CommitPlan {
+    Some(CommitPlan {
         scroll,
         top: new_top,
         erase,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -126,7 +131,7 @@ mod tests {
 
     #[test]
     fn shrink_by_one_with_one_line_at_the_bottom_does_not_scroll() {
-        let p = plan_commit(H, 6, 4, 1, 3);
+        let p = plan_commit(H, 6, 4, 1, 3).unwrap();
         assert_eq!(
             p,
             CommitPlan {
@@ -139,7 +144,7 @@ mod tests {
 
     #[test]
     fn shrink_by_two_with_one_line_erases_the_freed_row_below() {
-        let p = plan_commit(H, 6, 4, 1, 2);
+        let p = plan_commit(H, 6, 4, 1, 2).unwrap();
         assert_eq!(p.scroll, 0);
         assert_eq!(p.top, 7);
         assert_eq!(p.erase, 9..10);
@@ -147,43 +152,43 @@ mod tests {
 
     #[test]
     fn same_height_with_two_lines_scrolls_by_two() {
-        let p = plan_commit(H, 6, 4, 2, 4);
+        let p = plan_commit(H, 6, 4, 2, 4).unwrap();
         assert_eq!((p.scroll, p.top, p.erase), (2, 6, 0..0));
     }
 
     #[test]
     fn grow_by_one_with_one_line_at_the_bottom_scrolls_by_two() {
-        let p = plan_commit(H, 6, 4, 1, 5);
+        let p = plan_commit(H, 6, 4, 1, 5).unwrap();
         assert_eq!((p.scroll, p.top, p.erase), (2, 5, 0..0));
     }
 
     #[test]
     fn grow_alone_at_the_bottom_scrolls_by_the_growth() {
-        let p = plan_commit(H, 6, 4, 0, 5);
+        let p = plan_commit(H, 6, 4, 0, 5).unwrap();
         assert_eq!((p.scroll, p.top), (1, 5));
     }
 
     #[test]
     fn grow_with_room_below_does_not_scroll() {
-        let p = plan_commit(H, 2, 3, 0, 5);
+        let p = plan_commit(H, 2, 3, 0, 5).unwrap();
         assert_eq!((p.scroll, p.top, p.erase), (0, 2, 0..0));
     }
 
     #[test]
     fn lines_with_room_below_push_the_viewport_down_without_scrolling() {
-        let p = plan_commit(H, 2, 3, 2, 3);
+        let p = plan_commit(H, 2, 3, 2, 3).unwrap();
         assert_eq!((p.scroll, p.top, p.erase), (0, 4, 0..0));
     }
 
     #[test]
     fn shrink_alone_with_room_below_keeps_the_top_and_erases_below() {
-        let p = plan_commit(H, 2, 5, 0, 3);
+        let p = plan_commit(H, 2, 5, 0, 3).unwrap();
         assert_eq!((p.scroll, p.top, p.erase), (0, 2, 5..7));
     }
 
     #[test]
     fn nothing_to_do_keeps_everything() {
-        let p = plan_commit(H, 6, 4, 0, 4);
+        let p = plan_commit(H, 6, 4, 0, 4).unwrap();
         assert_eq!((p.scroll, p.top, p.erase), (0, 6, 0..0));
     }
 
@@ -197,7 +202,7 @@ mod tests {
                         if lines + new_height > H {
                             continue;
                         }
-                        let p = plan_commit(H, top, height, lines, new_height);
+                        let p = plan_commit(H, top, height, lines, new_height).unwrap();
                         assert!(p.scroll <= top, "{top} {height} {lines} {new_height}");
                         assert!(p.top + new_height <= H);
                         assert!(p.top >= lines.saturating_sub(p.scroll));
@@ -208,10 +213,22 @@ mod tests {
     }
 
     #[test]
+    fn arguments_outside_the_preconditions_give_no_plan() {
+        // A screen with no rows: even a one-row viewport does not fit.
+        assert_eq!(plan_commit(0, 0, 1, 0, 1), None);
+        // Too many lines for the viewport, or an old viewport past the screen bottom.
+        assert_eq!(plan_commit(H, 6, 4, H, 1), None);
+        assert_eq!(plan_commit(H, 8, 4, 0, 4), None);
+        // Sums beyond `u16::MAX` are not saturated into a false "fits".
+        assert_eq!(plan_commit(u16::MAX, 0, 1, u16::MAX, 1), None);
+        assert_eq!(plan_commit(u16::MAX, u16::MAX, 1, 0, 1), None);
+    }
+
+    #[test]
     fn huge_screen_sum_beyond_u16_scrolls_exactly_enough() {
         // Found by proptest: `top + lines + new_height` = 65 536. A saturated `u16` sum
         // scrolled one line too few and pushed the viewport past the screen bottom.
-        let p = plan_commit(63_728, 1_964, 1, 13_884, 49_688);
+        let p = plan_commit(63_728, 1_964, 1, 13_884, 49_688).unwrap();
         assert_eq!(p.scroll, 1_808);
         assert_eq!(p.top, 63_728 - 49_688);
     }
@@ -238,7 +255,7 @@ mod tests {
         fn plan_scrolls_only_as_needed_and_keeps_everything_on_screen(
             (screen, top, height, lines, new_height) in commit_args()
         ) {
-            let p = plan_commit(screen, top, height, lines, new_height);
+            let p = plan_commit(screen, top, height, lines, new_height).unwrap();
             let (screen, top, height, lines, new_height) = (
                 u32::from(screen), u32::from(top), u32::from(height),
                 u32::from(lines), u32::from(new_height),
