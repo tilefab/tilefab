@@ -318,7 +318,9 @@ fn draw_glyphs(
         if glyph.width() > remaining {
             break;
         }
-        buf.write_grapheme(x, row.y, glyph.symbol, glyph.width(), glyph.style);
+        // The glyph is one grapheme measured by `grapheme_width`: the written width is the
+        // same.
+        buf.write_grapheme(x, row.y, glyph.symbol, glyph.style);
         x += saturating_u16(glyph.width());
         remaining -= glyph.width();
     }

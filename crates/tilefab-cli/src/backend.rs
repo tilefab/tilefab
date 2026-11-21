@@ -628,9 +628,13 @@ mod tests {
 
     #[test]
     fn continuation_cells_are_skipped() {
-        let cont = Cell::new("");
+        // Only a wide character creates a continuation, right after it.
+        let mut wide = Buffer::empty(Rect::new(0, 0, 2, 1));
+        wide.set_string(0, 0, "日", Style::new());
+        let cont = wide.get(1, 0);
+        assert!(cont.is_continuation());
         let mut b = backend();
-        b.draw([(0, 0, &cont)]).unwrap();
+        b.draw([(1, 0, cont)]).unwrap();
         assert_eq!(out(&b), "");
     }
 

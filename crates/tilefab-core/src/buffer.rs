@@ -25,12 +25,16 @@ use super::style::{Color, Modifier, Style};
 /// Number of screen columns occupied by a grapheme: 0, 1, or 2.
 ///
 /// Control characters count as 0 (the buffer ignores them), as do zero-width
-/// graphemes; a grapheme never occupies more than two columns.
+/// graphemes. A cell holds at most two columns: a grapheme reported wider is shown as a
+/// space (see [`Cell`]), so it counts as 1.
 pub fn grapheme_width(grapheme: &str) -> usize {
     if grapheme.chars().any(char::is_control) {
         return 0;
     }
-    grapheme.width().min(2)
+    match grapheme.width() {
+        width @ 0..=2 => width,
+        _ => 1,
+    }
 }
 
 /// Bytes a symbol holds without a heap allocation: enough for nearly every grapheme
@@ -75,12 +79,24 @@ impl Symbol {
         }
     }
 
-    /// `symbol`, or a space if it contains a control character (see [`Cell`]).
+    /// The first grapheme of `symbol` if it is printable and one or two columns wide,
+    /// otherwise a space (see [`Cell`]). Never a continuation.
     fn printable(symbol: &str) -> Self {
-        if symbol.chars().any(char::is_control) {
-            Self::SPACE
-        } else {
-            Self::new(symbol)
+        // Fast path for the most common case, a single ASCII character.
+        if let &[byte] = symbol.as_bytes() {
+            return if byte == b' ' || byte.is_ascii_graphic() {
+                Self::new(symbol)
+            } else {
+                Self::SPACE
+            };
+        }
+        match symbol.graphemes(true).next() {
+            Some(grapheme)
+                if !grapheme.chars().any(char::is_control) && matches!(grapheme.width(), 1 | 2) =>
+            {
+                Self::new(grapheme)
+            }
+            _ => Self::SPACE,
         }
     }
 
@@ -110,11 +126,15 @@ impl std::fmt::Debug for Symbol {
 ///
 /// # Invariant: a symbol is a printable grapheme
 ///
-/// A symbol is one printable grapheme, or empty for a continuation. The symbol can only be
-/// set through [`Cell::new`] and [`Cell::set_symbol`], which replace a string containing a
-/// control character (such as `ESC`, `BEL` or a line feed) with a space: no escape
-/// sequence can reach the terminal through a cell. `Buffer::set_string`
-/// and its variants also cut text into graphemes and skip control characters.
+/// A symbol is one printable grapheme one or two columns wide, or empty for a continuation.
+/// [`Cell::new`] and [`Cell::set_symbol`] keep only the first grapheme of the string they
+/// are given, and replace it with a space if it contains a control character (such as
+/// `ESC`, `BEL` or a line feed), is zero-width (a lone combining mark) or is wider than two
+/// columns: no escape sequence can reach the terminal through a cell, and a cell always
+/// prints as many columns as [`Cell::width`] says. A continuation is only created by
+/// [`Buffer::write_grapheme`] (and `Buffer::set_string`), right after a wide character.
+/// `Buffer::set_string` and its variants also cut text into graphemes and skip control
+/// characters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
     /// The displayed grapheme. Empty for a continuation cell.
@@ -140,7 +160,8 @@ impl Default for Cell {
 }
 
 impl Cell {
-    /// An unstyled cell displaying `symbol` (a space if it contains a control character).
+    /// An unstyled cell displaying the first grapheme of `symbol` (a space if it is not
+    /// printable, see [`Cell`]). Never a continuation, even for `""`.
     #[must_use]
     pub fn new(symbol: &str) -> Self {
         Self {
@@ -155,8 +176,8 @@ impl Cell {
         self.symbol.as_str()
     }
 
-    /// Change the symbol without changing the style (a space if it contains a control
-    /// character).
+    /// Change the symbol without changing the style: the first grapheme of `symbol`, or a
+    /// space if it is not printable (see [`Cell`]). Never a continuation, even for `""`.
     pub fn set_symbol(&mut self, symbol: &str) -> &mut Self {
         self.symbol = Symbol::printable(symbol);
         self
@@ -409,30 +430,36 @@ impl Buffer {
             if width > remaining {
                 break;
             }
-            self.write_grapheme(x, y, grapheme, width, style);
-            x += saturating_u16(width);
-            remaining -= width;
+            // The same width as measured: `grapheme` is a single grapheme.
+            let written = self.write_grapheme(x, y, grapheme, style);
+            x += saturating_u16(written);
+            remaining -= written;
         }
         (x, y)
     }
 
-    /// Write a grapheme of `width` columns at `(x, y)`; the caller has already checked the
-    /// available space (`Paragraph` uses it to write graphemes it has already measured).
+    /// Write a grapheme at `(x, y)` and return the number of columns written (1 or 2,
+    /// [`grapheme_width`] of `grapheme`); the caller has already checked the available
+    /// space (`Paragraph` uses it to write graphemes it has already measured). A wide
+    /// grapheme also turns `(x + 1, y)` into its continuation.
     ///
-    /// Unlike [`Buffer::set_stringn`], nothing is measured or clipped: `width` must be the
-    /// display width of `grapheme` (1 or 2).
+    /// Unlike [`Buffer::set_stringn`], nothing is clipped. `grapheme` is normalized like
+    /// [`Cell::set_symbol`]: only its first grapheme is kept, and an unprintable one is
+    /// written as a space (1 column).
     ///
     /// # Panics
     ///
     /// If `(x, y)`, or `(x + 1, y)` for a wide grapheme, is outside the buffer.
-    pub fn write_grapheme(&mut self, x: u16, y: u16, grapheme: &str, width: usize, style: Style) {
+    pub fn write_grapheme(&mut self, x: u16, y: u16, grapheme: &str, style: Style) -> usize {
+        let symbol = Symbol::printable(grapheme);
+        let width = symbol.as_str().width();
         // Overwriting half a wide character: the other half becomes a space.
         self.break_wide(x, y);
         if width == 2 {
             self.break_wide(x + 1, y);
         }
         let head = self.get_mut(x, y);
-        head.set_symbol(grapheme);
+        head.symbol = symbol;
         head.set_style(style);
         if width == 2 {
             // The continuation copies the head's style to keep the background uniform.
@@ -443,6 +470,7 @@ impl Buffer {
             tail.bg = bg;
             tail.modifier = modifier;
         }
+        width
     }
 
     /// If `(x, y)` is part of a wide character, replace the *other* half with a space.
@@ -514,8 +542,11 @@ mod tests {
     fn symbols_with_control_characters_become_a_space() {
         assert_eq!(Cell::new("a").symbol(), "a");
         assert_eq!(Cell::new("😀").symbol(), "😀");
-        assert_eq!(Cell::new("").symbol(), "");
-        assert_eq!(Cell::new("a\nb").symbol(), " ");
+        // Only the first grapheme is kept: what follows it, control characters included,
+        // never reaches the terminal.
+        assert_eq!(Cell::new("a\nb").symbol(), "a");
+        assert_eq!(Cell::new("\nb").symbol(), " ");
+        assert_eq!(Cell::new("\r\n").symbol(), " ");
         let mut cell = Cell::new("x");
         cell.set_symbol("\x1b[2J");
         assert_eq!(cell.symbol(), " ");
@@ -564,15 +595,65 @@ mod tests {
     }
 
     #[test]
+    fn a_cell_holds_one_printable_grapheme_one_or_two_columns_wide() {
+        // Only the first grapheme is kept (it used to print 3 columns for one cell).
+        assert_eq!(Cell::new("abc").symbol(), "a");
+        assert_eq!(Cell::new("日本").symbol(), "日");
+        assert_eq!(Cell::new("e\u{301}x").symbol(), "e\u{301}");
+        // A lone combining mark is zero-width: a space, not a cell printing 0 columns.
+        assert_eq!(Cell::new("\u{301}").symbol(), " ");
+        assert_eq!(Cell::new("\u{200b}").symbol(), " ");
+        // A control character in the first grapheme, even after printable text in it.
+        assert_eq!(Cell::new("\x1b").symbol(), " ");
+        // Every cell prints exactly as many columns as it claims.
+        for symbol in [
+            "a", " ", "~", "é", "日", "😀", "abc", "\u{301}", "\x7f", "\t",
+        ] {
+            let cell = Cell::new(symbol);
+            assert!(matches!(cell.width(), 1 | 2), "{symbol:?}: {cell:?}");
+            assert_eq!(cell.width(), grapheme_width(cell.symbol()), "{symbol:?}");
+        }
+    }
+
+    #[test]
+    fn the_empty_string_is_a_space_not_a_continuation() {
+        // An orphan continuation is skipped by the diff and the backend: what it covered
+        // stayed on screen while the buffer believed it erased.
+        assert!(!Cell::new("").is_continuation());
+        assert_eq!(Cell::new("").symbol(), " ");
+        let mut cell = Cell::new("x");
+        cell.set_symbol("");
+        assert!(!cell.is_continuation());
+        assert_eq!(cell.symbol(), " ");
+        // The previous "x" is rewritten as a space.
+        let previous = Buffer::with_lines(["x"]);
+        let mut next = previous.clone();
+        next.get_mut(0, 0).set_symbol("");
+        assert_eq!(next.diff(&previous).len(), 1);
+    }
+
+    #[test]
+    fn write_grapheme_returns_the_written_width_and_normalizes() {
+        let mut b = buf(4, 1);
+        assert_eq!(b.write_grapheme(0, 0, "日", Style::new()), 2);
+        assert!(b.get(1, 0).is_continuation());
+        // Several graphemes: only the first one; an unprintable one: a space.
+        assert_eq!(b.write_grapheme(2, 0, "ab", Style::new()), 1);
+        assert_eq!(b.write_grapheme(3, 0, "\u{301}", Style::new()), 1);
+        assert_eq!(b.lines(), ["日a "]);
+    }
+
+    #[test]
     fn overwriting_hand_made_wide_cells_at_the_edges_stays_in_the_buffer() {
         // `set_string` never puts a wide head in the last column nor a continuation in
-        // the first one, but the `Cell` API can: overwriting them must not reach outside.
+        // the first one, but the `Cell` API can put a head there (and this module a
+        // continuation): overwriting them must not reach outside.
         let mut b = buf(3, 1);
         b.get_mut(2, 0).set_symbol("日");
         b.set_string(2, 0, "x", Style::new());
         assert_eq!(b.lines(), ["  x"]);
         let mut c = buf(3, 1);
-        c.get_mut(0, 0).set_symbol("");
+        c.get_mut(0, 0).symbol = Symbol::EMPTY;
         c.set_string(0, 0, "y", Style::new());
         assert_eq!(c.lines(), ["y  "]);
     }
