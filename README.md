@@ -49,17 +49,55 @@ Keys typed while it waits are echoed by the terminal but not read: stdin is the 
 At most 5 simultaneous tasks (`MAX_TASKS`); beyond that, the command is refused with a WARN. An unknown command gives a WARN, `start` without a name an ERROR.
 The hidden `panic` command triggers a deliberate panic, to check that the terminal is properly restored. It exists in debug builds only (`cargo build`, used by `tools/check_app.py`); in a release build, `panic` is an unknown command.
 
-Line editing (built-in readline-style editor, `tilefab-input`): ←/→, Home/End, Ctrl+A/E, Backspace, Delete, Ctrl+←/→ (word by word), Alt+Backspace (deletes the previous word), Ctrl+W (deletes the previous whitespace-delimited word), Ctrl+U (deletes to the start), Ctrl+K (deletes to the end), Ctrl+Y (pastes back the last deleted text), Ctrl+_ (undo).
+## Line editing
+
+The prompt uses the line editor of `tilefab-input`: readline-style Emacs keys, Unicode-aware (the cursor moves by grapheme: an accented letter or an emoji is one step). A long line scrolls horizontally, keeping a few columns of context around the cursor; a dim `…` shows hidden text.
+
+| Keys | Action |
+|---|---|
+| ←/→, Ctrl+B/Ctrl+F | one character left / right |
+| Ctrl+←/→, Alt+←/→, Alt+B/Alt+F | previous word start / next word end |
+| Home/End, Ctrl+A/Ctrl+E | start / end of the line |
+| Backspace (Ctrl+H), Delete, Ctrl+D | delete the character before / under the cursor (Ctrl+D on an empty line quits) |
+| Alt+Backspace, Alt+D (Ctrl+Delete) | delete the previous word / to the end of the next word |
+| Ctrl+W | delete the previous whitespace-delimited word |
+| Ctrl+U, Ctrl+K | delete to the start / to the end of the line |
+| Ctrl+Y, then Alt+Y | paste back the last deleted text, then older ones (consecutive deletions are pasted back together) |
+| Ctrl+T, Alt+T | swap two characters / two words |
+| Alt+U, Alt+L, Alt+C | upper-case / lower-case / capitalize to the end of the word |
+| Ctrl+_ (Ctrl+/, Ctrl+7, Ctrl+Z), Alt+_ | undo (a typed word at once) / redo |
+| ↑/↓ | previous / next history entry that starts with what is typed |
+| Ctrl+P/Ctrl+N, Alt+</Alt+> | previous / next history entry, oldest / newest |
+| Ctrl+R | search the history (see below) |
+| Tab, Shift+Tab | complete the command name (see below) |
+| Esc | hide the hint; back to the typed line while browsing the history |
+| Enter (Ctrl+J, Ctrl+M) | run the line |
+
+**History.** Lines run at the prompt are saved, each one once (the latest wins), up to 1000. A line that starts with a space is not saved. The file is `$TILEFAB_HISTORY` if set, else `$XDG_STATE_HOME/tilefab/history`, else `~/.local/state/tilefab/history`; it is private to the user (mode `0600`). `TILEFAB_HISTORY= cargo run` runs without a history file. The headless mode has no history.
+
+**Search.** Ctrl+R replaces the prompt with `(search) query: ` and shows the newest entry that contains what is typed (case-insensitive unless the query has an upper-case letter), the match underlined. Ctrl+R / Ctrl+S go to older / newer matches; `(failing search)` means there is no other match. Enter runs the match; Esc or an arrow key keeps it in the line to edit it; Ctrl+G or Ctrl+C cancels.
+
+**Hints.** While typing, the rest of the newest matching history entry is shown dim after the line: → / End / Ctrl+F accepts it, Alt+F accepts one word, Esc hides it.
+
+**Completion.** Tab completes the command name (`st` → `start `). When several commands match, Tab inserts their common part, then a second Tab opens a menu below the prompt (the viewport grows to show it): Tab/↓ and Shift+Tab/↑ select, ←/→ change column, Enter keeps the selection without running the line, typing goes on after it, Esc restores the line.
+
+**Paste.** The application turns bracketed paste on: a pasted text is inserted on the prompt line in one go (line breaks and tabs become spaces) and nothing runs before Enter. In a terminal without bracketed paste, pasted text arrives as typed keys and each line break runs a line.
+
+Terminal notes:
+
+- on macOS, the Alt shortcuts need "Use Option as Meta key" (Terminal.app, Profiles › Keyboard) or "Option key: Esc+" (iTerm2); otherwise Option+B types `∫`, which is inserted;
+- many terminals send Ctrl+Backspace as Ctrl+H, which deletes one character;
+- Ctrl+Z is undo, not suspend, and Ctrl+S is free (forward search): raw mode turns off the terminal's `ISIG` and `IXON`.
 
 ## Architecture
 
 A single UI loop owns the `Terminal`; nothing else writes to stdout.
 
 ```
- keyboard thread ──(Key, Resize)───┐
- tokio tasks     ──(Progress, Done)┼──► AppEvent channel ──► UI loop ──► Terminal (inline viewport)
- tracing         ──(Log)───────────┤
- 100 ms tick     ──(Tick)──────────┘
+ keyboard thread ──(Key, Paste, Resize)┐
+ tokio tasks     ──(Progress, Done)────┼──► AppEvent channel ──► UI loop ──► Terminal (inline viewport)
+ tracing         ──(Log)───────────────┤
+ 100 ms tick     ──(Tick)──────────────┘
 ```
 
 | File | Role |
@@ -132,7 +170,7 @@ End to end, in a pty with a terminal emulator (local only, not part of the CI; o
 cargo build --examples && cargo build
 tools/.venv/bin/python tools/check_inline.py   # height cycle 1 → 5 → 1 with logs: a single synchronized block per commit,
                                                # no ESC[J / ESC[2J, no log lost or duplicated, prompt not moving
-tools/.venv/bin/python tools/check_app.py      # Unicode input, burst of 5 tasks, resize, zero width, zero height, signals, panic, degraded mode
+tools/.venv/bin/python tools/check_app.py      # Unicode input, burst of 5 tasks, resize, zero width, zero height, line editor (history, completion menu, search, paste), signals, panic, degraded mode
 ```
 
 The same scenarios on the release build (no overflow checks, no `debug_assert!`; `panic` must then be an unknown command): `cargo build --release && tools/.venv/bin/python tools/check_app.py --release`.

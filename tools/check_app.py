@@ -15,6 +15,8 @@ Scenarios:
     no panic, and the line is shown once the width is back;
   * zero-height: the same with all the rows: no panic while nothing can be drawn,
     and the line is shown once the rows are back;
+  * line-editor: ↑ history recall, Tab completion and its menu (opened and closed without
+    stale rows), Ctrl+R search, a bracketed paste that does not run;
   * signals: SIGTERM, SIGINT and SIGHUP exit cleanly, with code 0;
   * panic: the hidden `panic` command leaves a clean terminal (with --release, where
     the command does not exist: `panic` is reported as unknown and the application goes on);
@@ -291,6 +293,72 @@ def scenario_zero_height(rows: int, cols: int, prefill: int) -> list:
     return check.failures
 
 
+def last_row(term: Term):
+    """Index and text of the last non-empty screen row (the prompt line, or the bottom of
+    the completion menu), or (None, "")."""
+    lines = term.screen_lines()
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].strip():
+            return i, lines[i]
+    return None, ""
+
+
+def scenario_line_editor(rows: int, cols: int, prefill: int) -> list:
+    """The line editor in the application: ↑ recalls the history, Tab completes and opens
+    a menu below the prompt (the viewport grows, and shrinks back without stale rows),
+    Ctrl+R searches the history, and a bracketed paste is inserted without running."""
+    check = Check()
+    term = launch(rows, cols, prefill)
+    for line in ("list", "help"):
+        term.send(line + "\r")
+        term.wait_for("> " + line, timeout=5.0)
+        term.wait_idle(0.3)
+    # ↑ / ↑: the newest entries, newest first.
+    term.send("\x1b[A")
+    term.wait_idle(0.3)
+    check.ok(last_row(term)[1].rstrip() == "> help", "↑ did not recall help: %r" % last_row(term)[1])
+    term.send("\x1b[A")
+    term.wait_idle(0.3)
+    check.ok(last_row(term)[1].rstrip() == "> list", "↑↑ did not recall list: %r" % last_row(term)[1])
+    # Tab with one candidate: the command and its space.
+    term.send("\x15st\t")
+    term.wait_idle(0.3)
+    check.ok(last_row(term)[1].rstrip() == "> start", "Tab did not complete start: %r" % last_row(term)[1])
+    check.ok(term.cursor()[1] == len("> start "), "no space after start: cursor %r" % (term.cursor(),))
+    # Tab on an empty line: the menu of the five commands opens below the prompt.
+    term.send("\x15\t")
+    term.wait_idle(0.5)
+    lines = term.screen_lines()
+    p = prompt_row(term)
+    menu = [l for l in lines[p + 1 :] if l] if p is not None else []
+    check.ok(p is not None and lines[p].rstrip() == "> start", "menu: prompt %r" % (lines[p] if p is not None else None))
+    check.ok(len(menu) == 5 and menu[0].startswith("start") and "start a task" in menu[0], "menu rows: %r" % menu)
+    check.ok(term.cursor()[0] == p, "cursor not on the prompt while the menu is open")
+    # Esc closes it. The viewport shrinks in place (placement rule of the inline viewport:
+    # the prompt keeps its row, the freed rows below it are cleared): no menu row is left.
+    term.send("\x1b")
+    term.wait_idle(0.5)
+    p = prompt_row(term)
+    check.ok(p is not None and all(not l for l in term.screen_lines()[p + 1 :]), "rows left below the prompt after Esc")
+    check.ok("start a task" not in "\n".join(term.screen_lines()), "stale menu rows after Esc")
+    # Ctrl+R: the search prompt and the newest match; Enter runs it.
+    term.send("\x15\x12li")
+    term.wait_idle(0.3)
+    check.ok(last_row(term)[1].startswith("(search) li: list"), "Ctrl+R: %r" % last_row(term)[1])
+    before = term.all_text().count("no task running")
+    term.send("\r")
+    term.wait_idle(0.5)
+    check.ok(term.all_text().count("no task running") == before + 1, "the search match did not run")
+    # Bracketed paste: one line, nothing runs before Enter.
+    term.send("\x1b[200~start pasted\nhelp\x1b[201~")
+    term.wait_idle(0.5)
+    check.ok(last_row(term)[1].rstrip() == "> start pasted help", "paste: %r" % last_row(term)[1])
+    check.ok('task "pasted' not in term.all_text(), "the pasted text ran")
+    quit_app(term, check)
+    term.close()
+    return check.failures
+
+
 def scenario_signals(rows: int, cols: int, prefill: int) -> list:
     """A signal from another process goes through the normal exit path."""
     check = Check()
@@ -395,6 +463,7 @@ def main() -> int:
         ("resize", lambda: scenario_resize(args.rows, args.cols, args.prefill)),
         ("zero-width", lambda: scenario_zero_width(args.rows, args.cols, args.prefill)),
         ("zero-height", lambda: scenario_zero_height(args.rows, args.cols, args.prefill)),
+        ("line-editor", lambda: scenario_line_editor(args.rows, args.cols, args.prefill)),
         ("signals", lambda: scenario_signals(args.rows, args.cols, args.prefill)),
         ("panic", lambda: (scenario_panic_absent if args.release else scenario_panic)(args.rows, args.cols, args.prefill)),
         ("degraded", scenario_degraded),
