@@ -342,11 +342,9 @@ impl Layout {
 
         let gaps = self.constraints.len().saturating_sub(1);
         // Effective spacing: reduced if the `gaps` gaps do not fit in the area.
-        let spacing = if gaps == 0 {
-            0
-        } else {
-            self.spacing.min(saturating_u16(usize::from(length) / gaps))
-        };
+        let spacing = usize::from(length)
+            .checked_div(gaps)
+            .map_or(0, |per_gap| self.spacing.min(saturating_u16(per_gap)));
         let available = length - saturating_u16(gaps).wrapping_mul(spacing).min(length);
         // `gaps * spacing <= length <= u16::MAX`, so the u16 product cannot overflow;
         // the `min` above is just a guard.
