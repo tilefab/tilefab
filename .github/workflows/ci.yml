@@ -1,5 +1,5 @@
-# Continuous integration: runs tools/ci.sh (fmt, clippy, tests, doc, cargo-deny) on stable,
-# then builds and tests with the MSRV (job `msrv`).
+# Continuous integration: runs tools/ci.sh (fmt, clippy, tests, doc, cargo-deny) with the
+# toolchain pinned in rust-toolchain.toml, then builds and tests with the MSRV (job `msrv`).
 # The pty scripts of tools/ are kept local (see README.md).
 name: CI
 
@@ -19,10 +19,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # Installs the toolchain and components named in rust-toolchain.toml.
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install && rustc --version
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
@@ -47,5 +46,6 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      # `+1.88`: without it, rust-toolchain.toml would win and the job would not test the MSRV.
       - name: Build and test
-        run: cargo test --all-targets --all-features
+        run: cargo +1.88 test --all-targets --all-features

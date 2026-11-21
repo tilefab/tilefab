@@ -112,6 +112,8 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 cargo deny check                # advisories, bans, licenses (see deny.toml), sources
 ```
 
+The Rust toolchain is pinned in `rust-toolchain.toml` (rustc, rustfmt and clippy): local runs and CI use the same version, so a new stable release cannot break CI with new clippy lints on its own. To move to a new version, change `channel` there, run `rustup install` then `tools/ci.sh`, and fix what the new lints report.
+
 The minimum supported Rust version is **1.88** (`rust-version` in the root `Cargo.toml`). The CI job `msrv` builds and tests with it; locally: `rustup toolchain install 1.88 --profile minimal && cargo +1.88 test --all-targets --all-features`.
 
 End to end, in a pty with a terminal emulator (local only, not part of the CI; once: `python3 -m venv tools/.venv && tools/.venv/bin/pip install -r tools/requirements.txt`):

@@ -1,0 +1,10 @@
+# Rust toolchain of the project: used by cargo locally and in CI, so that both run the same
+# rustc, rustfmt and clippy. A new stable release can bring new clippy lints: bump this
+# version on purpose (then run tools/ci.sh), not when CI happens to pick a new stable.
+#
+# The MSRV (`rust-version` in Cargo.toml) is checked separately: `cargo +1.88 …`, where
+# `+toolchain` takes precedence over this file.
+[toolchain]
+channel = "1.100.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
