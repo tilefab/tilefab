@@ -11,6 +11,15 @@
 // The entire public API is documented; the lint catches omissions.
 #![warn(missing_docs)]
 
+mod buffer;
+mod editor;
+mod keymap;
+mod kill_ring;
+mod undo;
+
+pub use editor::{EditorConfig, EditorEvent, LineEditor};
+pub use keymap::Command;
+
 use crossterm::event::Event;
 use tui_input::backend::crossterm::EventHandler;
 

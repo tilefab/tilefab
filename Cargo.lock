@@ -608,7 +608,9 @@ name = "tilefab-input"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "proptest",
  "tui-input",
+ "unicode-segmentation",
 ]
 
 [[package]]
