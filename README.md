@@ -29,6 +29,14 @@ echo "start a" | cargo run
 printf 'start a\nstart b\nlist\n' | cargo run
 ```
 
+In this mode there is no prompt, and `list` is the only way to see progress. All the piped lines are read at once, so in the second example `list` runs right after the two `start`, before any progress report (sent every 100 ms): both tasks show `0 %`. To see progress, wait before `list`:
+
+```sh
+{ printf 'start a\nstart b\n'; sleep 3; echo list; } | cargo run
+```
+
+Keys typed while it waits are echoed by the terminal but not read: stdin is the pipe.
+
 ## Commands
 
 | Command | Effect |
