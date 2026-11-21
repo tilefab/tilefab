@@ -1,4 +1,4 @@
-//! Fullscreen demo of the small `tui` library: border, wrapped paragraph, animated gauge.
+//! Fullscreen demo of the small `tilefab` library: border, wrapped paragraph, animated gauge.
 //!
 //! Run: `cargo run --example fullscreen`. `q`, Escape, or Ctrl+C quits.
 //! Resize the window: everything is recalculated and redrawn.

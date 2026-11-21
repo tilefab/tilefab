@@ -1,5 +1,5 @@
 //! CLI demo: logs scroll above an inline viewport whose height follows the number of
-//! tasks (one line per task + the prompt), built on the small `tui` library.
+//! tasks (one line per task + the prompt), built on the small `tilefab` library.
 
 mod app;
 mod headless;

@@ -165,7 +165,7 @@ impl App {
     ///
     /// For events that change viewport height (task started or finished), the
     /// line must arrive in the same frame as the change; otherwise the viewport would shrink
-    /// before its replacement line arrives (see the placement rule in `tui::viewport`).
+    /// before its replacement line arrives (see the placement rule in [`tilefab::viewport`]).
     fn log_info(&mut self, message: &str) {
         self.output
             .push(Line::from(logging::format_line(Level::INFO, message)));
