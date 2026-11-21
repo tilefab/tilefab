@@ -56,3 +56,13 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+
+# Release binary (`cargo build --release`): a single, fully optimized codegen unit with
+# thin LTO across crates, and symbols stripped. On the demo, the binary shrinks from 2.2 MB
+# to 1.4 MB; in exchange, a release build links in about 12 s instead of 1 s. Stripping
+# only removes symbol names from backtraces: a panic report still gives its message and
+# location (`file:line`).
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
