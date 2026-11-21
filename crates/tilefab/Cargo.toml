@@ -44,5 +44,9 @@ required-features = ["widget"]
 name = "terminal_alloc"
 required-features = ["widget"]
 
+[[test]]
+name = "widget_alloc"
+required-features = ["widget"]
+
 [lints]
 workspace = true

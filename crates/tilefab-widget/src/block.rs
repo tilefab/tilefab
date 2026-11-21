@@ -320,9 +320,11 @@ impl<'a> Block<'a> {
             let first = left + u16::from(self.borders.contains(Borders::LEFT));
             let end = area.right() - u16::from(self.borders.contains(Borders::RIGHT));
             if first < end {
-                let mut title = title.clone();
-                title.alignment.get_or_insert(self.title_alignment);
-                title.render_to(Rect::new(first, top, end - first, 1), buf);
+                title.render_to_with_default_alignment(
+                    Rect::new(first, top, end - first, 1),
+                    buf,
+                    self.title_alignment,
+                );
             }
         }
     }

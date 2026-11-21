@@ -9,8 +9,8 @@ use tilefab_core::buffer::Buffer;
 use tilefab_core::convert::saturating_u16;
 use tilefab_core::layout::Rect;
 use tilefab_core::style::Style;
-use tilefab_core::text::Text;
-use tilefab_core::widget::{StatefulWidget, Widget};
+use tilefab_core::text::{Span, Text};
+use tilefab_core::widget::StatefulWidget;
 
 /// A list item: text of one or more lines.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -219,12 +219,13 @@ impl StatefulWidget for List<'_> {
             );
         }
 
+        // Nothing allocated per frame: a borrowed `Span` measures the symbol.
         let symbol_width = if state.selected.is_some() {
-            saturating_u16(Text::raw(self.highlight_symbol).width())
+            saturating_u16(Span::raw(self.highlight_symbol).width())
         } else {
             0
         };
-        let blank = " ".repeat(symbol_width as usize);
+        let prefix_width = symbol_width.min(inner.width);
 
         let mut y = inner.y;
         for (index, item) in self.items.iter().enumerate().skip(state.offset) {
@@ -239,16 +240,24 @@ impl StatefulWidget for List<'_> {
             if selected {
                 buf.set_style(item_area, self.highlight_style);
             }
-            // The symbol is displayed only on the item's first line.
-            let prefix = if selected {
-                self.highlight_symbol
+            // The symbol is displayed only on the item's first line; other items get as
+            // many spaces, written one by one rather than from an allocated string.
+            if selected {
+                buf.set_stringn(
+                    inner.x,
+                    y,
+                    self.highlight_symbol,
+                    inner.width as usize,
+                    Style::new(),
+                );
             } else {
-                &blank
-            };
-            buf.set_stringn(inner.x, y, prefix, inner.width as usize, Style::new());
-            let text_x = inner.x.saturating_add(symbol_width.min(inner.width));
+                for x in inner.x..inner.x + prefix_width {
+                    buf.set_string(x, y, " ", Style::new());
+                }
+            }
+            let text_x = inner.x.saturating_add(prefix_width);
             let text_area = Rect::new(text_x, y, inner.right().saturating_sub(text_x), item_height);
-            item.content.clone().render(text_area, buf);
+            item.content.render_to(text_area, buf);
             y += item_height;
         }
     }

@@ -172,6 +172,18 @@ impl<'a> Line<'a> {
         self.render_aligned(area, buf, None);
     }
 
+    /// Like [`Line::render_to`], with `default` as the alignment when the line has none of
+    /// its own (a `Block` title takes the block's title alignment this way, without
+    /// cloning the line).
+    pub fn render_to_with_default_alignment(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        default: Alignment,
+    ) {
+        self.render_aligned(area, buf, Some(default));
+    }
+
     /// Like [`Line::render_to`], with a default alignment from the parent `Text`.
     fn render_aligned(&self, area: Rect, buf: &mut Buffer, default: Option<Alignment>) {
         let area = buf.area().intersection(area);
