@@ -144,6 +144,20 @@ cargo mutants -p tilefab-widget -j 4   # widgets: about 3 minutes
 
 On the widgets, three mutants survive because they do not change the behavior (equivalent mutants); a comment marks each one in the code (`block.rs`, `gauge.rs`, `paragraph.rs`). The timeouts are mutants that loop forever: the tests catch them too.
 
+Fuzzing with libFuzzer (`fuzz/`, a crate outside the workspace; once: `rustup toolchain install nightly --profile minimal && cargo install --locked cargo-fuzz`). Three targets, each checking invariants rather than only the absence of a panic:
+
+- `buffer_set_string`: successive `Buffer::set_stringn` writes with tricky text (wide characters, combining marks, emoji sequences, control characters), at positions inside and outside the buffer; the buffer invariants hold after each write (one printable grapheme of width 1 or 2 per cell, a wide character always followed by its continuation);
+- `paragraph`: `Paragraph` with wrapping, trimming, scrolling, alignment and a block; nothing written outside its area, and `line_count` gives enough rows for the whole text;
+- `layout_split`: `Layout::split` with arbitrary constraints, margins and spacing; one rectangle per constraint, within the area, none overlapping.
+
+```sh
+cd fuzz
+cargo +nightly fuzz run paragraph -- -max_total_time=60   # or buffer_set_string, layout_split
+cargo +nightly fuzz run paragraph artifacts/paragraph/crash-…   # replay a crash
+```
+
+The corpus and the crashes stay local (`fuzz/corpus/`, `fuzz/artifacts/`). `tools/ci.sh` only checks that the targets build and pass clippy.
+
 The frame commit tests (`crates/tilefab-cli/src/inline_tests.rs`) replay the emitted bytes in a small terminal simulator (`crates/tilefab-cli/src/sim.rs`): they cover every case of the placement rule, both scroll modes, lines inserted in batches and resizing.
 
 `tools/record_check.sh` films the Terminal.app or iTerm2 window and `tools/frames_check.py` analyzes the video frame by frame (transient frames, blank lines, needless rewrites). It requires the macOS "Screen Recording" and "Automation" permissions.

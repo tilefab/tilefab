@@ -7,7 +7,8 @@
 # Requires cargo-deny 0.21.0, the version the CI installs (`cargo install --locked cargo-deny@0.21.0`).
 # Cargo commands run with `--locked`: a Cargo.lock out of sync with Cargo.toml fails instead of
 # being updated silently.
-# The pty scripts of tools/ (check_inline.py, check_app.py) are not run here: see README.md.
+# The pty scripts of tools/ (check_inline.py, check_app.py) and the fuzzing itself are not run
+# here: see README.md.
 
 set -euo pipefail
 
@@ -32,6 +33,10 @@ step cargo test --locked --all-features
 step cargo clippy --locked --release --all-targets --all-features -- -D warnings
 step cargo test --locked --profile ci --all-features
 RUSTDOCFLAGS="-D warnings" step cargo doc --locked --no-deps
+# Fuzz targets (fuzz/, a crate outside the workspace): running them needs nightly, but they
+# build with this toolchain, so an API change that breaks them fails here.
+step cargo fmt --check --manifest-path fuzz/Cargo.toml
+step cargo clippy --locked --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings -W clippy::pedantic
 step cargo deny --locked check
 
 printf '\nAll checks passed.\n'

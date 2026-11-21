@@ -1,0 +1,41 @@
+# Fuzz targets for `cargo fuzz` (libFuzzer): see README.md, "Fuzzing". A crate of its own,
+# outside the workspace of the project: it needs a nightly toolchain (`cargo +nightly fuzz`),
+# and its dependencies (libFuzzer, arbitrary) stay out of the main Cargo.lock.
+[package]
+name = "tilefab-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace: not a member of the one in the parent directory.
+[workspace]
+
+[dependencies]
+arbitrary = { version = "1.5.0", features = ["derive"] }
+libfuzzer-sys = "0.4.13"
+tilefab-core = { path = "../crates/tilefab-core" }
+tilefab-widget = { path = "../crates/tilefab-widget" }
+
+[[bin]]
+name = "buffer_set_string"
+path = "fuzz_targets/buffer_set_string.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "paragraph"
+path = "fuzz_targets/paragraph.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "layout_split"
+path = "fuzz_targets/layout_split.rs"
+test = false
+doc = false
+bench = false
