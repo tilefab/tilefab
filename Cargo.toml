@@ -14,10 +14,12 @@ edition = "2024"
 # `msrv` job of .github/workflows/ci.yml.
 rust-version = "1.88"
 license = "MIT"
+repository = "https://github.com/tilefab/tilefab"
 readme = "README.md"
 keywords = ["tui", "terminal", "crossterm", "inline", "viewport"]
 categories = ["command-line-interface"]
-# Not published yet: set `repository`, then remove this line once the public repository exists.
+# Not on crates.io yet: remove this line once the `tilefab-*` names are checked and
+# the API is ready to publish.
 publish = false
 
 [workspace.dependencies]
