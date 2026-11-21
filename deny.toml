@@ -13,8 +13,8 @@ ignore = []
 
 # Crates that are banned or present in several versions.
 [bans]
-# Known duplicate: `syn` 2 (tracing-attributes, derive_more-impl) and `syn` 3
-# (tokio-macros). Only costs build time, so warn instead of failing.
+# Known duplicate: `syn` 2 (derive_more-impl, through crossterm's default features)
+# and `syn` 3 (tokio-macros). Only costs build time, so warn instead of failing.
 multiple-versions = "warn"
 wildcards = "deny"
 # This crate is not published: path dependencies without a version are fine.
@@ -33,7 +33,8 @@ allow = [
 confidence-threshold = 0.8
 
 [licenses.private]
-# This crate (`publish = false`) has no license: skip checking it.
+# The workspace crates are not published (`publish = false`): skip checking their
+# own license (MIT, declared in the workspace `Cargo.toml`).
 ignore = true
 
 # Dependencies may only come from crates.io: no other registry, no git.
