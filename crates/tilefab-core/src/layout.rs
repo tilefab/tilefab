@@ -684,7 +684,7 @@ mod tests {
         assert_eq!(lens(&[Length(5), Fill(1), Length(1)], 0), [0, 0, 0]);
         assert_eq!(lens(&[Percentage(100), Length(1)], 3), [3, 0]);
         assert_eq!(lens(&[Percentage(u16::MAX), Fill(1)], 3), [3, 0]);
-        assert!(Layout::vertical([]).split(Rect::new(0, 0, 4, 4)).is_empty());
+        assert_eq!(Layout::vertical([]).split(Rect::new(0, 0, 4, 4)), []);
         // Empty area on the other axis: no crash; rectangles are empty.
         let rects = Layout::horizontal([Fill(1), Fill(1)]).split(Rect::new(0, 0, 10, 0));
         assert!(rects.iter().all(|r| r.is_empty()));

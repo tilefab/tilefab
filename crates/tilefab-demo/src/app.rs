@@ -389,7 +389,7 @@ mod tests {
         app.handle_event(AppEvent::Progress { id: 42, ratio: 0.5 });
         app.handle_event(AppEvent::TaskDone(42));
         assert!(app.tasks.is_empty());
-        assert!(app.output.is_empty());
+        assert_eq!(app.output, []);
     }
 
     #[test]

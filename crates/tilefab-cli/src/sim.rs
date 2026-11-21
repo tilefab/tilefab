@@ -364,7 +364,7 @@ mod tests {
         s.feed_str("0\r\n1\r\n2\r\n3");
         s.feed(b"\x1b[2;3r\x1b[1S\x1b[r");
         assert_eq!(s.screen_lines(), vec!["0", "2", "", "3"]);
-        assert!(s.scrollback.is_empty());
+        assert_eq!(s.scrollback, Vec::<String>::new());
     }
 
     #[test]
@@ -374,9 +374,9 @@ mod tests {
         assert_eq!(s.blocks.len(), 1);
         assert_eq!(s.blocks[0].rows_written, BTreeSet::from([0]));
         assert_eq!(s.blocks[0].rows_erased, BTreeSet::from([2]));
-        assert!(s.outside_sync.is_empty());
+        assert_eq!(s.outside_sync, b"");
         s.feed(b"\x1b[1;1Hx");
-        assert!(!s.outside_sync.is_empty());
+        assert_ne!(s.outside_sync, b"");
     }
 
     #[test]

@@ -255,7 +255,7 @@ mod tests {
         let mut writer = LineWriter::new(tx, DroppedLogs::default());
         writer.write_all(b"[INFO] ").unwrap();
         writer.write_all(b"bonjour").unwrap();
-        assert!(received(&mut rx).is_empty());
+        assert_eq!(received(&mut rx), Vec::<String>::new());
         writer.write_all(b" monde\nsuite").unwrap();
         assert_eq!(received(&mut rx), ["[INFO] bonjour monde"]);
         writer.write_all(b"\n").unwrap();

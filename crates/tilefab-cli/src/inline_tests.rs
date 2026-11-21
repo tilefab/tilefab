@@ -119,7 +119,7 @@ fn assert_bottom(rig: &Rig, view: &[&str]) {
 fn init_at_the_top_reserves_lines_without_scrolling() {
     let rig = Rig::new(0, 3, ScrollMode::Region);
     assert_eq!(rig.term.area(), Rect::new(0, 0, W, 3));
-    assert!(rig.sim.scrollback.is_empty());
+    assert_eq!(rig.sim.scrollback, Vec::<String>::new());
 }
 
 #[test]
@@ -564,5 +564,5 @@ fn clear_erases_only_the_viewport_and_leaves_the_cursor_at_its_top() {
     assert_eq!(&screen[7..], ["", "", ""]);
     assert_eq!(screen[6], "log");
     assert_eq!(rig.sim.cursor, (0, 7));
-    assert!(rig.sim.outside_sync.is_empty());
+    assert_eq!(rig.sim.outside_sync, b"");
 }

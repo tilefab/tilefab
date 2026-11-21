@@ -731,7 +731,7 @@ mod tests {
     #[test]
     fn diff_of_identical_buffers_is_empty() {
         let a = Buffer::with_lines(["abc", "日本"]);
-        assert!(a.diff(&a.clone()).is_empty());
+        assert_eq!(a.diff(&a.clone()), []);
     }
 
     #[test]

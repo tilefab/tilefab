@@ -713,7 +713,7 @@ mod tests {
         b.set_fixed_cursor(Position::new(2, 3));
         assert_eq!(b.cursor_position().unwrap(), Position::new(2, 3));
         // Querying the cursor writes nothing: the query exists only on a real terminal.
-        assert!(b.writer().is_empty());
+        assert_eq!(b.writer(), b"");
     }
 
     #[test]
@@ -721,7 +721,7 @@ mod tests {
         // `BufWriter` sends nothing before `flush`: check that the backend forwards it.
         let mut b = Backend::new(io::BufWriter::new(Vec::new()));
         b.hide_cursor().unwrap();
-        assert!(b.writer().get_ref().is_empty());
+        assert_eq!(b.writer().get_ref(), b"");
         b.flush().unwrap();
         assert_eq!(b.writer().get_ref().as_slice(), b"\x1b[?25l");
     }
