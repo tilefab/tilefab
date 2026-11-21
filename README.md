@@ -1,6 +1,6 @@
 # tilefab
 
-Small demo CLI tool in Rust, built on a home-made mini TUI library (a Cargo workspace of small crates, written directly on [crossterm](https://crates.io/crates/crossterm) and inspired by [ratatui](https://ratatui.rs)):
+Small demo CLI tool in Rust, built on a home-made mini TUI library (a Cargo workspace of small crates, written directly on [crossterm](https://crates.io/crates/crossterm)):
 
 - **log lines** scroll above a fixed area and stay in the terminal history;
 - the fixed area (an *inline viewport*, no alternate screen) shows the **progress bars** of running tasks; its height is **dynamic**: one line per task, plus the prompt (1 line when idle);
@@ -48,7 +48,7 @@ Line editing (provided by [tui-input](https://crates.io/crates/tui-input)): ←/
 A single UI loop owns the `Terminal`; nothing else writes to stdout.
 
 ```
- keyboard thread ──(Key, Resize)──┐
+ keyboard thread ──(Key, Resize)───┐
  tokio tasks     ──(Progress, Done)┼──► AppEvent channel ──► UI loop ──► Terminal (inline viewport)
  tracing         ──(Log)───────────┤
  100 ms tick     ──(Tick)──────────┘
