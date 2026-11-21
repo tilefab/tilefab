@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """End-to-end verification of `tilefab` in a pty.
 
-    cargo build
-    tools/.venv/bin/python tools/check_app.py [--rows 24] [--cols 100] [--prefill 40]
+    cargo build            # or `cargo build --release` with --release
+    tools/.venv/bin/python tools/check_app.py [--rows 24] [--cols 100] [--prefill 40] [--release]
+
+With --release, the scenarios run `target/release/tilefab` instead of `target/debug/tilefab`:
+release-only code paths (no overflow checks, no `debug_assert!`) are checked end to end too.
 
 Scenarios:
   * idle: single-line viewport (the prompt), Unicode input, long input;
@@ -13,7 +16,8 @@ Scenarios:
   * zero-height: the same with all the rows: no panic while nothing can be drawn,
     and the line is shown once the rows are back;
   * signals: SIGTERM, SIGINT and SIGHUP exit cleanly, with code 0;
-  * panic: the hidden `panic` command leaves a clean terminal;
+  * panic: the hidden `panic` command leaves a clean terminal (with --release, where
+    the command does not exist: `panic` is reported as unknown and the application goes on);
   * headless: no terminal (stdin or stdout redirected), no UI; input escape
     sequences are echoed escaped.
 
@@ -41,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from pty_harness import SYNC_END, Term, outside_sync  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-BIN = ROOT / "target" / "debug" / "tilefab"
+BIN = ROOT / "target" / "debug" / "tilefab"  # target/release/tilefab with --release (see main)
 NAMES = ["alpha", "beta", "gamma", "delta", "epsilon"]
 # Sequences sought in emitted bytes (outside f-strings: Python 3.9 forbids backslashes).
 CPR = b"\x1b[6n"  # cursor position query
@@ -324,6 +328,22 @@ def scenario_panic(rows: int, cols: int, prefill: int) -> list:
     return check.failures
 
 
+def scenario_panic_absent(rows: int, cols: int, prefill: int) -> list:
+    """Release build: `panic` is an unknown command, the application keeps running."""
+    check = Check()
+    term = launch(rows, cols, prefill)
+    term.send("panic\r")
+    term.run_for(1.0)
+    check.ok(term.alive(), "the release application stopped after `panic`")
+    check.ok('unknown command: "panic"' in term.all_text(), "no unknown command warning for `panic`")
+    term.send("quit\r")
+    term.run_for(1.0)
+    check.ok(not term.alive(), "the application is still alive after `quit`")
+    check.ok(terminal_is_clean(term), "terminal left in raw mode after `quit`")
+    term.close()
+    return check.failures
+
+
 def scenario_degraded() -> list:
     check = Check()
     out = subprocess.run(
@@ -357,10 +377,16 @@ def main() -> int:
     parser.add_argument("--rows", type=int, default=24)
     parser.add_argument("--cols", type=int, default=100)
     parser.add_argument("--prefill", type=int, default=40, help="lines before the app (0 = top of screen)")
+    parser.add_argument("--release", action="store_true", help="run the release build (target/release)")
     args = parser.parse_args()
+    global BIN
+    if args.release:
+        BIN = ROOT / "target" / "release" / "tilefab"
     if not BIN.exists():
-        print("%s not found: run `cargo build`" % BIN, file=sys.stderr)
+        build = "cargo build --release" if args.release else "cargo build"
+        print("%s not found: run `%s`" % (BIN, build), file=sys.stderr)
         return 2
+    print("binary: %s" % BIN)
 
     total = 0
     scenarios = [
@@ -370,7 +396,7 @@ def main() -> int:
         ("zero-width", lambda: scenario_zero_width(args.rows, args.cols, args.prefill)),
         ("zero-height", lambda: scenario_zero_height(args.rows, args.cols, args.prefill)),
         ("signals", lambda: scenario_signals(args.rows, args.cols, args.prefill)),
-        ("panic", lambda: scenario_panic(args.rows, args.cols, args.prefill)),
+        ("panic", lambda: (scenario_panic_absent if args.release else scenario_panic)(args.rows, args.cols, args.prefill)),
         ("degraded", scenario_degraded),
     ]
     for name, fn in scenarios:

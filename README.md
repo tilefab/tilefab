@@ -127,6 +127,8 @@ tools/.venv/bin/python tools/check_inline.py   # height cycle 1 → 5 → 1 with
 tools/.venv/bin/python tools/check_app.py      # Unicode input, burst of 5 tasks, resize, zero width, zero height, signals, panic, degraded mode
 ```
 
+The same scenarios on the release build (no overflow checks, no `debug_assert!`; `panic` must then be an unknown command): `cargo build --release && tools/.venv/bin/python tools/check_app.py --release`.
+
 Coverage, unit tests and pty harness combined (`main.rs` and `headless.rs` only run in the real binary, so unit tests alone under-report them); requires `cargo-llvm-cov` (once: `rustup component add llvm-tools-preview && cargo install --locked cargo-llvm-cov`):
 
 ```sh
