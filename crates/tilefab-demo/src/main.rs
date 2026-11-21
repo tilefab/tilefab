@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
     // The guard enables raw mode; its `Drop` disables it, even if the loop fails.
     let _guard = TerminalGuard::raw()?;
     // A single-line viewport when idle (the prompt); it grows with the tasks.
-    let mut terminal = Terminal::with_options(
+    let mut terminal: AppTerminal = Terminal::with_options(
         Backend::new(BufWriter::new(stdout())),
         TerminalOptions {
             viewport: Viewport::Inline(1),
@@ -152,8 +152,12 @@ fn spawn_signal_listener(tx: Sender<AppEvent>) -> Result<()> {
 /// UI loop: wait for an event, process all queued events (to redraw
 /// only once per burst), then apply the new lines above the viewport,
 /// its new height, and its content **in a single frame**.
-async fn run(
-    terminal: &mut AppTerminal,
+///
+/// The burst that requests quitting is drawn too, before leaving: its lines (the echo of
+/// `quit`, logs received in the same burst) are written above the viewport, which the
+/// cleanup then clears, instead of being dropped.
+async fn run<W: Write>(
+    terminal: &mut Terminal<W>,
     tx: Sender<AppEvent>,
     mut rx: Receiver<AppEvent>,
     dropped_logs: &DroppedLogs,
@@ -167,13 +171,13 @@ async fn run(
             app.handle_event(event);
         }
 
-        if app.should_quit {
-            break;
-        }
         report_dropped_logs(&mut app, dropped_logs);
         queue_output(terminal, &mut app);
         terminal.set_height(ui::viewport_height(&app));
         terminal.draw(|frame| ui::draw(frame, &app))?;
+        if app.should_quit {
+            break;
+        }
     }
     Ok(())
 }
@@ -272,5 +276,46 @@ mod tests {
         let written =
             String::from_utf8(std::mem::take(terminal.backend_mut().writer_mut())).unwrap();
         assert!(written.contains("kept"), "line not written: {written:?}");
+    }
+
+    #[tokio::test]
+    async fn the_burst_that_quits_is_written_before_leaving() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let backend = Backend::with_fixed(Vec::new(), Size::new(30, 10), Position::new(0, 0));
+        let mut terminal = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Inline(1),
+                ..TerminalOptions::default()
+            },
+        )
+        .unwrap();
+        let (tx, rx) = mpsc::channel(16);
+        // One burst: a log line, then `quit` typed and submitted.
+        let key = |code| AppEvent::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        tx.send(AppEvent::Log("[INFO] last-log".into()))
+            .await
+            .unwrap();
+        for c in "quit".chars() {
+            tx.send(key(KeyCode::Char(c))).await.unwrap();
+        }
+        tx.send(key(KeyCode::Enter)).await.unwrap();
+
+        run(&mut terminal, tx, rx, &DroppedLogs::default())
+            .await
+            .unwrap();
+        let written =
+            String::from_utf8(std::mem::take(terminal.backend_mut().writer_mut())).unwrap();
+        // No space in the searched text: the diff skips unchanged (blank) cells.
+        assert!(written.contains("last-log"), "log dropped: {written:?}");
+        assert!(
+            written.contains("quit"),
+            "echo of quit dropped: {written:?}"
+        );
+        assert!(
+            written.rfind("quit") > written.rfind("last-log"),
+            "echo of quit not written after the log: {written:?}"
+        );
     }
 }
