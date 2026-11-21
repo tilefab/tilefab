@@ -34,7 +34,9 @@ color-eyre = "0.6.5"
 crossterm = "0.29"
 # Property tests; without the default `fork` and `timeout` features (fewer dependencies).
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
-rand = "0.10.4"
+# Random task durations of the demo: no dependencies of its own (rand brought rand_core,
+# chacha20 and getrandom). rand stays in Cargo.lock, but only for the tests: proptest uses it.
+fastrand = "2.5.0"
 # Counting allocator for the allocation example and test (keeps `unsafe` out of this project).
 stats_alloc = "0.1.10"
 tokio = "1.54.1"

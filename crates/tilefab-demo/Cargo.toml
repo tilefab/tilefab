@@ -22,7 +22,7 @@ doc = false
 [dependencies]
 color-eyre.workspace = true
 crossterm.workspace = true
-rand.workspace = true
+fastrand.workspace = true
 tilefab.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 tracing.workspace = true

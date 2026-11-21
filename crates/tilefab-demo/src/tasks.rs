@@ -21,7 +21,7 @@ const PROGRESS_PERIOD: Duration = Duration::from_millis(100);
 /// The channel is bounded: a `Progress` that finds it full is skipped (the next one
 /// supersedes it), while `TaskDone` waits for room, as it must never be lost.
 pub fn spawn(id: TaskId, tx: Sender<AppEvent>) -> Duration {
-    let duration = Duration::from_secs_f64(rand::random_range(3.0..=10.0));
+    let duration = Duration::from_millis(fastrand::u64(3_000..=10_000));
     tokio::spawn(async move {
         let start = Instant::now();
         let mut ticker = interval(PROGRESS_PERIOD);
