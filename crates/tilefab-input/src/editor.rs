@@ -11,6 +11,7 @@ use crate::history::{self, History};
 use crate::keymap::{Command, Keymap};
 use crate::kill_ring::{KillRing, Side};
 use crate::render::{self, EditorStyles, LineView};
+use crate::search::Search;
 use crate::undo::{Snapshot, Step, UndoStack};
 
 /// Default maximum length of the line, in bytes.
@@ -75,6 +76,15 @@ enum Last {
     Yank { range: (usize, usize), index: usize },
 }
 
+/// What the keys act on.
+#[derive(Debug)]
+enum Mode {
+    /// Editing the line.
+    Normal,
+    /// Reverse incremental search: keys edit the query.
+    Search(Search),
+}
+
 /// Which history entry to show next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Recall {
@@ -123,6 +133,7 @@ pub struct LineEditor {
     hinter: Option<Box<dyn Hinter>>,
     /// `Esc` hid the hint; shown again after the next change of the line.
     hint_dismissed: bool,
+    mode: Mode,
 }
 
 impl std::fmt::Debug for LineEditor {
@@ -132,6 +143,7 @@ impl std::fmt::Debug for LineEditor {
             .field("cursor", &self.buffer.cursor())
             .field("history_len", &self.history.len())
             .field("navigation", &self.navigation)
+            .field("mode", &self.mode)
             .finish_non_exhaustive()
     }
 }
@@ -153,6 +165,7 @@ impl LineEditor {
             navigation: None,
             hinter: Some(Box::new(HistoryHinter)),
             hint_dismissed: false,
+            mode: Mode::Normal,
         }
     }
 
@@ -235,16 +248,23 @@ impl LineEditor {
         }
         let row = Rect::new(area.x, area.y, area.width, 1);
         let hint = self.current_hint();
+        let (search_prompt, highlight) = match &self.mode {
+            Mode::Search(search) => (
+                Some(Line::from(search.prompt())),
+                search.found.as_ref().map(|(_, range)| range.clone()),
+            ),
+            Mode::Normal => (None, None),
+        };
         let view = LineView {
             text: self.buffer.value(),
             cursor: self.buffer.cursor(),
             hint: hint.as_deref(),
-            highlight: None,
+            highlight,
         };
         Some(render::draw_line(
             buf,
             row,
-            prompt,
+            search_prompt.as_ref().unwrap_or(prompt),
             &view,
             &mut self.scroll,
             self.config.scroll_margin,
@@ -258,7 +278,113 @@ impl LineEditor {
         if !matches!(command, Command::InsertChar(c) if !c.is_whitespace()) {
             self.undo.close_group();
         }
-        self.edit_command(command, last)
+        match std::mem::replace(&mut self.mode, Mode::Normal) {
+            Mode::Normal => self.edit_command(command, last),
+            Mode::Search(search) => self.search_command(search, command, last),
+        }
+    }
+
+    /// Run `command` during a search: typing edits the query, Ctrl+R / Ctrl+S go to the
+    /// next older / newer match, Enter submits the match, Ctrl+G and Ctrl+C restore the
+    /// line as it was before the search; any other command leaves the search with the
+    /// match in the line, then runs as usual.
+    fn search_command(&mut self, mut search: Search, command: Command, last: Last) -> EditorEvent {
+        let newest = self.history.len();
+        match command {
+            Command::InsertChar(c) => {
+                if c.is_control() || search.query.len() + c.len_utf8() > self.config.max_len {
+                    self.mode = Mode::Search(search);
+                    return EditorEvent::Ignored;
+                }
+                search.query.push(c);
+                let from = search.found.as_ref().map_or(newest, |(index, _)| *index);
+                search.find(&self.history, from, false);
+                self.show_search(search)
+            }
+            Command::DeleteLeft => {
+                if search.query.is_empty() {
+                    self.mode = Mode::Search(search);
+                    return EditorEvent::Ignored;
+                }
+                let end = buffer::prev_grapheme(&search.query, search.query.len());
+                search.query.truncate(end);
+                search.found = None;
+                search.failing = false;
+                if !search.query.is_empty() {
+                    search.find(&self.history, newest, false);
+                }
+                self.show_search(search)
+            }
+            Command::ReverseSearch | Command::ForwardSearch => {
+                let newer = command == Command::ForwardSearch;
+                match (&search.found, newer) {
+                    _ if search.query.is_empty() => {
+                        self.mode = Mode::Search(search);
+                        return EditorEvent::Ignored;
+                    }
+                    // Nothing older than the oldest entry, nothing newer without a match.
+                    (Some((0, _)), false) | (None, true) => search.failing = true,
+                    (Some((index, _)), false) => {
+                        let from = index - 1;
+                        search.find(&self.history, from, false);
+                    }
+                    (Some((index, _)), true) => {
+                        let from = index + 1;
+                        search.find(&self.history, from, true);
+                    }
+                    (None, false) => {
+                        search.find(&self.history, newest, false);
+                    }
+                }
+                self.show_search(search)
+            }
+            Command::Abort | Command::Interrupt => {
+                self.buffer.set(&search.draft.value, search.draft.cursor);
+                EditorEvent::Changed
+            }
+            Command::Cancel => {
+                self.leave_search(search);
+                EditorEvent::Changed
+            }
+            Command::Submit => {
+                self.leave_search(search);
+                self.submit()
+            }
+            other => {
+                self.leave_search(search);
+                let _ = self.edit_command(other, last);
+                EditorEvent::Changed
+            }
+        }
+    }
+
+    /// Show the current match of `search` in the line (cursor on the match), or the
+    /// draft when there is none, and stay in search mode.
+    fn show_search(&mut self, search: Search) -> EditorEvent {
+        match &search.found {
+            Some((index, range)) => {
+                let entry = self.history.get(*index).unwrap_or_default();
+                self.buffer.set(entry, range.start);
+            }
+            None => self.buffer.set(&search.draft.value, search.draft.cursor),
+        }
+        self.mode = Mode::Search(search);
+        EditorEvent::Changed
+    }
+
+    /// Leave the search, keeping the match in the line (one undo step back to the draft).
+    fn leave_search(&mut self, search: Search) {
+        if self.buffer.value() != search.draft.value {
+            self.undo.record(search.draft, Step::Single);
+            self.line_changed();
+        }
+    }
+
+    /// Ctrl+R in normal mode: start a search from the current line.
+    fn start_search(&mut self) -> EditorEvent {
+        self.navigation = None;
+        self.mode = Mode::Search(Search::new(self.snapshot()));
+        EditorEvent::Changed
     }
 
     /// Run an editing `command` in normal mode; `last` is the previous command.
@@ -338,8 +464,8 @@ impl LineEditor {
             Command::HistoryFirst => self.recall(Recall::Oldest, false),
             Command::HistoryLast => self.recall(Recall::Newest, false),
             Command::Cancel => self.cancel(),
-            Command::ReverseSearch
-            | Command::ForwardSearch
+            Command::ReverseSearch => self.start_search(),
+            Command::ForwardSearch
             | Command::Complete
             | Command::CompletePrevious
             | Command::Abort => EditorEvent::Ignored,
@@ -352,6 +478,7 @@ impl LineEditor {
     fn current_hint(&self) -> Option<String> {
         let text = self.buffer.value();
         if !self.config.hints
+            || !matches!(self.mode, Mode::Normal)
             || self.hint_dismissed
             || text.is_empty()
             || self.buffer.cursor() != text.len()
@@ -1166,6 +1293,140 @@ mod tests {
         let cursor = e.render(buf.area(), &mut buf, &Line::from("> "));
         assert_eq!(buf.lines()[0].trim_end(), "> start alpha");
         assert_eq!(cursor, Some(Position::new(4, 0)));
+    }
+
+    /// An editor in search mode over `entries`, after typing `query`.
+    fn searching(entries: &[&str], draft: &str, query: &str) -> LineEditor {
+        let mut e = with_history(entries);
+        type_text(&mut e, draft);
+        assert_eq!(e.execute(Command::ReverseSearch), EditorEvent::Changed);
+        type_text(&mut e, query);
+        e
+    }
+
+    fn search_prompt(e: &LineEditor) -> Option<String> {
+        match &e.mode {
+            Mode::Search(search) => Some(search.prompt()),
+            Mode::Normal => None,
+        }
+    }
+
+    #[test]
+    fn typing_shows_the_newest_entry_that_contains_the_query() {
+        let mut e = searching(&["start alpha", "list", "start beta"], "draft", "sta");
+        assert_eq!(shown(&e), "|start beta");
+        assert_eq!(search_prompt(&e).as_deref(), Some("(search) sta: "));
+        type_text(&mut e, "rt a");
+        assert_eq!(shown(&e), "|start alpha");
+        // Smart case: an upper-case letter makes the search case-sensitive.
+        let e = searching(&["Make", "make"], "", "M");
+        assert_eq!(e.value(), "Make");
+        let e = searching(&["Make", "other"], "", "ma");
+        assert_eq!(e.value(), "Make");
+    }
+
+    #[test]
+    fn ctrl_r_and_ctrl_s_go_to_older_and_newer_matches() {
+        let mut e = searching(&["a1", "b", "a2", "a3"], "", "a");
+        assert_eq!(e.value(), "a3");
+        let _ = e.execute(Command::ReverseSearch);
+        assert_eq!(e.value(), "a2");
+        let _ = e.execute(Command::ReverseSearch);
+        assert_eq!(e.value(), "a1");
+        // Nothing older: failing, the line keeps the last match.
+        let _ = e.execute(Command::ReverseSearch);
+        assert_eq!(e.value(), "a1");
+        assert!(search_prompt(&e).unwrap().starts_with("(failing search) "));
+        let _ = e.execute(Command::ForwardSearch);
+        assert_eq!(e.value(), "a2");
+        assert_eq!(search_prompt(&e).as_deref(), Some("(search) a: "));
+    }
+
+    #[test]
+    fn a_failing_query_keeps_the_last_match_and_backspace_searches_again() {
+        let mut e = searching(&["make test", "make"], "", "make");
+        assert_eq!(e.value(), "make");
+        type_text(&mut e, " t");
+        assert_eq!(e.value(), "make test");
+        type_text(&mut e, "z");
+        assert_eq!(e.value(), "make test");
+        assert!(search_prompt(&e).unwrap().starts_with("(failing search)"));
+        let _ = e.execute(Command::DeleteLeft);
+        let _ = e.execute(Command::DeleteLeft);
+        let _ = e.execute(Command::DeleteLeft);
+        assert_eq!(e.value(), "make");
+        // An empty query shows the draft.
+        for _ in 0..4 {
+            let _ = e.execute(Command::DeleteLeft);
+        }
+        assert_eq!(e.value(), "");
+        assert_eq!(e.execute(Command::DeleteLeft), EditorEvent::Ignored);
+    }
+
+    #[test]
+    fn enter_submits_the_match() {
+        let mut e = searching(&["start alpha", "list"], "", "alp");
+        assert_eq!(
+            e.execute(Command::Submit),
+            EditorEvent::Submit("start alpha".into())
+        );
+        assert_eq!(search_prompt(&e), None);
+    }
+
+    #[test]
+    fn exit_keys_keep_the_match_ready_to_edit() {
+        let cases = [
+            (Command::Cancel, "start |alpha"),
+            (Command::MoveLeft, "start| alpha"),
+            (Command::MoveRight, "start a|lpha"),
+            (Command::MoveStart, "|start alpha"),
+            (Command::MoveEnd, "start alpha|"),
+        ];
+        for (command, after) in cases {
+            let mut e = searching(&["start alpha", "list"], "draft", "alp");
+            assert_eq!(e.execute(command), EditorEvent::Changed);
+            assert_eq!(shown(&e), after, "{command:?}");
+            assert_eq!(search_prompt(&e), None, "{command:?}");
+            // One undo step back to the draft.
+            let _ = e.execute(Command::Undo);
+            assert_eq!(e.value(), "draft", "{command:?}");
+        }
+    }
+
+    #[test]
+    fn ctrl_g_and_ctrl_c_cancel_and_restore_the_draft() {
+        for command in [Command::Abort, Command::Interrupt] {
+            let mut e = searching(&["start alpha"], "dr", "alp");
+            // Ctrl+C does not reach the application as an interrupt here.
+            assert_eq!(e.execute(command), EditorEvent::Changed, "{command:?}");
+            assert_eq!(shown(&e), "dr|", "{command:?}");
+            assert_eq!(search_prompt(&e), None, "{command:?}");
+        }
+    }
+
+    #[test]
+    fn another_command_leaves_the_search_then_runs() {
+        let mut e = searching(&["start alpha"], "", "alp");
+        let _ = e.execute(Command::KillToEnd);
+        assert_eq!(shown(&e), "start |");
+        assert_eq!(search_prompt(&e), None);
+    }
+
+    #[test]
+    fn the_search_prompt_and_the_match_are_drawn() {
+        let e = &mut searching(&["start alpha"], "", "alp");
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 1));
+        let cursor = e.render(buf.area(), &mut buf, &Line::from("> "));
+        assert_eq!(buf.lines()[0].trim_end(), "(search) alp: start alpha");
+        // The cursor is on the match, which is underlined.
+        assert_eq!(cursor, Some(Position::new(20, 0)));
+        let underlined = |x| {
+            buf.get(x, 0)
+                .style()
+                .add_modifier
+                .contains(tilefab_core::Modifier::UNDERLINED)
+        };
+        assert!(underlined(20) && underlined(22) && !underlined(23) && !underlined(19));
     }
 
     #[test]

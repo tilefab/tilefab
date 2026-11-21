@@ -20,6 +20,7 @@ mod history;
 mod keymap;
 mod kill_ring;
 mod render;
+mod search;
 mod undo;
 
 pub use editor::{EditorConfig, EditorEvent, LineEditor};
