@@ -15,11 +15,15 @@
 
 mod buffer;
 mod editor;
+mod hint;
+mod history;
 mod keymap;
 mod kill_ring;
 mod render;
 mod undo;
 
 pub use editor::{EditorConfig, EditorEvent, LineEditor};
+pub use hint::{Hinter, HistoryHinter};
+pub use history::History;
 pub use keymap::{Command, KeyBinding, Keymap};
 pub use render::EditorStyles;

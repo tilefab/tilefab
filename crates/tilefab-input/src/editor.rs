@@ -6,6 +6,8 @@ use crossterm::event::KeyEvent;
 use tilefab_core::{Buffer, Line, Position, Rect};
 
 use crate::buffer::{self, LineBuffer};
+use crate::hint::{Hinter, HistoryHinter};
+use crate::history::{self, History};
 use crate::keymap::{Command, Keymap};
 use crate::kill_ring::{KillRing, Side};
 use crate::render::{self, EditorStyles, LineView};
@@ -23,6 +25,12 @@ pub struct EditorConfig {
     /// Columns of text kept visible on each side of the cursor when the line scrolls
     /// (default 4; reduced on narrow widths).
     pub scroll_margin: u16,
+    /// Maximum number of history entries of the default history (default 1000).
+    pub history_capacity: usize,
+    /// A line that starts with a space is not recorded in the history (default true).
+    pub history_ignore_space: bool,
+    /// Show hints (autosuggestions) after the line (default true).
+    pub hints: bool,
     /// Styles of the hint, the indicators, the search match and the menu.
     pub styles: EditorStyles,
 }
@@ -32,6 +40,9 @@ impl Default for EditorConfig {
         Self {
             max_len: DEFAULT_MAX_LEN,
             scroll_margin: 4,
+            history_capacity: history::DEFAULT_CAPACITY,
+            history_ignore_space: true,
+            hints: true,
             styles: EditorStyles::default(),
         }
     }
@@ -64,6 +75,24 @@ enum Last {
     Yank { range: (usize, usize), index: usize },
 }
 
+/// Which history entry to show next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Recall {
+    Older,
+    Newer,
+    Oldest,
+    Newest,
+}
+
+/// Browsing the history: the line shows entry `index`.
+#[derive(Debug)]
+struct Navigation {
+    /// The line as it was when the navigation started, restored after the newest entry.
+    draft: Snapshot,
+    /// The entry shown.
+    index: usize,
+}
+
 /// A single-line editor with readline-style editing keys.
 ///
 /// ```
@@ -80,7 +109,6 @@ enum Last {
 ///
 /// The cursor is a **grapheme** index: `"🤦🏼‍♂️"` is 17 bytes, 5 code points, 1 grapheme and
 /// 2 display columns.
-#[derive(Debug, Clone)]
 pub struct LineEditor {
     config: EditorConfig,
     buffer: LineBuffer,
@@ -90,12 +118,29 @@ pub struct LineEditor {
     last: Last,
     /// First visible column of the line, kept between renders.
     scroll: usize,
+    history: History,
+    navigation: Option<Navigation>,
+    hinter: Option<Box<dyn Hinter>>,
+    /// `Esc` hid the hint; shown again after the next change of the line.
+    hint_dismissed: bool,
+}
+
+impl std::fmt::Debug for LineEditor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LineEditor")
+            .field("value", &self.buffer.value())
+            .field("cursor", &self.buffer.cursor())
+            .field("history_len", &self.history.len())
+            .field("navigation", &self.navigation)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LineEditor {
     /// An empty editor.
     #[must_use]
     pub fn new(config: EditorConfig) -> Self {
+        let history = History::new(config.history_capacity);
         Self {
             buffer: LineBuffer::new(config.max_len),
             config,
@@ -104,7 +149,31 @@ impl LineEditor {
             undo: UndoStack::default(),
             last: Last::Other,
             scroll: 0,
+            history,
+            navigation: None,
+            hinter: Some(Box::new(HistoryHinter)),
+            hint_dismissed: false,
         }
+    }
+
+    /// Use `history` (for instance one loaded from a file) instead of an empty one.
+    #[must_use]
+    pub fn with_history(mut self, history: History) -> Self {
+        self.history = history;
+        self
+    }
+
+    /// Use `hinter` instead of the default [`HistoryHinter`].
+    #[must_use]
+    pub fn with_hinter(mut self, hinter: impl Hinter + 'static) -> Self {
+        self.hinter = Some(Box::new(hinter));
+        self
+    }
+
+    /// The history of submitted lines.
+    #[must_use]
+    pub fn history(&self) -> &History {
+        &self.history
     }
 
     /// The settings the editor was created with.
@@ -165,10 +234,11 @@ impl LineEditor {
             return None;
         }
         let row = Rect::new(area.x, area.y, area.width, 1);
+        let hint = self.current_hint();
         let view = LineView {
             text: self.buffer.value(),
             cursor: self.buffer.cursor(),
-            hint: None,
+            hint: hint.as_deref(),
             highlight: None,
         };
         Some(render::draw_line(
@@ -211,6 +281,8 @@ impl LineEditor {
                 })
             }
             Command::MoveLeft => self.move_to(buffer::prev_grapheme(text, cursor)),
+            Command::MoveRight | Command::MoveEnd if cursor == len => self.accept_hint(false),
+            Command::MoveWordRight if cursor == len => self.accept_hint(true),
             Command::MoveRight => self.move_to(buffer::next_grapheme(text, cursor)),
             Command::MoveWordLeft => self.move_to(buffer::word_start_before(text, cursor)),
             Command::MoveWordRight => self.move_to(buffer::word_end_after(text, cursor)),
@@ -259,18 +331,108 @@ impl LineEditor {
             }
             Command::Submit => self.submit(),
             Command::Interrupt => EditorEvent::Interrupt,
-            Command::HistoryPrevious
-            | Command::HistoryNext
-            | Command::HistoryPreviousAll
-            | Command::HistoryNextAll
-            | Command::HistoryFirst
-            | Command::HistoryLast
-            | Command::ReverseSearch
+            Command::HistoryPrevious => self.recall(Recall::Older, true),
+            Command::HistoryNext => self.recall(Recall::Newer, true),
+            Command::HistoryPreviousAll => self.recall(Recall::Older, false),
+            Command::HistoryNextAll => self.recall(Recall::Newer, false),
+            Command::HistoryFirst => self.recall(Recall::Oldest, false),
+            Command::HistoryLast => self.recall(Recall::Newest, false),
+            Command::Cancel => self.cancel(),
+            Command::ReverseSearch
             | Command::ForwardSearch
             | Command::Complete
             | Command::CompletePrevious
-            | Command::Cancel
             | Command::Abort => EditorEvent::Ignored,
+        }
+    }
+
+    /// The hint to show after the line, if any: hints enabled, cursor at the end of a
+    /// non-empty line, not dismissed with `Esc`. Sanitized and cut so that accepting it
+    /// keeps the line within its maximum length.
+    fn current_hint(&self) -> Option<String> {
+        let text = self.buffer.value();
+        if !self.config.hints
+            || self.hint_dismissed
+            || text.is_empty()
+            || self.buffer.cursor() != text.len()
+        {
+            return None;
+        }
+        let hint = self.hinter.as_ref()?.hint(text, &self.history)?;
+        let hint = buffer::sanitize(&hint);
+        let room = self.config.max_len.saturating_sub(text.len());
+        let hint = buffer::truncate(&hint, room);
+        (!hint.is_empty()).then(|| hint.to_string())
+    }
+
+    /// Accept the hint (one undo step): all of it, or only up to the end of its first word.
+    fn accept_hint(&mut self, one_word: bool) -> EditorEvent {
+        let Some(hint) = self.current_hint() else {
+            return EditorEvent::Ignored;
+        };
+        let end = if one_word {
+            buffer::word_end_after(&hint, 0)
+        } else {
+            hint.len()
+        };
+        self.edit(Step::Single, |b| {
+            b.insert(&hint[..end]);
+        })
+    }
+
+    /// `Esc`: leave the history (back to the draft), else hide the hint.
+    fn cancel(&mut self) -> EditorEvent {
+        if let Some(navigation) = self.navigation.take() {
+            self.buffer
+                .set(&navigation.draft.value, navigation.draft.cursor);
+            self.undo.clear();
+            return EditorEvent::Changed;
+        }
+        if self.current_hint().is_some() {
+            self.hint_dismissed = true;
+            return EditorEvent::Changed;
+        }
+        EditorEvent::Ignored
+    }
+
+    /// Show another history entry. With `filtered`, only the entries that start with the
+    /// draft (the line when the navigation started) are visited, and an entry identical
+    /// to the line is skipped. Going newer than the newest entry restores the draft.
+    fn recall(&mut self, direction: Recall, filtered: bool) -> EditorEvent {
+        let len = self.history.len();
+        let (draft, current) = match &self.navigation {
+            Some(navigation) => (navigation.draft.value.as_str(), navigation.index),
+            None => (self.buffer.value(), len),
+        };
+        let shown = self.buffer.value();
+        let matches = |i: &usize| {
+            let entry = self.history.get(*i).unwrap_or_default();
+            !filtered || (entry.starts_with(draft) && entry != shown)
+        };
+        let target = match direction {
+            Recall::Older => (0..current).rev().find(matches),
+            Recall::Newer => (current + 1..len).find(matches),
+            Recall::Oldest => (0..len).find(matches),
+            Recall::Newest => (0..len).rev().find(matches),
+        };
+        let target = target.filter(|&i| i != current);
+        match (target, direction) {
+            (Some(index), _) => {
+                let draft = match self.navigation.take() {
+                    Some(navigation) => navigation.draft,
+                    None => self.snapshot(),
+                };
+                let entry = self.history.get(index).unwrap_or_default().to_string();
+                self.buffer.set(&entry, usize::MAX);
+                // Undo goes back to the draft.
+                self.undo.clear();
+                self.undo.record(draft.clone(), Step::Single);
+                self.navigation = Some(Navigation { draft, index });
+                self.hint_dismissed = false;
+                EditorEvent::Changed
+            }
+            (None, Recall::Newer) if self.navigation.is_some() => self.cancel(),
+            (None, _) => EditorEvent::Ignored,
         }
     }
 
@@ -285,7 +447,15 @@ impl LineEditor {
     /// Restore a snapshot (undo / redo).
     fn restore(&mut self, snapshot: &Snapshot) -> EditorEvent {
         self.buffer.set(&snapshot.value, snapshot.cursor);
+        self.line_changed();
         EditorEvent::Changed
+    }
+
+    /// The text was edited: it becomes the new draft for the history (the next ↑ searches
+    /// with it), and a dismissed hint can show again.
+    fn line_changed(&mut self) {
+        self.navigation = None;
+        self.hint_dismissed = false;
     }
 
     /// Apply `change` to the line as one edit recorded with `step`.
@@ -299,6 +469,7 @@ impl LineEditor {
     fn finish_edit(&mut self, before: Snapshot, step: Step) -> EditorEvent {
         if self.buffer.value() != before.value {
             self.undo.record(before, step);
+            self.line_changed();
             EditorEvent::Changed
         } else if self.buffer.cursor() == before.cursor {
             EditorEvent::Ignored
@@ -423,8 +594,12 @@ impl LineEditor {
     /// Enter: hand the line over and start a new, empty one.
     fn submit(&mut self) -> EditorEvent {
         let line = self.buffer.value().to_string();
+        if !(self.config.history_ignore_space && line.starts_with(' ')) {
+            self.history.add(&line);
+        }
         self.buffer.clear();
         self.undo.clear();
+        self.line_changed();
         self.scroll = 0;
         EditorEvent::Submit(line)
     }
@@ -805,6 +980,192 @@ mod tests {
             let _ = e.handle_key(key(redo, alt));
             assert_eq!(e.value(), "abc", "redo after {modifiers:?}+{code:?}");
         }
+    }
+
+    /// An editor whose history holds `entries`, oldest first.
+    fn with_history(entries: &[&str]) -> LineEditor {
+        let mut history = History::new(100);
+        for entry in entries {
+            history.add(entry);
+        }
+        LineEditor::new(EditorConfig::default()).with_history(history)
+    }
+
+    fn submit(editor: &mut LineEditor, line: &str) {
+        type_text(editor, line);
+        let _ = editor.execute(Command::Submit);
+    }
+
+    #[test]
+    fn submit_records_the_line_except_empty_or_leading_space() {
+        let mut e = LineEditor::new(EditorConfig::default());
+        submit(&mut e, "ls");
+        submit(&mut e, "  ");
+        submit(&mut e, " secret");
+        submit(&mut e, "pwd");
+        submit(&mut e, "ls");
+        assert_eq!(e.history().iter().collect::<Vec<_>>(), ["pwd", "ls"]);
+        let mut keep_space = LineEditor::new(EditorConfig {
+            history_ignore_space: false,
+            ..EditorConfig::default()
+        });
+        submit(&mut keep_space, " secret");
+        assert_eq!(keep_space.history().get(0), Some(" secret"));
+    }
+
+    #[test]
+    fn up_and_down_visit_the_entries_that_start_with_the_draft() {
+        let mut e = with_history(&["start a", "list", "start b", "help"]);
+        type_text(&mut e, "st");
+        assert_eq!(e.execute(Command::HistoryPrevious), EditorEvent::Changed);
+        assert_eq!(shown(&e), "start b|");
+        let _ = e.execute(Command::HistoryPrevious);
+        assert_eq!(shown(&e), "start a|");
+        // The oldest match: no wrap-around.
+        assert_eq!(e.execute(Command::HistoryPrevious), EditorEvent::Ignored);
+        let _ = e.execute(Command::HistoryNext);
+        assert_eq!(shown(&e), "start b|");
+        // Past the newest match: the draft again, then nothing.
+        let _ = e.execute(Command::HistoryNext);
+        assert_eq!(shown(&e), "st|");
+        assert_eq!(e.execute(Command::HistoryNext), EditorEvent::Ignored);
+    }
+
+    #[test]
+    fn an_empty_draft_visits_every_entry_and_ctrl_p_ignores_the_draft() {
+        let mut e = with_history(&["a", "b"]);
+        let _ = e.execute(Command::HistoryPrevious);
+        assert_eq!(e.value(), "b");
+        let _ = e.execute(Command::HistoryPrevious);
+        assert_eq!(e.value(), "a");
+        let mut e = with_history(&["a", "xb"]);
+        type_text(&mut e, "x");
+        let _ = e.execute(Command::HistoryPreviousAll);
+        let _ = e.execute(Command::HistoryPreviousAll);
+        assert_eq!(e.value(), "a");
+        let _ = e.execute(Command::HistoryNextAll);
+        let _ = e.execute(Command::HistoryNextAll);
+        assert_eq!(e.value(), "x");
+    }
+
+    #[test]
+    fn first_and_last_entries() {
+        let mut e = with_history(&["a", "b", "c"]);
+        let _ = e.execute(Command::HistoryFirst);
+        assert_eq!(e.value(), "a");
+        assert_eq!(e.execute(Command::HistoryFirst), EditorEvent::Ignored);
+        let _ = e.execute(Command::HistoryLast);
+        assert_eq!(e.value(), "c");
+        assert_eq!(
+            with_history(&[]).execute(Command::HistoryLast),
+            EditorEvent::Ignored
+        );
+    }
+
+    #[test]
+    fn esc_restores_the_draft_and_undo_goes_back_to_it() {
+        let mut e = with_history(&["start a"]);
+        type_text(&mut e, "st");
+        let _ = e.execute(Command::MoveLeft);
+        let _ = e.execute(Command::HistoryPrevious);
+        assert_eq!(e.execute(Command::Cancel), EditorEvent::Changed);
+        assert_eq!(shown(&e), "s|t");
+        let _ = e.execute(Command::HistoryPrevious);
+        let _ = e.execute(Command::Undo);
+        assert_eq!(shown(&e), "s|t");
+    }
+
+    #[test]
+    fn an_edited_entry_becomes_the_new_draft() {
+        let mut e = with_history(&["start alpha", "start beta", "list"]);
+        let _ = e.execute(Command::HistoryPrevious);
+        let _ = e.execute(Command::HistoryPrevious);
+        assert_eq!(e.value(), "start beta");
+        for _ in 0.."beta".len() {
+            let _ = e.execute(Command::DeleteLeft);
+        }
+        type_text(&mut e, "a");
+        let _ = e.execute(Command::HistoryPrevious);
+        assert_eq!(e.value(), "start alpha");
+        // The history itself is unchanged.
+        assert_eq!(e.history().len(), 3);
+        assert_eq!(e.history().get(1), Some("start beta"));
+    }
+
+    #[test]
+    fn the_hint_is_the_rest_of_the_newest_matching_entry() {
+        let mut e = with_history(&["start alpha", "start beta"]);
+        type_text(&mut e, "start");
+        assert_eq!(e.current_hint().as_deref(), Some(" beta"));
+        // Hidden when the cursor is not at the end, or the line is empty.
+        let _ = e.execute(Command::MoveLeft);
+        assert_eq!(e.current_hint(), None);
+        assert_eq!(with_history(&["a"]).current_hint(), None);
+        let mut off = LineEditor::new(EditorConfig {
+            hints: false,
+            ..EditorConfig::default()
+        })
+        .with_history(with_history(&["start"]).history);
+        type_text(&mut off, "s");
+        assert_eq!(off.current_hint(), None);
+    }
+
+    #[test]
+    fn right_end_and_ctrl_f_accept_the_whole_hint_alt_f_one_word() {
+        for command in [Command::MoveRight, Command::MoveEnd] {
+            let mut e = with_history(&["start alpha now"]);
+            type_text(&mut e, "st");
+            assert_eq!(e.execute(command), EditorEvent::Changed);
+            assert_eq!(shown(&e), "start alpha now|", "{command:?}");
+            // Accepting is one undo step.
+            let _ = e.execute(Command::Undo);
+            assert_eq!(shown(&e), "st|");
+        }
+        let mut e = with_history(&["start alpha now"]);
+        type_text(&mut e, "st");
+        let _ = e.execute(Command::MoveWordRight);
+        assert_eq!(shown(&e), "start|");
+        let _ = e.execute(Command::MoveWordRight);
+        assert_eq!(shown(&e), "start alpha|");
+    }
+
+    #[test]
+    fn esc_dismisses_the_hint_until_the_line_changes() {
+        let mut e = with_history(&["start alpha"]);
+        type_text(&mut e, "st");
+        assert_eq!(e.execute(Command::Cancel), EditorEvent::Changed);
+        assert_eq!(e.current_hint(), None);
+        assert_eq!(e.execute(Command::MoveRight), EditorEvent::Ignored);
+        assert_eq!(e.execute(Command::Cancel), EditorEvent::Ignored);
+        type_text(&mut e, "a");
+        assert_eq!(e.current_hint().as_deref(), Some("rt alpha"));
+    }
+
+    #[test]
+    fn a_custom_hinter_is_sanitized_and_kept_within_max_len() {
+        struct Noisy;
+        impl Hinter for Noisy {
+            fn hint(&self, _: &str, _: &History) -> Option<String> {
+                Some("a\tb\u{7}cdef".to_string())
+            }
+        }
+        let mut e = LineEditor::new(EditorConfig {
+            max_len: 5,
+            ..EditorConfig::default()
+        })
+        .with_hinter(Noisy);
+        type_text(&mut e, "x");
+        assert_eq!(e.current_hint().as_deref(), Some("a bc"));
+    }
+
+    #[test]
+    fn the_hint_is_drawn_dim_after_the_line() {
+        let mut e = with_history(&["start alpha"]);
+        type_text(&mut e, "st");
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+        let cursor = e.render(buf.area(), &mut buf, &Line::from("> "));
+        assert_eq!(buf.lines()[0].trim_end(), "> start alpha");
+        assert_eq!(cursor, Some(Position::new(4, 0)));
     }
 
     #[test]
