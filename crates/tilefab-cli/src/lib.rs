@@ -18,6 +18,6 @@ mod inline_tests;
 mod sim;
 
 pub use backend::{Backend, ClearType};
-pub use init::{TerminalGuard, install_panic_hook, restore};
+pub use init::{TerminalGuard, install_fatal_panic_hook, install_panic_hook, restore};
 pub use terminal::{Frame, Terminal};
 pub use viewport::{ScrollMode, TerminalOptions, Viewport};

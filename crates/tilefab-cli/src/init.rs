@@ -3,8 +3,8 @@
 //! The [`TerminalGuard`] is a guard: it enables the required modes on creation and **undoes
 //! everything in its `Drop`**, including on errors or early returns. For panics, which
 //! do not always run `Drop` in time (the report is displayed *before* stack unwinding),
-//! [`install_panic_hook`] chains a hook that restores the terminal before displaying the
-//! report.
+//! [`install_panic_hook`] (or [`install_fatal_panic_hook`], which also ends the process)
+//! chains a hook that restores the terminal before displaying the report.
 //!
 //! Only **one guard can be alive at a time**: the terminal state it restores is global, so
 //! the `Drop` of one guard would undo the modes another guard still relies on. Creating a
@@ -139,12 +139,31 @@ fn restore_to(out: &mut impl Write) -> io::Result<()> {
 /// or in raw mode (staircase lines due to missing carriage returns). Call after
 /// `color_eyre::install()` so its readable report is the “previous hook”.
 ///
-/// **Every panic is fatal**: after the report, the hook ends the process with exit code
-/// 101 (the code of an unwinding panic). A panic in a `tokio::spawn` task or in a
-/// secondary thread does not stop the process by itself; without this exit, the UI would
-/// keep drawing on a terminal already put back in line mode. Destructors (including
-/// `TerminalGuard`'s) do not run, which is harmless: the terminal is already restored.
+/// The panic then goes on as usual: it unwinds (destructors run, `catch_unwind` can stop
+/// it) and does not end the process by itself. After a panic that the application catches
+/// or survives (one in a secondary thread or a `tokio::spawn` task), the terminal is back
+/// in line mode: the application must quit, or set its modes again with a new guard once
+/// the current one is dropped. To end the process on any panic, use
+/// [`install_fatal_panic_hook`].
 pub fn install_panic_hook() {
+    install(false);
+}
+
+/// Like [`install_panic_hook`], but **every panic is fatal**: after the report, the hook
+/// ends the process with exit code 101 (the code of an unwinding panic).
+///
+/// For applications whose UI must not outlive a panic anywhere: a panic in a
+/// `tokio::spawn` task or in a secondary thread does not stop the process by itself, and
+/// without this exit the UI would keep drawing on a terminal already put back in line mode.
+/// Destructors (including `TerminalGuard`'s) do not run, and a `catch_unwind` cannot stop
+/// the panic: buffered data that only a destructor would write (a `BufWriter` log file, for
+/// instance) is lost.
+pub fn install_fatal_panic_hook() {
+    install(true);
+}
+
+/// Chain the restoring hook before the current one; with `fatal`, exit after the report.
+fn install(fatal: bool) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let was_fullscreen = ALTERNATE_SCREEN.load(Ordering::SeqCst);
@@ -156,7 +175,9 @@ pub fn install_panic_hook() {
         }
         previous(info);
         let _ = io::stdout().flush();
-        std::process::exit(101);
+        if fatal {
+            std::process::exit(101);
+        }
     }));
 }
 

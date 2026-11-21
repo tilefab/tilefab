@@ -16,7 +16,7 @@
 
 pub use tilefab_cli::{
     Backend, ClearType, Frame, ScrollMode, Terminal, TerminalGuard, TerminalOptions, Viewport,
-    install_panic_hook, restore, viewport,
+    install_fatal_panic_hook, install_panic_hook, restore, viewport,
 };
 pub use tilefab_core::{
     Alignment, Buffer, Cell, Color, Constraint, Direction, Layout, Line, Margin, Modifier,

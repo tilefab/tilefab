@@ -13,7 +13,7 @@ use std::time::Duration;
 use color_eyre::Result;
 use crossterm::event::{self, Event};
 use tilefab::{
-    Backend, Line, Terminal, TerminalGuard, TerminalOptions, Viewport, install_panic_hook,
+    Backend, Line, Terminal, TerminalGuard, TerminalOptions, Viewport, install_fatal_panic_hook,
 };
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -47,7 +47,8 @@ async fn main() -> Result<()> {
         return headless::run(None).await;
     }
 
-    install_panic_hook();
+    // Fatal: a panic in a task or a thread must not leave the UI running.
+    install_fatal_panic_hook();
     // The guard enables raw mode; its `Drop` disables it, even if the loop fails.
     let guard = TerminalGuard::raw()?;
     // A single-line viewport when idle (the prompt); it grows with the tasks.
