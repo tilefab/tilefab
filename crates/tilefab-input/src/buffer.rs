@@ -157,6 +157,14 @@ pub(crate) fn truncate(text: &str, max_bytes: usize) -> &str {
     &text[..end]
 }
 
+/// True if `position` is a grapheme boundary of `text` (0 and `text.len()` included).
+pub(crate) fn is_boundary(text: &str, position: usize) -> bool {
+    position == text.len()
+        || text
+            .grapheme_indices(true)
+            .any(|(start, _)| start == position)
+}
+
 /// Start of the grapheme before `position` (`position` itself at the start of the text).
 pub(crate) fn prev_grapheme(text: &str, position: usize) -> usize {
     text[..position]

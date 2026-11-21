@@ -185,7 +185,7 @@ async fn run<W: Write>(
 
         report_dropped_logs(&mut app, dropped_logs);
         queue_output(terminal, &mut app);
-        terminal.set_height(ui::viewport_height(&app));
+        terminal.set_height(ui::viewport_height(&app, terminal.area().width));
         terminal.draw(|frame| ui::draw(frame, &mut app))?;
         if app.should_quit {
             break;

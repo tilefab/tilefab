@@ -6,6 +6,7 @@ use crossterm::event::KeyEvent;
 use tilefab_core::{Buffer, Line, Position, Rect};
 
 use crate::buffer::{self, LineBuffer};
+use crate::completion::{self, Completer, Menu};
 use crate::hint::{Hinter, HistoryHinter};
 use crate::history::{self, History};
 use crate::keymap::{Command, Keymap};
@@ -32,6 +33,8 @@ pub struct EditorConfig {
     pub history_ignore_space: bool,
     /// Show hints (autosuggestions) after the line (default true).
     pub hints: bool,
+    /// Maximum number of rows of the completion menu (default 5).
+    pub menu_max_rows: u16,
     /// Styles of the hint, the indicators, the search match and the menu.
     pub styles: EditorStyles,
 }
@@ -44,6 +47,7 @@ impl Default for EditorConfig {
             history_capacity: history::DEFAULT_CAPACITY,
             history_ignore_space: true,
             hints: true,
+            menu_max_rows: 5,
             styles: EditorStyles::default(),
         }
     }
@@ -83,6 +87,8 @@ enum Mode {
     Normal,
     /// Reverse incremental search: keys edit the query.
     Search(Search),
+    /// The completion menu is open: keys move the selection.
+    Menu(Menu),
 }
 
 /// Which history entry to show next.
@@ -131,6 +137,7 @@ pub struct LineEditor {
     history: History,
     navigation: Option<Navigation>,
     hinter: Option<Box<dyn Hinter>>,
+    completer: Option<Box<dyn Completer>>,
     /// `Esc` hid the hint; shown again after the next change of the line.
     hint_dismissed: bool,
     mode: Mode,
@@ -164,6 +171,7 @@ impl LineEditor {
             history,
             navigation: None,
             hinter: Some(Box::new(HistoryHinter)),
+            completer: None,
             hint_dismissed: false,
             mode: Mode::Normal,
         }
@@ -180,6 +188,13 @@ impl LineEditor {
     #[must_use]
     pub fn with_hinter(mut self, hinter: impl Hinter + 'static) -> Self {
         self.hinter = Some(Box::new(hinter));
+        self
+    }
+
+    /// Complete with `completer` on Tab (without one, Tab does nothing).
+    #[must_use]
+    pub fn with_completer(mut self, completer: impl Completer + 'static) -> Self {
+        self.completer = Some(Box::new(completer));
         self
     }
 
@@ -230,8 +245,9 @@ impl LineEditor {
         }
     }
 
-    /// Draw the prompt and the line on the first row of `area` in `buf`, and return the
-    /// cursor cell (`None` when `area` is empty). Text hidden by the horizontal scroll is
+    /// Draw the prompt and the line on the first row of `area` in `buf`, the completion
+    /// menu on the following rows, and return the cursor cell (`None` when `area` is
+    /// empty). Text hidden by the horizontal scroll is
     /// shown by a dim `…`.
     ///
     /// With a `Frame`, place the cursor it returns:
@@ -253,7 +269,7 @@ impl LineEditor {
                 Some(Line::from(search.prompt())),
                 search.found.as_ref().map(|(_, range)| range.clone()),
             ),
-            Mode::Normal => (None, None),
+            Mode::Normal | Mode::Menu(_) => (None, None),
         };
         let view = LineView {
             text: self.buffer.value(),
@@ -261,7 +277,7 @@ impl LineEditor {
             hint: hint.as_deref(),
             highlight,
         };
-        Some(render::draw_line(
+        let cursor = render::draw_line(
             buf,
             row,
             search_prompt.as_ref().unwrap_or(prompt),
@@ -269,7 +285,13 @@ impl LineEditor {
             &mut self.scroll,
             self.config.scroll_margin,
             &self.config.styles,
-        ))
+        );
+        if let Mode::Menu(menu) = &mut self.mode {
+            let rows = area.height.saturating_sub(1).min(self.config.menu_max_rows);
+            let menu_area = Rect::new(area.x, area.y + 1, area.width, rows);
+            completion::draw_menu(menu, menu_area, buf, &self.config.styles);
+        }
+        Some(cursor)
     }
 
     /// Run `command`.
@@ -281,6 +303,107 @@ impl LineEditor {
         match std::mem::replace(&mut self.mode, Mode::Normal) {
             Mode::Normal => self.edit_command(command, last),
             Mode::Search(search) => self.search_command(search, command, last),
+            Mode::Menu(menu) => self.menu_command(menu, command, last),
+        }
+    }
+
+    /// Run `command` with the completion menu open: Tab / ↓ and `BackTab` / ↑ select the
+    /// next and previous candidate, ← / → move by column; Enter keeps the selection and
+    /// closes the menu without submitting; `Esc`, Ctrl+G and Ctrl+C restore the line as it
+    /// was before Tab. Any other command closes the menu, keeping the selection, then
+    /// runs as usual (a typed character is inserted after the selected candidate).
+    fn menu_command(&mut self, mut menu: Menu, command: Command, last: Last) -> EditorEvent {
+        match command {
+            Command::Complete | Command::HistoryNext => menu.step(true),
+            Command::CompletePrevious | Command::HistoryPrevious => menu.step(false),
+            Command::MoveRight => menu.step_column(true),
+            Command::MoveLeft => menu.step_column(false),
+            Command::Cancel | Command::Abort | Command::Interrupt => {
+                self.buffer.set(&menu.original.value, menu.original.cursor);
+                return EditorEvent::Changed;
+            }
+            Command::Submit => {
+                self.close_menu(menu);
+                return EditorEvent::Changed;
+            }
+            other => {
+                self.close_menu(menu);
+                let _ = self.edit_command(other, last);
+                return EditorEvent::Changed;
+            }
+        }
+        self.show_menu(menu)
+    }
+
+    /// Preview the selected candidate in the line and keep the menu open.
+    fn show_menu(&mut self, menu: Menu) -> EditorEvent {
+        let (value, cursor) = menu.preview();
+        self.buffer.set(&value, cursor);
+        self.mode = Mode::Menu(menu);
+        EditorEvent::Changed
+    }
+
+    /// Close the menu, keeping the selected candidate (one undo step back to the line
+    /// before Tab).
+    fn close_menu(&mut self, menu: Menu) {
+        if self.buffer.value() != menu.original.value {
+            self.undo.record(menu.original, Step::Single);
+            self.line_changed();
+        }
+    }
+
+    /// Tab (or `BackTab` with `backward`) in normal mode. One candidate: it replaces the
+    /// completed text. Several: their longest common prefix is inserted; when that adds
+    /// nothing, the menu opens (`BackTab` opens it at once, on the last candidate).
+    fn complete(&mut self, backward: bool) -> EditorEvent {
+        let Some(completer) = &self.completer else {
+            return EditorEvent::Ignored;
+        };
+        let line = self.buffer.value();
+        let cursor = self.buffer.cursor();
+        let completions = completer.complete(line, cursor);
+        let Some((start, candidates)) = completion::sanitize(completions, line, cursor) else {
+            return EditorEvent::Ignored;
+        };
+        if let [candidate] = candidates.as_slice()
+            && !backward
+        {
+            let mut text = candidate.replacement.clone();
+            if candidate.append_space && !line[cursor..].starts_with(' ') {
+                text.push(' ');
+            }
+            return self.edit(Step::Single, |b| {
+                b.replace(start..cursor, &text);
+            });
+        }
+        let typed = &line[start..cursor];
+        let prefix = completion::common_prefix(&candidates);
+        if !backward && prefix.len() > typed.len() && prefix.starts_with(typed) {
+            let prefix = prefix.to_string();
+            return self.edit(Step::Single, |b| {
+                b.replace(start..cursor, &prefix);
+            });
+        }
+        let selected = if backward { candidates.len() - 1 } else { 0 };
+        let rows = candidates.len();
+        let menu = Menu {
+            start,
+            candidates,
+            original: self.snapshot(),
+            selected,
+            top: 0,
+            rows,
+        };
+        self.show_menu(menu)
+    }
+
+    /// Rows needed below the prompt line (the completion menu) in an area `width` columns
+    /// wide: the application adds them to the height of the viewport.
+    #[must_use]
+    pub fn extra_rows(&self, width: u16) -> u16 {
+        match &self.mode {
+            Mode::Menu(menu) => completion::rows_needed(menu, width, self.config.menu_max_rows),
+            Mode::Normal | Mode::Search(_) => 0,
         }
     }
 
@@ -465,10 +588,9 @@ impl LineEditor {
             Command::HistoryLast => self.recall(Recall::Newest, false),
             Command::Cancel => self.cancel(),
             Command::ReverseSearch => self.start_search(),
-            Command::ForwardSearch
-            | Command::Complete
-            | Command::CompletePrevious
-            | Command::Abort => EditorEvent::Ignored,
+            Command::Complete => self.complete(false),
+            Command::CompletePrevious => self.complete(true),
+            Command::ForwardSearch | Command::Abort => EditorEvent::Ignored,
         }
     }
 
@@ -1307,7 +1429,7 @@ mod tests {
     fn search_prompt(e: &LineEditor) -> Option<String> {
         match &e.mode {
             Mode::Search(search) => Some(search.prompt()),
-            Mode::Normal => None,
+            Mode::Normal | Mode::Menu(_) => None,
         }
     }
 
@@ -1427,6 +1549,174 @@ mod tests {
                 .contains(tilefab_core::Modifier::UNDERLINED)
         };
         assert!(underlined(20) && underlined(22) && !underlined(23) && !underlined(19));
+    }
+
+    /// Completes the first word with fixed names; `start` takes an argument.
+    struct Names(&'static [&'static str]);
+
+    impl Completer for Names {
+        fn complete(&self, line: &str, cursor: usize) -> completion::Completions {
+            let word = &line[..cursor];
+            let candidates = self
+                .0
+                .iter()
+                .filter(|name| name.starts_with(word))
+                .map(|name| {
+                    let candidate = completion::Candidate::new(*name);
+                    if *name == "start" {
+                        candidate.append_space()
+                    } else {
+                        candidate
+                    }
+                })
+                .collect();
+            completion::Completions {
+                start: 0,
+                candidates,
+            }
+        }
+    }
+
+    fn completing(names: &'static [&'static str], typed: &str) -> LineEditor {
+        let mut e = LineEditor::new(EditorConfig::default()).with_completer(Names(names));
+        type_text(&mut e, typed);
+        e
+    }
+
+    fn menu_open(e: &LineEditor) -> bool {
+        matches!(e.mode, Mode::Menu(_))
+    }
+
+    #[test]
+    fn tab_with_no_candidate_or_no_completer_is_ignored() {
+        let mut e = completing(&["list"], "x");
+        assert_eq!(e.execute(Command::Complete), EditorEvent::Ignored);
+        let mut plain = editor("li|");
+        assert_eq!(plain.execute(Command::Complete), EditorEvent::Ignored);
+    }
+
+    #[test]
+    fn a_unique_candidate_replaces_the_word_with_its_space() {
+        let mut e = completing(&["start", "list"], "st");
+        assert_eq!(e.execute(Command::Complete), EditorEvent::Changed);
+        assert_eq!(shown(&e), "start |");
+        let mut e = completing(&["start", "list"], "l");
+        let _ = e.execute(Command::Complete);
+        assert_eq!(shown(&e), "list|");
+        // Already complete: nothing changes.
+        assert_eq!(e.execute(Command::Complete), EditorEvent::Ignored);
+        let _ = e.execute(Command::Undo);
+        assert_eq!(shown(&e), "l|");
+    }
+
+    #[test]
+    fn several_candidates_insert_the_common_prefix_then_open_the_menu() {
+        let mut e = completing(&["status", "stop", "start"], "s");
+        assert_eq!(e.execute(Command::Complete), EditorEvent::Changed);
+        assert_eq!(shown(&e), "st|");
+        assert!(!menu_open(&e));
+        // The prefix adds nothing more: the menu opens on the first candidate.
+        let _ = e.execute(Command::Complete);
+        assert!(menu_open(&e));
+        assert_eq!(shown(&e), "status|");
+        assert_eq!(e.extra_rows(80), 1);
+        let _ = e.execute(Command::Complete);
+        assert_eq!(shown(&e), "stop|");
+        let _ = e.execute(Command::HistoryNext);
+        assert_eq!(shown(&e), "start|");
+        // Wrapping around.
+        let _ = e.execute(Command::Complete);
+        assert_eq!(shown(&e), "status|");
+        let _ = e.execute(Command::HistoryPrevious);
+        assert_eq!(shown(&e), "start|");
+    }
+
+    #[test]
+    fn backtab_opens_the_menu_on_the_last_candidate() {
+        let mut e = completing(&["status", "stop"], "st");
+        let _ = e.execute(Command::CompletePrevious);
+        assert!(menu_open(&e));
+        assert_eq!(shown(&e), "stop|");
+        let _ = e.execute(Command::CompletePrevious);
+        assert_eq!(shown(&e), "status|");
+    }
+
+    #[test]
+    fn enter_keeps_the_selection_without_submitting() {
+        let mut e = completing(&["status", "stop"], "st");
+        let _ = e.execute(Command::CompletePrevious);
+        assert_eq!(e.execute(Command::Submit), EditorEvent::Changed);
+        assert!(!menu_open(&e));
+        assert_eq!(shown(&e), "stop|");
+        assert_eq!(e.extra_rows(80), 0);
+        // One undo step back to the line before Tab.
+        let _ = e.execute(Command::Undo);
+        assert_eq!(shown(&e), "st|");
+    }
+
+    #[test]
+    fn esc_ctrl_g_and_ctrl_c_restore_the_line() {
+        for command in [Command::Cancel, Command::Abort, Command::Interrupt] {
+            let mut e = completing(&["status", "stop"], "st");
+            let _ = e.execute(Command::CompletePrevious);
+            assert_eq!(e.execute(command), EditorEvent::Changed, "{command:?}");
+            assert!(!menu_open(&e));
+            assert_eq!(shown(&e), "st|", "{command:?}");
+        }
+    }
+
+    #[test]
+    fn typing_keeps_the_selection_and_backspace_closes_and_deletes() {
+        let mut e = completing(&["status", "stop"], "st");
+        let _ = e.execute(Command::CompletePrevious);
+        type_text(&mut e, "x");
+        assert!(!menu_open(&e));
+        assert_eq!(shown(&e), "stopx|");
+        let mut e = completing(&["status", "stop"], "st");
+        let _ = e.execute(Command::CompletePrevious);
+        let _ = e.execute(Command::DeleteLeft);
+        assert!(!menu_open(&e));
+        assert_eq!(shown(&e), "sto|");
+    }
+
+    #[test]
+    fn the_menu_is_drawn_below_the_prompt_with_the_selection_reversed() {
+        let mut e = completing(&["status", "stop", "start"], "st");
+        let _ = e.execute(Command::Complete);
+        assert_eq!(e.extra_rows(30), 1);
+        assert_eq!(e.extra_rows(10), 3);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 30, 2));
+        let cursor = e.render(buf.area(), &mut buf, &Line::from("> "));
+        let rows: Vec<String> = buf
+            .lines()
+            .iter()
+            .map(|l| l.trim_end().to_string())
+            .collect();
+        assert_eq!(rows, ["> status", "status  stop    start"]);
+        assert_eq!(cursor, Some(Position::new(8, 0)));
+        let reversed = |x| {
+            buf.get(x, 1)
+                .style()
+                .add_modifier
+                .contains(tilefab_core::Modifier::REVERSED)
+        };
+        assert!(reversed(0) && reversed(5) && !reversed(8));
+    }
+
+    #[test]
+    fn a_completer_cannot_break_the_invariants() {
+        struct Bad;
+        impl Completer for Bad {
+            fn complete(&self, _: &str, _: usize) -> completion::Completions {
+                completion::Completions {
+                    start: 99,
+                    candidates: vec![completion::Candidate::new("x")],
+                }
+            }
+        }
+        let mut e = LineEditor::new(EditorConfig::default()).with_completer(Bad);
+        type_text(&mut e, "a");
+        assert_eq!(e.execute(Command::Complete), EditorEvent::Ignored);
     }
 
     #[test]

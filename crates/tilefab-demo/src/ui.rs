@@ -11,15 +11,21 @@ const PROMPT: &str = "> ";
 /// Width of the task name column (longer names are truncated).
 const NAME_WIDTH: u16 = 10;
 
-/// Desired viewport height: one line per task, plus the prompt line.
-pub fn viewport_height(app: &App) -> u16 {
-    saturating_u16(app.tasks.len()).saturating_add(1)
+/// Desired viewport height in a terminal `width` columns wide: one line per task, the
+/// prompt line, and the rows of the completion menu when it is open.
+pub fn viewport_height(app: &App, width: u16) -> u16 {
+    saturating_u16(app.tasks.len())
+        .saturating_add(1)
+        .saturating_add(app.editor.extra_rows(width))
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
-    // The top of the viewport is reserved for task bars, the last line for the prompt.
+    // The top of the viewport is reserved for task bars, the bottom for the prompt and
+    // the completion menu below it.
+    let prompt_rows = 1 + app.editor.extra_rows(frame.area().width);
     let [tasks_area, prompt_area] =
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(prompt_rows)])
+            .areas(frame.area());
 
     // One line per task, from the top; extra lines remain empty.
     for (task, row) in app.tasks.iter().zip(tasks_area.rows()) {
@@ -74,8 +80,11 @@ pub fn wrapped_lines(lines: Vec<Line<'static>>, width: u16) -> (Paragraph<'stati
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use tilefab::{Backend, Position, Size, Terminal};
     use tokio::sync::mpsc;
+
+    use crate::app::AppEvent;
 
     use super::*;
 
@@ -108,8 +117,30 @@ mod tests {
 
     #[test]
     fn viewport_height_is_one_line_per_task_plus_the_prompt() {
-        assert_eq!(viewport_height(&app_with_tasks(0)), 1);
-        assert_eq!(viewport_height(&app_with_tasks(3)), 4);
+        assert_eq!(viewport_height(&app_with_tasks(0), 80), 1);
+        assert_eq!(viewport_height(&app_with_tasks(3), 80), 4);
+    }
+
+    #[test]
+    fn the_open_menu_adds_its_rows_below_the_prompt() {
+        let mut app = app_with_tasks(1);
+        app.handle_event(AppEvent::Key(KeyEvent::new(
+            KeyCode::Tab,
+            KeyModifiers::NONE,
+        )));
+        // Five commands with descriptions: one per row, up to the 5-row limit.
+        assert_eq!(viewport_height(&app, 80), 1 + 1 + 5);
+        let rows = render(&mut app, 40, 7);
+        assert!(rows[0].starts_with("t0"), "{rows:?}");
+        assert_eq!(rows[1], "> start");
+        assert!(rows[2].starts_with("start  start a task"), "{rows:?}");
+        assert!(rows[6].starts_with("exit"), "{rows:?}");
+        // Esc closes it: the viewport shrinks back.
+        app.handle_event(AppEvent::Key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(viewport_height(&app, 80), 2);
     }
 
     #[test]

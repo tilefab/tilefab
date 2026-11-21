@@ -1,7 +1,7 @@
 //! Application state, event handling, and command processing.
 
 use crossterm::event::KeyEvent;
-use tilefab::{EditorConfig, EditorEvent, Line, LineEditor};
+use tilefab::{Candidate, Completer, Completions, EditorConfig, EditorEvent, Line, LineEditor};
 use tokio::sync::mpsc::Sender;
 use tracing::{Level, error, info, warn};
 
@@ -58,23 +58,118 @@ pub enum CommandError {
     Unknown(String),
 }
 
+/// What a command word does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Start,
+    List,
+    Help,
+    Quit,
+}
+
+/// A command of the prompt, as `parse`, `help` and the completer see it.
+struct CommandSpec {
+    name: &'static str,
+    /// How `help` shows it.
+    usage: &'static str,
+    /// Shown beside the name in the completion menu.
+    description: &'static str,
+    kind: Kind,
+}
+
+/// The commands, defined once. The hidden `panic` command of debug builds is not listed.
+const COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        name: "start",
+        usage: "start <name>",
+        description: "start a task",
+        kind: Kind::Start,
+    },
+    CommandSpec {
+        name: "list",
+        usage: "list",
+        description: "list the running tasks",
+        kind: Kind::List,
+    },
+    CommandSpec {
+        name: "help",
+        usage: "help",
+        description: "show the commands",
+        kind: Kind::Help,
+    },
+    CommandSpec {
+        name: "quit",
+        usage: "quit",
+        description: "quit (also Ctrl+C, Ctrl+D)",
+        kind: Kind::Quit,
+    },
+    CommandSpec {
+        name: "exit",
+        usage: "exit",
+        description: "quit",
+        kind: Kind::Quit,
+    },
+];
+
 impl Command {
     /// Parse a line: first word = command, remainder = argument.
     pub fn parse(line: &str) -> Result<Self, CommandError> {
         let line = line.trim();
         let (word, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
         let rest = rest.trim();
-        match word {
-            "" => Ok(Self::Empty),
-            "start" if rest.is_empty() => Err(CommandError::MissingName),
-            "start" => Ok(Self::Start(rest.to_string())),
-            "list" => Ok(Self::List),
-            "help" => Ok(Self::Help),
-            "quit" | "exit" => Ok(Self::Quit),
-            #[cfg(debug_assertions)]
-            "panic" => Ok(Self::Panic),
-            other => Err(CommandError::Unknown(other.to_string())),
+        if word.is_empty() {
+            return Ok(Self::Empty);
         }
+        #[cfg(debug_assertions)]
+        if word == "panic" {
+            return Ok(Self::Panic);
+        }
+        let Some(spec) = COMMANDS.iter().find(|spec| spec.name == word) else {
+            return Err(CommandError::Unknown(word.to_string()));
+        };
+        match spec.kind {
+            Kind::Start if rest.is_empty() => Err(CommandError::MissingName),
+            Kind::Start => Ok(Self::Start(rest.to_string())),
+            Kind::List => Ok(Self::List),
+            Kind::Help => Ok(Self::Help),
+            Kind::Quit => Ok(Self::Quit),
+        }
+    }
+
+    /// The `help` message.
+    fn help() -> String {
+        let usages: Vec<&str> = COMMANDS.iter().map(|spec| spec.usage).collect();
+        format!(
+            "commands: {} (or Ctrl+C, Ctrl+D to quit)",
+            usages.join(", ")
+        )
+    }
+}
+
+/// Completes the command name (the first word); nothing for the task name.
+pub struct CommandCompleter;
+
+impl Completer for CommandCompleter {
+    fn complete(&self, line: &str, cursor: usize) -> Completions {
+        let before = &line[..cursor];
+        let start = before.len() - before.trim_start().len();
+        let word = &before[start..];
+        if word.contains(char::is_whitespace) {
+            return Completions::default();
+        }
+        let candidates = COMMANDS
+            .iter()
+            .filter(|spec| spec.name.starts_with(word))
+            .map(|spec| {
+                let candidate = Candidate::new(spec.name).description(spec.description);
+                if spec.kind == Kind::Start {
+                    candidate.append_space()
+                } else {
+                    candidate
+                }
+            })
+            .collect();
+        Completions { start, candidates }
     }
 }
 
@@ -102,7 +197,7 @@ pub struct App {
 impl App {
     pub fn new(tx: Sender<AppEvent>) -> Self {
         Self {
-            editor: LineEditor::new(EditorConfig::default()),
+            editor: LineEditor::new(EditorConfig::default()).with_completer(CommandCompleter),
             tasks: Vec::new(),
             output: Vec::new(),
             should_quit: false,
@@ -167,9 +262,7 @@ impl App {
             Ok(Command::Empty) => {}
             Ok(Command::Start(name)) => self.start_task(name),
             Ok(Command::List) => self.list_tasks(),
-            Ok(Command::Help) => {
-                info!("commands: start <name>, list, help, quit (or exit, Ctrl+C, Ctrl+D)");
-            }
+            Ok(Command::Help) => info!("{}", Command::help()),
             Ok(Command::Quit) => self.should_quit = true,
             #[cfg(debug_assertions)]
             Ok(Command::Panic) => panic!("deliberate panic (`panic` command)"),
@@ -367,6 +460,52 @@ mod tests {
     }
 
     #[test]
+    fn the_completer_completes_the_command_name_only() {
+        let names = |line: &str| -> (usize, Vec<String>) {
+            let completions = CommandCompleter.complete(line, line.len());
+            let names = completions
+                .candidates
+                .iter()
+                .map(|c| c.replacement.clone())
+                .collect();
+            (completions.start, names)
+        };
+        assert_eq!(
+            names(""),
+            (
+                0,
+                vec!["start", "list", "help", "quit", "exit"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            )
+        );
+        assert_eq!(names("  l"), (2, vec!["list".to_string()]));
+        assert_eq!(names("e"), (0, vec!["exit".to_string()]));
+        // Nothing for the task name.
+        assert_eq!(names("start a"), (0, vec![]));
+        let start = &CommandCompleter.complete("st", 2).candidates[0];
+        assert!(start.append_space);
+        assert_eq!(start.description.as_deref(), Some("start a task"));
+    }
+
+    #[test]
+    fn tab_completes_the_command_at_the_prompt() {
+        let mut app = new_app();
+        type_text(&mut app, "st");
+        app.handle_event(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.editor.value(), "start ");
+        let mut app = new_app();
+        app.handle_event(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(
+            app.editor.value(),
+            "start",
+            "the menu opens on the first command"
+        );
+        assert!(app.editor.extra_rows(100) > 0);
+    }
+
+    #[test]
     fn log_events_are_appended_to_output() {
         let mut app = new_app();
         app.handle_event(AppEvent::Log("[INFO] hello".into()));
@@ -395,7 +534,7 @@ mod tests {
         assert_eq!(
             logs,
             [
-                "[INFO] commands: start <name>, list, help, quit (or exit, Ctrl+C, Ctrl+D)",
+                "[INFO] commands: start <name>, list, help, quit, exit (or Ctrl+C, Ctrl+D to quit)",
                 "[INFO] no task running",
                 "[ERROR] usage: start <name>",
                 "[WARN] unknown command: \"foo\" (type help)",

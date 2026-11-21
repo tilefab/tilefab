@@ -25,8 +25,8 @@ pub use tilefab_core::{
 };
 #[cfg(feature = "input")]
 pub use tilefab_input::{
-    Command as EditorCommand, EditorConfig, EditorEvent, EditorStyles, KeyBinding, Keymap,
-    LineEditor,
+    Candidate, Command as EditorCommand, Completer, Completions, EditorConfig, EditorEvent,
+    EditorStyles, Hinter, History, HistoryHinter, KeyBinding, Keymap, LineEditor,
 };
 #[cfg(feature = "widget")]
 pub use tilefab_widget::{

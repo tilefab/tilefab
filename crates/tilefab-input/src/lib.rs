@@ -14,6 +14,7 @@
 #![warn(missing_docs)]
 
 mod buffer;
+mod completion;
 mod editor;
 mod hint;
 mod history;
@@ -23,6 +24,7 @@ mod render;
 mod search;
 mod undo;
 
+pub use completion::{Candidate, Completer, Completions};
 pub use editor::{EditorConfig, EditorEvent, LineEditor};
 pub use hint::{Hinter, HistoryHinter};
 pub use history::History;
