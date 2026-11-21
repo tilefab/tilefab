@@ -175,7 +175,7 @@ async fn run<W: Write>(
     dropped_logs: &DroppedLogs,
 ) -> Result<()> {
     let mut app = App::new(tx);
-    terminal.draw(|frame| ui::draw(frame, &app))?;
+    terminal.draw(|frame| ui::draw(frame, &mut app))?;
 
     while let Some(event) = rx.recv().await {
         app.handle_event(event);
@@ -186,7 +186,7 @@ async fn run<W: Write>(
         report_dropped_logs(&mut app, dropped_logs);
         queue_output(terminal, &mut app);
         terminal.set_height(ui::viewport_height(&app));
-        terminal.draw(|frame| ui::draw(frame, &app))?;
+        terminal.draw(|frame| ui::draw(frame, &mut app))?;
         if app.should_quit {
             break;
         }

@@ -31,7 +31,11 @@ tilefab-input = { path = "crates/tilefab-input", version = "0.1.0" }
 tilefab-widget = { path = "crates/tilefab-widget", version = "0.1.0" }
 
 color-eyre = "0.6.5"
-crossterm = "0.29"
+# Without the default `derive-more` feature: it pulls `derive_more`, whose proc-macro
+# crate depends on `syn` 2, while tokio's macros already use `syn` 3. Nothing here uses the
+# methods it generates (`is_key_press()`, `as_key_event()`…). Every crate inherits this
+# declaration (`crossterm.workspace = true`): none may turn the default features back on.
+crossterm = { version = "0.29", default-features = false, features = ["bracketed-paste", "events", "windows"] }
 # Property tests; without the default `fork` and `timeout` features (fewer dependencies).
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 # Random task durations of the demo: no dependencies of its own (rand brought rand_core,
@@ -44,8 +48,6 @@ tokio = "1.54.1"
 # proc-macro crate (`tracing-attributes`) would only add build time.
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-subscriber = "0.3.23"
-# Disable default features (which pull in ratatui): only crossterm support is needed.
-tui-input = { version = "0.15.5", default-features = false, features = ["crossterm"] }
 unicode-segmentation = "1.13"
 unicode-width = "0.2"
 

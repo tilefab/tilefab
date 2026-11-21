@@ -16,7 +16,7 @@ pub fn viewport_height(app: &App) -> u16 {
     saturating_u16(app.tasks.len()).saturating_add(1)
 }
 
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
     // The top of the viewport is reserved for task bars, the last line for the prompt.
     let [tasks_area, prompt_area] =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
@@ -55,27 +55,13 @@ fn draw_task(frame: &mut Frame, task: &Task, area: Rect) {
     );
 }
 
-fn draw_prompt(frame: &mut Frame, app: &App, area: Rect) {
-    let [prefix_area, input_area] = Layout::horizontal([
-        Constraint::Length(saturating_u16(PROMPT.len())),
-        Constraint::Fill(1),
-    ])
-    .areas(area);
-    frame.render_widget(Line::from(PROMPT.bold()), prefix_area);
-
-    // Horizontal scrolling: the input line computes how many columns to shift
-    // the text to keep the cursor visible. Reserve one free column
-    // for the cursor at the end of the line.
-    let width = input_area.width.saturating_sub(1) as usize;
-    let scroll = app.input.visual_scroll(width);
-    frame.render_widget(
-        Paragraph::new(app.input.value()).scroll((0, saturating_u16(scroll))),
-        input_area,
-    );
-
-    // Cursor position in display columns (handles accents and wide emoji).
-    let cursor_x = saturating_u16(app.input.visual_cursor().saturating_sub(scroll));
-    frame.set_cursor_position((input_area.x + cursor_x, input_area.y));
+fn draw_prompt(frame: &mut Frame, app: &mut App, area: Rect) {
+    // The editor draws the prompt and the line (horizontal scrolling, `…` for hidden
+    // text) and returns where the cursor goes.
+    let prompt = Line::from(PROMPT.bold());
+    if let Some(cursor) = app.editor.render(area, frame.buffer_mut(), &prompt) {
+        frame.set_cursor_position(cursor);
+    }
 }
 
 /// Prepare a block of lines to insert above the viewport: return the
@@ -94,7 +80,7 @@ mod tests {
     use super::*;
 
     /// Draw the application in a simulated terminal and return the screen lines.
-    fn render(app: &App, width: u16, height: u16) -> Vec<String> {
+    fn render(app: &mut App, width: u16, height: u16) -> Vec<String> {
         let backend =
             Backend::with_fixed(Vec::new(), Size::new(width, height), Position::new(0, 0));
         let mut terminal = Terminal::new(backend).unwrap();
@@ -128,14 +114,14 @@ mod tests {
 
     #[test]
     fn idle_viewport_is_only_the_prompt() {
-        let app = app_with_tasks(0);
-        assert_eq!(render(&app, 30, 1), [">"]);
+        let mut app = app_with_tasks(0);
+        assert_eq!(render(&mut app, 30, 1), [">"]);
     }
 
     #[test]
     fn each_task_gets_a_row_above_the_prompt() {
-        let app = app_with_tasks(2);
-        let rows = render(&app, 30, 3);
+        let mut app = app_with_tasks(2);
+        let rows = render(&mut app, 30, 3);
         assert!(rows[0].starts_with("t0"), "{rows:?}");
         assert!(rows[0].ends_with(" 50%"), "{rows:?}");
         assert!(rows[1].starts_with("t1"), "{rows:?}");

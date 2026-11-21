@@ -49,7 +49,7 @@ Keys typed while it waits are echoed by the terminal but not read: stdin is the 
 At most 5 simultaneous tasks (`MAX_TASKS`); beyond that, the command is refused with a WARN. An unknown command gives a WARN, `start` without a name an ERROR.
 The hidden `panic` command triggers a deliberate panic, to check that the terminal is properly restored. It exists in debug builds only (`cargo build`, used by `tools/check_app.py`); in a release build, `panic` is an unknown command.
 
-Line editing (provided by [tui-input](https://crates.io/crates/tui-input)): ←/→, Home/End, Ctrl+A/E, Backspace, Delete, Ctrl+←/→ (word by word), Ctrl+W or Alt+Backspace (deletes the previous word), Ctrl+U (clears the line), Ctrl+K (deletes to the end), Ctrl+Y (pastes back the last deleted text).
+Line editing (built-in readline-style editor, `tilefab-input`): ←/→, Home/End, Ctrl+A/E, Backspace, Delete, Ctrl+←/→ (word by word), Alt+Backspace (deletes the previous word), Ctrl+W (deletes the previous whitespace-delimited word), Ctrl+U (deletes to the start), Ctrl+K (deletes to the end), Ctrl+Y (pastes back the last deleted text), Ctrl+_ (undo).
 
 ## Architecture
 
@@ -81,7 +81,7 @@ A single UI loop owns the `Terminal`; nothing else writes to stdout.
 | `crates/tilefab-core` | `Cell`, `Buffer` and diff between two buffers (wide characters included); `Color`, `Modifier`, `Style`; `Span`, `Line`, `Text`, `Alignment`, `Stylize`; `Rect`, `Position`, `Size`, `Margin`, `Constraint`, `Layout`; the `Widget` and `StatefulWidget` traits (text types are widgets) | — (no crossterm) |
 | `crates/tilefab-cli` | `backend`: ANSI sequences on a `W: Write` (cells, cursor, erasing, scroll regions); `terminal`: `Terminal` and `Frame` (diff with the previous frame, cursor, viewport); `viewport`: `Viewport` (full screen or inline), `ScrollMode`, commit placement rule; `init`: `TerminalGuard` (raw mode, alternate screen), panic hook | `tilefab-core`, crossterm |
 | `crates/tilefab-widget` | `Block`, `Paragraph`, `Gauge`, `LineGauge`, `List`, `Clear`, drawn in a `Buffer` without I/O | `tilefab-core` |
-| `crates/tilefab-input` | `InputLine`: prompt line editing, without I/O (a layer over tui-input for now) | crossterm (events), tui-input |
+| `crates/tilefab-input` | `LineEditor`: prompt line editor (keymap, kill ring, undo, horizontal scrolling), without terminal I/O | crossterm (events), `tilefab-core` |
 | `crates/tilefab` | façade: re-exports all of the above under `tilefab::…`; features `widget` and `input` (on by default) | the four crates above |
 | `crates/tilefab-demo` | the demo application (binary `tilefab`), not published | `tilefab` |
 
@@ -91,7 +91,7 @@ Rendering flow: `Frame` (current buffer) → diff with the previous buffer → `
 
 Notable choices:
 
-- **A single crossterm version** (0.29) in the dependency tree; `tui-input` is used without its ratatui features (`default-features = false, features = ["crossterm"]`).
+- **A single crossterm version** (0.29) in the dependency tree, without its default `derive-more` feature (it would pull `syn` 2 next to the `syn` 3 of tokio's macros).
 - **Single frame commit**: `Terminal::insert_before` and `Terminal::set_height` write nothing, they accumulate. `draw` applies scrolling, inserted lines, the new height and the redraw in one synchronized block: the terminal never shows an intermediate state. The viewport is anchored at the bottom: its last line (the prompt) does not move on screen when the height changes. The placement rule is detailed in `crates/tilefab-cli/src/viewport.rs`.
 - **Task start and end lines**: produced directly in `app.output` (same `[INFO] …` format as tracing), not through tracing, so that they arrive in the **same** frame as the height change. Otherwise the viewport would shrink one frame before the line replacing it arrived.
 - **Scroll regions**: crossterm has no DECSTBM command, `backend.rs` implements it (`SetScrollRegion`). Only the area above the viewport scrolls. `ScrollMode::Fallback` does the same without a region, for terminals that handle them poorly.

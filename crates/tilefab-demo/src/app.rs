@@ -1,7 +1,7 @@
 //! Application state, event handling, and command processing.
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use tilefab::{InputLine, Line};
+use crossterm::event::KeyEvent;
+use tilefab::{EditorConfig, EditorEvent, Line, LineEditor};
 use tokio::sync::mpsc::Sender;
 use tracing::{Level, error, info, warn};
 
@@ -87,8 +87,8 @@ pub struct Task {
 }
 
 pub struct App {
-    /// Prompt input field.
-    pub input: InputLine,
+    /// Prompt line editor.
+    pub editor: LineEditor,
     /// Running tasks, in launch order.
     pub tasks: Vec<Task>,
     /// Lines to insert above the viewport on the next loop iteration.
@@ -102,7 +102,7 @@ pub struct App {
 impl App {
     pub fn new(tx: Sender<AppEvent>) -> Self {
         Self {
-            input: InputLine::default(),
+            editor: LineEditor::new(EditorConfig::default()),
             tasks: Vec::new(),
             output: Vec::new(),
             should_quit: false,
@@ -133,32 +133,21 @@ impl App {
         }
     }
 
+    /// Every key goes to the line editor (key releases, Enter, Ctrl+J, Ctrl+C and Ctrl+D
+    /// included); the application only acts on what it reports.
     fn handle_key(&mut self, key: KeyEvent) {
-        // On Windows, crossterm also emits key release events.
-        if key.kind == KeyEventKind::Release {
-            return;
-        }
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Char('c') if ctrl => self.should_quit = true,
-            KeyCode::Char('d') if ctrl && self.input.value().is_empty() => self.should_quit = true,
-            // In raw mode, `\n` arrives as Ctrl+J (this happens with input
-            // typed before startup that the tty has already converted): like
-            // readline, treat it as Enter.
-            KeyCode::Char('j') if ctrl => self.accept_line(),
-            KeyCode::Enter => self.accept_line(),
-            // Everything else (characters, arrows, Ctrl+A/E/W/U…) is handled by the input line.
-            _ => {
-                self.input.handle_event(&Event::Key(key));
-            }
+        match self.editor.handle_key(key) {
+            EditorEvent::Submit(line) => self.accept_line(&line),
+            // Ctrl+C, or Ctrl+D on an empty line.
+            EditorEvent::Interrupt | EditorEvent::Eof => self.should_quit = true,
+            EditorEvent::Changed | EditorEvent::Ignored => {}
         }
     }
 
-    /// Submit input: echo it above (as in a shell), then execute it.
-    fn accept_line(&mut self) {
-        let line = self.input.value_and_reset();
+    /// Submitted line: echo it above (as in a shell), then execute it.
+    fn accept_line(&mut self, line: &str) {
         self.output.push(Line::from(format!("> {line}")));
-        self.submit(&line);
+        self.submit(line);
     }
 
     /// Add an `[INFO] …` line directly to `output`, bypassing tracing.
@@ -223,6 +212,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
     use tokio::sync::mpsc;
 
     #[test]
@@ -342,7 +332,7 @@ mod tests {
         app.handle_event(key(KeyCode::Char('j'), KeyModifiers::CONTROL));
         let lines: Vec<String> = app.output.iter().map(|l| text(l)).collect();
         assert_eq!(lines, ["> foo", "> bar"]);
-        assert_eq!(app.input.value(), "");
+        assert_eq!(app.editor.value(), "");
     }
 
     #[test]
@@ -354,7 +344,7 @@ mod tests {
             KeyEventKind::Release,
         );
         app.handle_event(AppEvent::Key(release));
-        assert_eq!(app.input.value(), "");
+        assert_eq!(app.editor.value(), "");
     }
 
     #[test]

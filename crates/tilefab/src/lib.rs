@@ -6,7 +6,8 @@
 //! - [`tilefab_core`]: cells, buffer, styles, geometry, styled text, widget traits;
 //! - [`tilefab_cli`]: crossterm backend, terminal, inline viewport;
 //! - `tilefab_widget` (feature `widget`, on by default): gauges, blocks, lists, paragraphs;
-//! - `tilefab_input` (feature `input`, on by default): prompt input line.
+//! - `tilefab_input` (feature `input`, on by default): prompt line editor (its `Command`
+//!   is re-exported as `EditorCommand`).
 //!
 //! Names (`Rect`, `Buffer`, `Style`…) follow ratatui, to feel familiar to its users,
 //! without promising compatibility.
@@ -23,7 +24,10 @@ pub use tilefab_core::{
     Position, Rect, Size, Span, StatefulWidget, Style, Stylize, Text, Widget, convert,
 };
 #[cfg(feature = "input")]
-pub use tilefab_input::InputLine;
+pub use tilefab_input::{
+    Command as EditorCommand, EditorConfig, EditorEvent, EditorStyles, KeyBinding, Keymap,
+    LineEditor,
+};
 #[cfg(feature = "widget")]
 pub use tilefab_widget::{
     Block, BorderType, Borders, Clear, Gauge, LineGauge, List, ListItem, ListState, Padding,

@@ -2,9 +2,13 @@
 
 use std::ops::Range;
 
+use crossterm::event::KeyEvent;
+use tilefab_core::{Buffer, Line, Position, Rect};
+
 use crate::buffer::{self, LineBuffer};
-use crate::keymap::Command;
+use crate::keymap::{Command, Keymap};
 use crate::kill_ring::{KillRing, Side};
+use crate::render::{self, EditorStyles, LineView};
 use crate::undo::{Snapshot, Step, UndoStack};
 
 /// Default maximum length of the line, in bytes.
@@ -16,12 +20,19 @@ pub struct EditorConfig {
     /// Maximum length of the line, in bytes (default 4096): a huge paste cannot exhaust
     /// memory.
     pub max_len: usize,
+    /// Columns of text kept visible on each side of the cursor when the line scrolls
+    /// (default 4; reduced on narrow widths).
+    pub scroll_margin: u16,
+    /// Styles of the hint, the indicators, the search match and the menu.
+    pub styles: EditorStyles,
 }
 
 impl Default for EditorConfig {
     fn default() -> Self {
         Self {
             max_len: DEFAULT_MAX_LEN,
+            scroll_margin: 4,
+            styles: EditorStyles::default(),
         }
     }
 }
@@ -73,9 +84,12 @@ enum Last {
 pub struct LineEditor {
     config: EditorConfig,
     buffer: LineBuffer,
+    keymap: Keymap,
     kill_ring: KillRing,
     undo: UndoStack,
     last: Last,
+    /// First visible column of the line, kept between renders.
+    scroll: usize,
 }
 
 impl LineEditor {
@@ -85,9 +99,11 @@ impl LineEditor {
         Self {
             buffer: LineBuffer::new(config.max_len),
             config,
+            keymap: Keymap::emacs(),
             kill_ring: KillRing::default(),
             undo: UndoStack::default(),
             last: Last::Other,
+            scroll: 0,
         }
     }
 
@@ -116,6 +132,54 @@ impl LineEditor {
         self.undo.close_group();
         self.buffer.set(value, usize::MAX);
         let _ = self.finish_edit(before, Step::Single);
+    }
+
+    /// The key bindings, to change them.
+    pub fn keymap_mut(&mut self) -> &mut Keymap {
+        &mut self.keymap
+    }
+
+    /// Handle a key: look it up in the keymap and run its command. Keys that are not
+    /// editing keys (key releases, unbound shortcuts) are [`EditorEvent::Ignored`].
+    pub fn handle_key(&mut self, key: KeyEvent) -> EditorEvent {
+        match self.keymap.command_for(key) {
+            Some(command) => self.execute(command),
+            None => EditorEvent::Ignored,
+        }
+    }
+
+    /// Draw the prompt and the line on the first row of `area` in `buf`, and return the
+    /// cursor cell (`None` when `area` is empty). Text hidden by the horizontal scroll is
+    /// shown by a dim `…`.
+    ///
+    /// With a `Frame`, place the cursor it returns:
+    ///
+    /// ```ignore
+    /// if let Some(cursor) = editor.render(area, frame.buffer_mut(), &prompt) {
+    ///     frame.set_cursor_position(cursor);
+    /// }
+    /// ```
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer, prompt: &Line<'_>) -> Option<Position> {
+        let area = area.intersection(buf.area());
+        if area.is_empty() {
+            return None;
+        }
+        let row = Rect::new(area.x, area.y, area.width, 1);
+        let view = LineView {
+            text: self.buffer.value(),
+            cursor: self.buffer.cursor(),
+            hint: None,
+            highlight: None,
+        };
+        Some(render::draw_line(
+            buf,
+            row,
+            prompt,
+            &view,
+            &mut self.scroll,
+            self.config.scroll_margin,
+            &self.config.styles,
+        ))
     }
 
     /// Run `command`.
@@ -195,6 +259,18 @@ impl LineEditor {
             }
             Command::Submit => self.submit(),
             Command::Interrupt => EditorEvent::Interrupt,
+            Command::HistoryPrevious
+            | Command::HistoryNext
+            | Command::HistoryPreviousAll
+            | Command::HistoryNextAll
+            | Command::HistoryFirst
+            | Command::HistoryLast
+            | Command::ReverseSearch
+            | Command::ForwardSearch
+            | Command::Complete
+            | Command::CompletePrevious
+            | Command::Cancel
+            | Command::Abort => EditorEvent::Ignored,
         }
     }
 
@@ -349,13 +425,17 @@ impl LineEditor {
         let line = self.buffer.value().to_string();
         self.buffer.clear();
         self.undo.clear();
+        self.scroll = 0;
         EditorEvent::Submit(line)
     }
 }
 
 #[cfg(test)]
+// The command tables of the tests read better without the `Command::` prefix.
+#[allow(clippy::enum_glob_use)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyModifiers;
     use proptest::prelude::*;
 
     /// An editor holding `text`, with the cursor at the byte offset of the `|` in it.
@@ -559,7 +639,10 @@ mod tests {
 
     #[test]
     fn a_full_line_ignores_new_characters() {
-        let mut e = LineEditor::new(EditorConfig { max_len: 3 });
+        let mut e = LineEditor::new(EditorConfig {
+            max_len: 3,
+            ..EditorConfig::default()
+        });
         type_text(&mut e, "abcd");
         assert_eq!(e.value(), "abc");
         assert_eq!(e.execute(Command::InsertChar('x')), EditorEvent::Ignored);
@@ -623,6 +706,105 @@ mod tests {
         assert_eq!(shown(&e), "|");
         assert_eq!(e.execute(Command::Undo), EditorEvent::Ignored);
         assert_eq!(run("|", Command::Interrupt).0, EditorEvent::Interrupt);
+    }
+
+    #[test]
+    fn every_default_editing_binding_runs_its_command() {
+        use crossterm::event::KeyCode::*;
+        let (none, ctrl, alt) = (KeyModifiers::NONE, KeyModifiers::CONTROL, KeyModifiers::ALT);
+        let cases = [
+            (Left, none, "ab|", "a|b"),
+            (Char('b'), ctrl, "ab|", "a|b"),
+            (Right, none, "|ab", "a|b"),
+            (Char('f'), ctrl, "|ab", "a|b"),
+            (Left, ctrl, "foo bar|", "foo |bar"),
+            (Left, alt, "foo bar|", "foo |bar"),
+            (Char('b'), alt, "foo bar|", "foo |bar"),
+            (Right, ctrl, "|foo bar", "foo| bar"),
+            (Right, alt, "|foo bar", "foo| bar"),
+            (Char('f'), alt, "|foo bar", "foo| bar"),
+            (Home, none, "ab|", "|ab"),
+            (Char('a'), ctrl, "ab|", "|ab"),
+            (End, none, "|ab", "ab|"),
+            (Char('e'), ctrl, "|ab", "ab|"),
+            (Backspace, none, "ab|", "a|"),
+            (Char('h'), ctrl, "ab|", "a|"),
+            (Delete, none, "|ab", "|b"),
+            (Char('d'), ctrl, "|ab", "|b"),
+            (Backspace, alt, "x foo-bar|", "x foo-|"),
+            (Char('w'), ctrl, "x foo-bar|", "x |"),
+            (Char('d'), alt, "|foo bar", "| bar"),
+            (Delete, ctrl, "|foo bar", "| bar"),
+            (Char('u'), ctrl, "ab|cd", "|cd"),
+            (Char('k'), ctrl, "ab|cd", "ab|"),
+            (Char('t'), ctrl, "ab|", "ba|"),
+            (Char('t'), alt, "foo bar|", "bar foo|"),
+            (Char('u'), alt, "|foo", "FOO|"),
+            (Char('l'), alt, "|FOO", "foo|"),
+            (Char('c'), alt, "|foo", "Foo|"),
+            (Char('x'), none, "a|", "ax|"),
+        ];
+        for (code, modifiers, before, after) in cases {
+            let mut e = editor(before);
+            let _ = e.handle_key(KeyEvent::new(code, modifiers));
+            assert_eq!(shown(&e), after, "{modifiers:?}+{code:?} on {before:?}");
+        }
+    }
+
+    #[test]
+    fn default_bindings_for_submit_interrupt_eof_yank_and_undo() {
+        use crossterm::event::KeyCode::*;
+        let (none, ctrl, alt) = (KeyModifiers::NONE, KeyModifiers::CONTROL, KeyModifiers::ALT);
+        let key = |code, modifiers| KeyEvent::new(code, modifiers);
+        for (code, modifiers) in [(Enter, none), (Char('j'), ctrl), (Char('m'), ctrl)] {
+            let mut e = editor("ls|");
+            assert_eq!(
+                e.handle_key(key(code, modifiers)),
+                EditorEvent::Submit("ls".into())
+            );
+        }
+        assert_eq!(
+            editor("x|").handle_key(key(Char('c'), ctrl)),
+            EditorEvent::Interrupt
+        );
+        assert_eq!(
+            editor("|").handle_key(key(Char('d'), ctrl)),
+            EditorEvent::Eof
+        );
+
+        let mut e = editor("one two|");
+        let _ = e.handle_key(key(Char('w'), ctrl));
+        let _ = e.handle_key(key(Char('w'), ctrl));
+        let _ = e.handle_key(key(Char('k'), ctrl));
+        let _ = e.handle_key(key(Char('y'), ctrl));
+        assert_eq!(shown(&e), "one two|");
+        let _ = e.handle_key(key(Char('a'), ctrl));
+        let _ = e.handle_key(key(Char('k'), ctrl));
+        type_text(&mut e, "x");
+        let _ = e.handle_key(key(Char('w'), ctrl));
+        let _ = e.handle_key(key(Char('y'), ctrl));
+        assert_eq!(shown(&e), "x|");
+        let _ = e.handle_key(key(Char('y'), alt));
+        assert_eq!(shown(&e), "one two|");
+
+        for (code, modifiers) in [
+            (Char('_'), ctrl),
+            (Char('/'), ctrl),
+            (Char('7'), ctrl),
+            (Char('z'), ctrl),
+        ] {
+            let mut e = editor("|");
+            type_text(&mut e, "abc");
+            let _ = e.handle_key(key(code, modifiers));
+            assert_eq!(e.value(), "", "{modifiers:?}+{code:?}");
+            let redo = if code == Char('/') {
+                Char('/')
+            } else {
+                Char('_')
+            };
+            let _ = e.handle_key(key(redo, alt));
+            assert_eq!(e.value(), "abc", "redo after {modifiers:?}+{code:?}");
+        }
     }
 
     #[test]
@@ -711,7 +893,7 @@ mod tests {
             commands in prop::collection::vec(command_strategy(), 0..40),
             max_len in 1usize..40,
         ) {
-            let mut e = LineEditor::new(EditorConfig { max_len });
+            let mut e = LineEditor::new(EditorConfig { max_len, ..EditorConfig::default() });
             e.set_value(&text);
             assert_invariants(&e, max_len);
             for command in commands {

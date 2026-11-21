@@ -13,8 +13,8 @@ ignore = []
 
 # Crates that are banned or present in several versions.
 [bans]
-# Known duplicate: `syn` 2 (derive_more-impl, through crossterm's default features)
-# and `syn` 3 (tokio-macros). Only costs build time, so warn instead of failing.
+# No duplicate today (`syn` 2 left with crossterm's default `derive-more` feature, see the
+# root Cargo.toml). Warn rather than fail: a future update may bring one back for a while.
 multiple-versions = "warn"
 wildcards = "deny"
 # This crate is not published: path dependencies without a version are fine.
