@@ -204,6 +204,54 @@ impl LineEditor {
         &self.history
     }
 
+    /// The history, to add entries or replace it (for instance with one loaded from a
+    /// file, see [`History::with_file`]).
+    pub fn history_mut(&mut self) -> &mut History {
+        &mut self.history
+    }
+
+    /// The last error writing the history file, once (see [`History::take_error`]).
+    pub fn take_history_error(&mut self) -> Option<std::io::Error> {
+        self.history.take_error()
+    }
+
+    /// Insert pasted text at the cursor, as **one** undo step: line breaks and tabs
+    /// become spaces, other control characters are removed, and the text is cut to the
+    /// maximum length. It never submits. During a search, the text is added to the query;
+    /// with the menu open, the menu is closed first.
+    pub fn paste(&mut self, text: &str) -> EditorEvent {
+        let text = buffer::sanitize(text);
+        self.last = Last::Other;
+        self.undo.close_group();
+        match std::mem::replace(&mut self.mode, Mode::Normal) {
+            Mode::Search(mut search) => {
+                let room = self.config.max_len.saturating_sub(search.query.len());
+                let text = buffer::truncate(&text, room);
+                if text.is_empty() {
+                    self.mode = Mode::Search(search);
+                    return EditorEvent::Ignored;
+                }
+                search.query.push_str(text);
+                let from = search
+                    .found
+                    .as_ref()
+                    .map_or(self.history.len(), |(index, _)| *index);
+                search.find(&self.history, from, false);
+                self.show_search(search)
+            }
+            Mode::Menu(menu) => {
+                self.close_menu(menu);
+                let _ = self.edit(Step::Single, |b| {
+                    b.insert(&text);
+                });
+                EditorEvent::Changed
+            }
+            Mode::Normal => self.edit(Step::Single, |b| {
+                b.insert(&text);
+            }),
+        }
+    }
+
     /// The settings the editor was created with.
     #[must_use]
     pub fn config(&self) -> &EditorConfig {
@@ -1717,6 +1765,38 @@ mod tests {
         let mut e = LineEditor::new(EditorConfig::default()).with_completer(Bad);
         type_text(&mut e, "a");
         assert_eq!(e.execute(Command::Complete), EditorEvent::Ignored);
+    }
+
+    #[test]
+    fn a_paste_is_one_undo_step_on_one_line_and_never_submits() {
+        let mut e = editor("a|z");
+        assert_eq!(
+            e.paste("one\r\ntwo\nthree\tfour\u{1b}[31m"),
+            EditorEvent::Changed
+        );
+        assert_eq!(shown(&e), "aone two three four[31m|z");
+        let _ = e.execute(Command::Undo);
+        assert_eq!(shown(&e), "a|z");
+        assert_eq!(e.paste("\u{7}"), EditorEvent::Ignored);
+        let mut small = LineEditor::new(EditorConfig {
+            max_len: 4,
+            ..EditorConfig::default()
+        });
+        let _ = small.paste("abcdef");
+        assert_eq!(small.value(), "abcd");
+    }
+
+    #[test]
+    fn a_paste_extends_the_search_query_or_closes_the_menu() {
+        let mut e = searching(&["start alpha", "list"], "", "st");
+        let _ = e.paste("art a");
+        assert_eq!(search_prompt(&e).as_deref(), Some("(search) start a: "));
+        assert_eq!(e.value(), "start alpha");
+        let mut e = completing(&["status", "stop"], "st");
+        let _ = e.execute(Command::CompletePrevious);
+        let _ = e.paste(" x");
+        assert!(!menu_open(&e));
+        assert_eq!(shown(&e), "stop x|");
     }
 
     #[test]

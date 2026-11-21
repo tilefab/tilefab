@@ -38,6 +38,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TERM_NAME="${1:-}"
 SCENARIO="${2:-}"
 COMMAND="${3:-$ROOT/target/debug/tilefab}"
+# The command runs with TILEFAB_HISTORY= (no history file): recordings never touch the
+# user's history.
 COLS="${COLS:-100}"
 ROWS="${ROWS:-30}"
 FONT_SIZE="${FONT_SIZE:-14}"
@@ -116,7 +118,7 @@ tell application "Terminal"
     set w to front window
     set position of w to {80, 60}
     delay 0.5
-    do script "clear; exec '$COMMAND'" in t
+    do script "clear; TILEFAB_HISTORY= exec '$COMMAND'" in t
     set b to bounds of w
     return "" & (item 1 of b) & "," & (item 2 of b) & "," & ((item 3 of b) - (item 1 of b)) & "," & ((item 4 of b) - (item 2 of b))
 end tell
@@ -133,7 +135,7 @@ iterm_open() {
 tell application "iTerm"
     activate
     set w to (create window with profile "$PROFILE")
-    tell current session of w to write text "clear; exec '$COMMAND'"
+    tell current session of w to write text "clear; TILEFAB_HISTORY= exec '$COMMAND'"
     delay 0.5
     set b to bounds of w
     return "" & (item 1 of b) & "," & (item 2 of b) & "," & ((item 3 of b) - (item 1 of b)) & "," & ((item 4 of b) - (item 2 of b))

@@ -1,4 +1,4 @@
-//! Terminal setup and restoration: raw mode, alternate screen, cursor.
+//! Terminal setup and restoration: raw mode, alternate screen, cursor, bracketed paste.
 //!
 //! The [`TerminalGuard`] is a guard: it enables the required modes on creation and **undoes
 //! everything in its `Drop`**, including on errors or early returns. For panics, which
@@ -21,6 +21,7 @@ use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossterm::cursor::Show;
+use crossterm::event::DisableBracketedPaste;
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -125,6 +126,11 @@ fn restore_to(out: &mut impl Write) -> io::Result<()> {
         }
     };
     keep(execute!(out, Show));
+    // `ESC[?2004l`: turn bracketed paste off, in case the application turned it on (a
+    // shell left with it on would see pasted text wrapped in `ESC[200~ … ESC[201~`).
+    // Harmless when it was off. Its result is ignored: the legacy Windows console API
+    // has no bracketed paste and reports an error.
+    let _ = execute!(out, DisableBracketedPaste);
     if ALTERNATE_SCREEN.swap(false, Ordering::SeqCst) {
         keep(execute!(out, LeaveAlternateScreen));
     }
@@ -194,15 +200,16 @@ mod tests {
         let mut out = Vec::new();
         restore_to(&mut out).unwrap();
         assert_eq!(
-            out, b"\x1b[?25h\x1b[?1049l",
-            "show the cursor, leave the alternate screen"
+            out, b"\x1b[?25h\x1b[?2004l\x1b[?1049l",
+            "show the cursor, disable bracketed paste, leave the alternate screen"
         );
         assert!(!ALTERNATE_SCREEN.load(Ordering::SeqCst));
 
-        // Second call: the alternate screen is already left, only the cursor is shown again.
+        // Second call: the alternate screen is already left; the cursor is shown again and
+        // bracketed paste disabled again.
         out.clear();
         restore_to(&mut out).unwrap();
-        assert_eq!(out, b"\x1b[?25h");
+        assert_eq!(out, b"\x1b[?25h\x1b[?2004l");
         assert!(!ALTERNATE_SCREEN.load(Ordering::SeqCst));
     }
 

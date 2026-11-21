@@ -1,7 +1,12 @@
 //! Application state, event handling, and command processing.
 
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+
 use crossterm::event::KeyEvent;
-use tilefab::{Candidate, Completer, Completions, EditorConfig, EditorEvent, Line, LineEditor};
+use tilefab::{
+    Candidate, Completer, Completions, EditorConfig, EditorEvent, History, Line, LineEditor,
+};
 use tokio::sync::mpsc::Sender;
 use tracing::{Level, error, info, warn};
 
@@ -15,6 +20,8 @@ use crate::tasks::{self, TaskId};
 pub enum AppEvent {
     /// Key read by the keyboard thread.
     Key(KeyEvent),
+    /// Text pasted in the terminal (bracketed paste), read by the keyboard thread.
+    Paste(String),
     /// The terminal was resized (redrawing is enough: `draw` handles resizing).
     Resize,
     /// Complete log line produced by tracing (see `logging.rs`).
@@ -173,6 +180,24 @@ impl Completer for CommandCompleter {
     }
 }
 
+/// Where the history is kept, given a way to read environment variables: `$TILEFAB_HISTORY`
+/// if set (empty: no history file), else `$XDG_STATE_HOME/tilefab/history` (an absolute
+/// path only, as the XDG specification requires), else `$HOME/.local/state/tilefab/history`;
+/// `None` when none of them is available.
+pub fn history_path(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    if let Some(path) = var("TILEFAB_HISTORY") {
+        return (!path.is_empty()).then(|| PathBuf::from(path));
+    }
+    if let Some(state) = var("XDG_STATE_HOME").map(PathBuf::from)
+        && state.is_absolute()
+    {
+        return Some(state.join("tilefab").join("history"));
+    }
+    var("HOME")
+        .filter(|home| !home.is_empty())
+        .map(|home| PathBuf::from(home).join(".local/state/tilefab/history"))
+}
+
 /// A running task, as seen by the UI.
 #[derive(Debug)]
 pub struct Task {
@@ -209,6 +234,9 @@ impl App {
     pub fn handle_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::Key(key) => self.handle_key(key),
+            AppEvent::Paste(text) => {
+                let _ = self.editor.paste(&text);
+            }
             AppEvent::Log(line) => self.output.push(Line::from(line)),
             AppEvent::Progress { id, ratio } => {
                 if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
@@ -242,7 +270,24 @@ impl App {
     /// Submitted line: echo it above (as in a shell), then execute it.
     fn accept_line(&mut self, line: &str) {
         self.output.push(Line::from(format!("> {line}")));
+        if let Some(error) = self.editor.take_history_error() {
+            warn!("cannot write the history file ({error}): history kept in memory only");
+        }
         self.submit(line);
+    }
+
+    /// Use the history file at `path` (loaded now, each submitted line appended). An error
+    /// is logged once; the history then works in memory only.
+    pub fn load_history(&mut self, path: &Path) {
+        let capacity = self.editor.config().history_capacity;
+        let (history, error) = History::with_file(path, capacity);
+        if let Some(error) = error {
+            warn!(
+                "cannot use the history file {} ({error}): history kept in memory only",
+                path.display()
+            );
+        }
+        *self.editor.history_mut() = history;
     }
 
     /// Add an `[INFO] …` line directly to `output`, bypassing tracing.
@@ -503,6 +548,77 @@ mod tests {
             "the menu opens on the first command"
         );
         assert!(app.editor.extra_rows(100) > 0);
+    }
+
+    #[test]
+    fn the_history_path_follows_tilefab_history_then_xdg_then_home() {
+        let env = |vars: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                vars.iter()
+                    .find(|(n, _)| *n == name)
+                    .map(|(_, v)| OsString::from(v))
+            }
+        };
+        let path = |vars| history_path(env(vars));
+        assert_eq!(
+            path(&[("TILEFAB_HISTORY", "/tmp/h"), ("HOME", "/home/u")]),
+            Some(PathBuf::from("/tmp/h"))
+        );
+        // An empty value disables the file.
+        assert_eq!(path(&[("TILEFAB_HISTORY", ""), ("HOME", "/home/u")]), None);
+        assert_eq!(
+            path(&[("XDG_STATE_HOME", "/state"), ("HOME", "/home/u")]),
+            Some(PathBuf::from("/state/tilefab/history"))
+        );
+        // A relative XDG_STATE_HOME is ignored.
+        assert_eq!(
+            path(&[("XDG_STATE_HOME", "state"), ("HOME", "/home/u")]),
+            Some(PathBuf::from("/home/u/.local/state/tilefab/history"))
+        );
+        assert_eq!(path(&[]), None);
+    }
+
+    #[test]
+    fn submitted_lines_go_to_the_history_file() {
+        let dir = std::env::temp_dir().join(format!("tilefab-demo-history-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("history");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, "list\n").unwrap();
+        let mut app = new_app();
+        app.load_history(&path);
+        assert_eq!(app.editor.history().get(0), Some("list"));
+        type_text(&mut app, "help");
+        app.handle_event(key(KeyCode::Enter, KeyModifiers::NONE));
+        // A line starting with a space is not recorded.
+        type_text(&mut app, " list");
+        app.handle_event(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "list\nhelp\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unusable_history_file_is_reported_once() {
+        let dir =
+            std::env::temp_dir().join(format!("tilefab-demo-bad-history-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = new_app();
+        // A directory is not a history file.
+        let logs = logging::capture(|| app.load_history(&dir));
+        assert_eq!(logs.len(), 1, "{logs:?}");
+        assert!(
+            logs[0].starts_with("[WARN] cannot use the history file"),
+            "{logs:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_paste_is_inserted_on_the_prompt_line_without_running() {
+        let mut app = new_app();
+        app.handle_event(AppEvent::Paste("list\nhelp\n".into()));
+        assert_eq!(app.editor.value(), "list help ");
+        assert_eq!(app.output, []);
     }
 
     #[test]
