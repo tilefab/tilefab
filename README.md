@@ -107,7 +107,7 @@ cargo fmt --check
 cargo test                      # library (buffer, text, layout, widgets, backend, viewport) and application
 cargo clippy --all-targets --all-features -- -D warnings
 cargo clippy --release --all-targets --all-features -- -D warnings
-cargo test --release          # release build: the debug-only `panic` command is absent
+cargo test --profile ci       # release build with overflow checks: the debug-only `panic` command is absent
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 cargo deny check                # advisories, bans, licenses (see deny.toml), sources
 ```

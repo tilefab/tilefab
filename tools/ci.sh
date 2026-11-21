@@ -27,9 +27,10 @@ step cargo fmt --check
 step cargo clippy --locked --all-targets --all-features -- -D warnings
 step cargo test --locked --all-features
 # Release build: code under `cfg(debug_assertions)` (the hidden `panic` command) must
-# compile cleanly without it, and its release-only tests must pass.
+# compile cleanly without it, and its release-only tests must pass. The tests use the `ci`
+# profile (Cargo.toml): `release` with overflow checks, so an overflow panics there too.
 step cargo clippy --locked --release --all-targets --all-features -- -D warnings
-step cargo test --locked --release --all-features
+step cargo test --locked --profile ci --all-features
 RUSTDOCFLAGS="-D warnings" step cargo doc --locked --no-deps
 step cargo deny --locked check
 
