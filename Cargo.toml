@@ -58,23 +58,20 @@ unsafe_code = "forbid"
 pedantic = { level = "warn", priority = -1 }
 
 # Release binary (`cargo build --release`): a single, fully optimized codegen unit with
-# thin LTO across crates, and symbols stripped. On the demo, the binary shrinks from 2.2 MB
-# to 1.4 MB; in exchange, a release build links in about 12 s instead of 1 s. Stripping
-# only removes symbol names from backtraces: a panic report still gives its message and
-# location (`file:line`).
+# thin LTO across crates; in exchange, a release build links in about 12 s instead of 1 s.
+# Symbols are kept (Cargo's default only strips the debug info), so a backtrace shows
+# function names: `strip = true` would shrink the demo binary from 1.8 MB to 1.4 MB.
 [profile.release]
 lto = "thin"
 codegen-units = 1
-strip = true
 
 # Release build used by the tests of tools/ci.sh (`cargo test --profile ci`): same
 # optimizations and same `cfg(debug_assertions)` as `release`, but an integer overflow
 # panics instead of wrapping silently, so the release-only code paths are checked too.
-# Symbols are kept for readable backtraces when a test fails, and thin LTO across a
-# single codegen unit is dropped: it only slows down the build of the test binaries.
+# Thin LTO across a single codegen unit is dropped: it only slows down the build of the
+# test binaries.
 [profile.ci]
 inherits = "release"
 overflow-checks = true
 lto = false
 codegen-units = 16
-strip = false
