@@ -1,6 +1,11 @@
 # Continuous integration: runs tools/ci.sh (fmt, clippy, tests, doc, cargo-deny) with the
 # toolchain pinned in rust-toolchain.toml, then builds and tests with the MSRV (job `msrv`).
 # The pty scripts of tools/ are kept local (see README.md).
+#
+# Actions are pinned by commit SHA, not by tag (a tag can be moved to other code); the
+# comment gives the version (a format Dependabot understands, if it is enabled). Cargo
+# commands run with `--locked`: a Cargo.lock out of sync with Cargo.toml fails instead of
+# being updated.
 name: CI
 
 on:
@@ -17,19 +22,20 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # Installs the toolchain and components named in rust-toolchain.toml.
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install && rustc --version
 
       - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
+      # Fixed version: deny.toml is checked against it (update both together).
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2.90.7
         with:
-          tool: cargo-deny
+          tool: cargo-deny@0.21.0
 
       - name: Run checks
         run: tools/ci.sh
@@ -38,14 +44,15 @@ jobs:
   msrv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
+      # rustup is preinstalled on the runner: no third-party action needed.
       - name: Install Rust 1.88
-        uses: dtolnay/rust-toolchain@1.88
+        run: rustup toolchain install 1.88 --profile minimal && rustc +1.88 --version
 
       - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       # `+1.88`: without it, rust-toolchain.toml would win and the job would not test the MSRV.
       - name: Build and test
-        run: cargo +1.88 test --all-targets --all-features
+        run: cargo +1.88 test --locked --all-targets --all-features

@@ -100,7 +100,7 @@ Notable choices:
 
 ## Tests and checks
 
-`tools/ci.sh` runs all the checks below, in the same way as the CI workflow (`.github/workflows/ci.yml`); it requires `cargo-deny`:
+`tools/ci.sh` runs all the checks below, in the same way as the CI workflow (`.github/workflows/ci.yml`), with `--locked` so that a `Cargo.lock` out of sync with `Cargo.toml` fails; it requires `cargo-deny` 0.21.0, the version the CI installs:
 
 ```sh
 cargo fmt --check

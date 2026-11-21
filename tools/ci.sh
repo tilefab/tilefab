@@ -4,7 +4,9 @@
 #
 #   tools/ci.sh
 #
-# Requires cargo-deny (`cargo install --locked cargo-deny`).
+# Requires cargo-deny 0.21.0, the version the CI installs (`cargo install --locked cargo-deny@0.21.0`).
+# Cargo commands run with `--locked`: a Cargo.lock out of sync with Cargo.toml fails instead of
+# being updated silently.
 # The pty scripts of tools/ (check_inline.py, check_app.py) are not run here: see README.md.
 
 set -euo pipefail
@@ -17,18 +19,18 @@ step() {
 }
 
 if ! command -v cargo-deny >/dev/null 2>&1; then
-    echo "error: cargo-deny is not installed (cargo install --locked cargo-deny)" >&2
+    echo "error: cargo-deny is not installed (cargo install --locked cargo-deny@0.21.0)" >&2
     exit 1
 fi
 
 step cargo fmt --check
-step cargo clippy --all-targets --all-features -- -D warnings
-step cargo test --all-features
+step cargo clippy --locked --all-targets --all-features -- -D warnings
+step cargo test --locked --all-features
 # Release build: code under `cfg(debug_assertions)` (the hidden `panic` command) must
 # compile cleanly without it, and its release-only tests must pass.
-step cargo clippy --release --all-targets --all-features -- -D warnings
-step cargo test --release --all-features
-RUSTDOCFLAGS="-D warnings" step cargo doc --no-deps
-step cargo deny check
+step cargo clippy --locked --release --all-targets --all-features -- -D warnings
+step cargo test --locked --release --all-features
+RUSTDOCFLAGS="-D warnings" step cargo doc --locked --no-deps
+step cargo deny --locked check
 
 printf '\nAll checks passed.\n'
