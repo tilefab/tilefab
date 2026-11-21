@@ -44,20 +44,31 @@ async fn main() -> Result<()> {
 
     // Without a terminal on both sides, the UI cannot run: use headless mode.
     if !stdin().is_terminal() || !stdout().is_terminal() {
-        return headless::run().await;
+        return headless::run(None).await;
     }
 
     install_panic_hook();
     // The guard enables raw mode; its `Drop` disables it, even if the loop fails.
-    let _guard = TerminalGuard::raw()?;
+    let guard = TerminalGuard::raw()?;
     // A single-line viewport when idle (the prompt); it grows with the tasks.
-    let mut terminal: AppTerminal = Terminal::with_options(
+    let started = Terminal::with_options(
         Backend::new(BufWriter::new(stdout())),
         TerminalOptions {
             viewport: Viewport::Inline(1),
             ..TerminalOptions::default()
         },
-    )?;
+    );
+    let mut terminal: AppTerminal = match started {
+        Ok(terminal) => terminal,
+        // Typically a terminal that does not answer the cursor position query (`ESC[6n`):
+        // the inline viewport cannot be placed, but the commands still work line by line.
+        // Raw mode is disabled first, so that stdin is read as lines again.
+        Err(error) => {
+            drop(guard);
+            let reason = format!("cannot start the inline UI ({error}): using headless mode");
+            return headless::run(Some(&reason)).await;
+        }
+    };
 
     let (tx, rx) = mpsc::channel(EVENT_QUEUE);
     spawn_keyboard_thread(tx.clone());

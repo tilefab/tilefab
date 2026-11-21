@@ -13,8 +13,15 @@ use tokio::sync::mpsc::{self, Sender};
 use crate::app::{App, AppEvent};
 use crate::logging;
 
-pub async fn run() -> Result<()> {
+/// Run the commands read from stdin until it ends (and the tasks finish) or `quit`.
+///
+/// `warning`, when given, is logged first: the reason why the interactive UI was not
+/// used although stdin and stdout are terminals.
+pub async fn run(warning: Option<&str>) -> Result<()> {
     logging::init_stderr();
+    if let Some(warning) = warning {
+        tracing::warn!("{warning}");
+    }
 
     let (tx, mut rx) = mpsc::channel(crate::EVENT_QUEUE);
     spawn_stdin_thread(tx.clone());
