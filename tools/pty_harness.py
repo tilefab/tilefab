@@ -108,7 +108,9 @@ class Term:
         self.exit_code: int | None = None  # set once the program has exited (see `alive`)
         self.pid, self.fd = pty.fork()
         if self.pid == 0:  # child
-            child_env = dict(os.environ, TERM="xterm-256color", **(env or {}))
+            # TILEFAB_HISTORY="" keeps the checks away from the user's history file
+            # (a scenario can still pass its own path in `env`).
+            child_env = {**os.environ, "TERM": "xterm-256color", "TILEFAB_HISTORY": "", **(env or {})}
             os.execvpe(argv[0], list(argv), child_env)
         self._set_winsize()
         self.screen = _Screen(cols, rows, self._write)

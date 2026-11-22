@@ -2,9 +2,6 @@
 //!
 //! The other crates of the workspace (`tilefab-cli`, `tilefab-widget`, `tilefab-input`)
 //! build on this one, which depends on none of them and does no input/output (no crossterm).
-//!
-//! Names (`Rect`, `Buffer`, `Style`…) follow ratatui, to feel familiar to its users,
-//! without promising compatibility.
 
 // The entire public API is documented; the lint catches omissions.
 #![warn(missing_docs)]

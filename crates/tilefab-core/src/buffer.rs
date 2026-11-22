@@ -301,7 +301,7 @@ impl Buffer {
         }
     }
 
-    /// A buffer built from text lines, in ratatui's style: convenient for
+    /// A buffer built from text lines: convenient for
     /// writing expected test output. Its width is that of the widest line
     /// (in display columns); shorter lines are padded with spaces.
     pub fn with_lines<S: AsRef<str>>(lines: impl IntoIterator<Item = S>) -> Self {

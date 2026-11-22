@@ -11,15 +11,21 @@ const PROMPT: &str = "> ";
 /// Width of the task name column (longer names are truncated).
 const NAME_WIDTH: u16 = 10;
 
-/// Desired viewport height: one line per task, plus the prompt line.
-pub fn viewport_height(app: &App) -> u16 {
-    saturating_u16(app.tasks.len()).saturating_add(1)
+/// Desired viewport height in a terminal `width` columns wide: one line per task, the
+/// prompt line, and the rows of the completion menu when it is open.
+pub fn viewport_height(app: &App, width: u16) -> u16 {
+    saturating_u16(app.tasks.len())
+        .saturating_add(1)
+        .saturating_add(app.editor.extra_rows(width))
 }
 
-pub fn draw(frame: &mut Frame, app: &App) {
-    // The top of the viewport is reserved for task bars, the last line for the prompt.
+pub fn draw(frame: &mut Frame, app: &mut App) {
+    // The top of the viewport is reserved for task bars, the bottom for the prompt and
+    // the completion menu below it.
+    let prompt_rows = 1 + app.editor.extra_rows(frame.area().width);
     let [tasks_area, prompt_area] =
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(prompt_rows)])
+            .areas(frame.area());
 
     // One line per task, from the top; extra lines remain empty.
     for (task, row) in app.tasks.iter().zip(tasks_area.rows()) {
@@ -55,27 +61,13 @@ fn draw_task(frame: &mut Frame, task: &Task, area: Rect) {
     );
 }
 
-fn draw_prompt(frame: &mut Frame, app: &App, area: Rect) {
-    let [prefix_area, input_area] = Layout::horizontal([
-        Constraint::Length(saturating_u16(PROMPT.len())),
-        Constraint::Fill(1),
-    ])
-    .areas(area);
-    frame.render_widget(Line::from(PROMPT.bold()), prefix_area);
-
-    // Horizontal scrolling: the input line computes how many columns to shift
-    // the text to keep the cursor visible. Reserve one free column
-    // for the cursor at the end of the line.
-    let width = input_area.width.saturating_sub(1) as usize;
-    let scroll = app.input.visual_scroll(width);
-    frame.render_widget(
-        Paragraph::new(app.input.value()).scroll((0, saturating_u16(scroll))),
-        input_area,
-    );
-
-    // Cursor position in display columns (handles accents and wide emoji).
-    let cursor_x = saturating_u16(app.input.visual_cursor().saturating_sub(scroll));
-    frame.set_cursor_position((input_area.x + cursor_x, input_area.y));
+fn draw_prompt(frame: &mut Frame, app: &mut App, area: Rect) {
+    // The editor draws the prompt and the line (horizontal scrolling, `…` for hidden
+    // text) and returns where the cursor goes.
+    let prompt = Line::from(PROMPT.bold());
+    if let Some(cursor) = app.editor.render(area, frame.buffer_mut(), &prompt) {
+        frame.set_cursor_position(cursor);
+    }
 }
 
 /// Prepare a block of lines to insert above the viewport: return the
@@ -88,13 +80,16 @@ pub fn wrapped_lines(lines: Vec<Line<'static>>, width: u16) -> (Paragraph<'stati
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use tilefab::{Backend, Position, Size, Terminal};
     use tokio::sync::mpsc;
+
+    use crate::app::AppEvent;
 
     use super::*;
 
     /// Draw the application in a simulated terminal and return the screen lines.
-    fn render(app: &App, width: u16, height: u16) -> Vec<String> {
+    fn render(app: &mut App, width: u16, height: u16) -> Vec<String> {
         let backend =
             Backend::with_fixed(Vec::new(), Size::new(width, height), Position::new(0, 0));
         let mut terminal = Terminal::new(backend).unwrap();
@@ -122,20 +117,42 @@ mod tests {
 
     #[test]
     fn viewport_height_is_one_line_per_task_plus_the_prompt() {
-        assert_eq!(viewport_height(&app_with_tasks(0)), 1);
-        assert_eq!(viewport_height(&app_with_tasks(3)), 4);
+        assert_eq!(viewport_height(&app_with_tasks(0), 80), 1);
+        assert_eq!(viewport_height(&app_with_tasks(3), 80), 4);
+    }
+
+    #[test]
+    fn the_open_menu_adds_its_rows_below_the_prompt() {
+        let mut app = app_with_tasks(1);
+        app.handle_event(AppEvent::Key(KeyEvent::new(
+            KeyCode::Tab,
+            KeyModifiers::NONE,
+        )));
+        // Five commands with descriptions: one per row, up to the 5-row limit.
+        assert_eq!(viewport_height(&app, 80), 1 + 1 + 5);
+        let rows = render(&mut app, 40, 7);
+        assert!(rows[0].starts_with("t0"), "{rows:?}");
+        assert_eq!(rows[1], "> start");
+        assert!(rows[2].starts_with("start  start a task"), "{rows:?}");
+        assert!(rows[6].starts_with("exit"), "{rows:?}");
+        // Esc closes it: the viewport shrinks back.
+        app.handle_event(AppEvent::Key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(viewport_height(&app, 80), 2);
     }
 
     #[test]
     fn idle_viewport_is_only_the_prompt() {
-        let app = app_with_tasks(0);
-        assert_eq!(render(&app, 30, 1), [">"]);
+        let mut app = app_with_tasks(0);
+        assert_eq!(render(&mut app, 30, 1), [">"]);
     }
 
     #[test]
     fn each_task_gets_a_row_above_the_prompt() {
-        let app = app_with_tasks(2);
-        let rows = render(&app, 30, 3);
+        let mut app = app_with_tasks(2);
+        let rows = render(&mut app, 30, 3);
         assert!(rows[0].starts_with("t0"), "{rows:?}");
         assert!(rows[0].ends_with(" 50%"), "{rows:?}");
         assert!(rows[1].starts_with("t1"), "{rows:?}");

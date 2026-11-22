@@ -8,10 +8,12 @@ mod tasks;
 mod ui;
 
 use std::io::{BufWriter, IsTerminal, Stdout, Write, stdin, stdout};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use color_eyre::Result;
-use crossterm::event::{self, Event};
+use crossterm::event::{self, EnableBracketedPaste, Event};
+use crossterm::execute;
 use tilefab::{
     Backend, Line, Terminal, TerminalGuard, TerminalOptions, Viewport, install_fatal_panic_hook,
 };
@@ -51,6 +53,12 @@ async fn main() -> Result<()> {
     install_fatal_panic_hook();
     // The guard enables raw mode; its `Drop` disables it, even if the loop fails.
     let guard = TerminalGuard::raw()?;
+    // `ESC[?2004h`: bracketed paste. The terminal wraps pasted text in `ESC[200~ … ESC[201~`,
+    // which crossterm reports as one `Event::Paste`: a multi-line paste is inserted on the
+    // prompt line instead of running each line. Sent before the first frame, and turned
+    // off by the guard's restoration. Without support (legacy Windows console), pasted
+    // text arrives as keys.
+    let _ = execute!(stdout(), EnableBracketedPaste);
     // A single-line viewport when idle (the prompt); it grows with the tasks.
     let started = Terminal::with_options(
         Backend::new(BufWriter::new(stdout())),
@@ -78,7 +86,8 @@ async fn main() -> Result<()> {
     spawn_signal_listener(tx.clone())?;
     let dropped_logs = logging::init_channel(tx.clone());
 
-    let result = run(&mut terminal, tx, rx, &dropped_logs).await;
+    let history = app::history_path(|name| std::env::var_os(name));
+    let result = run(&mut terminal, tx, rx, &dropped_logs, history).await;
 
     // Cleanup runs even if the loop failed: clear the viewport and move the cursor to
     // its start. The shell resumes just below the logs, which remain in scrollback.
@@ -112,7 +121,8 @@ fn spawn_keyboard_thread(tx: Sender<AppEvent>) {
             let app_event = match event::read() {
                 Ok(Event::Key(key)) => AppEvent::Key(key),
                 Ok(Event::Resize(_, _)) => AppEvent::Resize,
-                Ok(_) => continue, // mouse, focus, paste: ignored
+                Ok(Event::Paste(text)) => AppEvent::Paste(text),
+                Ok(_) => continue, // mouse, focus: ignored
                 Err(_) => break,
             };
             if tx.blocking_send(app_event).is_err() {
@@ -173,9 +183,13 @@ async fn run<W: Write>(
     tx: Sender<AppEvent>,
     mut rx: Receiver<AppEvent>,
     dropped_logs: &DroppedLogs,
+    history: Option<PathBuf>,
 ) -> Result<()> {
     let mut app = App::new(tx);
-    terminal.draw(|frame| ui::draw(frame, &app))?;
+    if let Some(path) = history {
+        app.load_history(&path);
+    }
+    terminal.draw(|frame| ui::draw(frame, &mut app))?;
 
     while let Some(event) = rx.recv().await {
         app.handle_event(event);
@@ -185,8 +199,8 @@ async fn run<W: Write>(
 
         report_dropped_logs(&mut app, dropped_logs);
         queue_output(terminal, &mut app);
-        terminal.set_height(ui::viewport_height(&app));
-        terminal.draw(|frame| ui::draw(frame, &app))?;
+        terminal.set_height(ui::viewport_height(&app, terminal.area().width));
+        terminal.draw(|frame| ui::draw(frame, &mut app))?;
         if app.should_quit {
             break;
         }
@@ -314,7 +328,7 @@ mod tests {
         }
         tx.send(key(KeyCode::Enter)).await.unwrap();
 
-        run(&mut terminal, tx, rx, &DroppedLogs::default())
+        run(&mut terminal, tx, rx, &DroppedLogs::default(), None)
             .await
             .unwrap();
         let written =
