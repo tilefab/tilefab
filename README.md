@@ -104,12 +104,12 @@ A single UI loop owns the `Terminal`; nothing else writes to stdout.
 
 | File | Role |
 |---|---|
-| `crates/tilefab-demo/src/main.rs` | terminal init, keyboard thread, UI loop (one frame = lines + height + drawing) |
-| `crates/tilefab-demo/src/app.rs` | `AppEvent`, app state, command parsing and execution |
-| `crates/tilefab-demo/src/ui.rs` | viewport rendering (`ProgressLine` bars + prompt), wanted height |
-| `crates/tilefab-demo/src/logging.rs` | tracing `MakeWriter` that splits output into lines and sends them into the channel |
-| `crates/tilefab-demo/src/tasks.rs` | simulated tasks (`tokio::spawn` + `interval`) |
-| `crates/tilefab-demo/src/headless.rs` | degraded mode without a TTY |
+| `apps/tilefab-demo/src/main.rs` | terminal init, keyboard thread, UI loop (one frame = lines + height + drawing) |
+| `apps/tilefab-demo/src/app.rs` | `AppEvent`, app state, command parsing and execution |
+| `apps/tilefab-demo/src/ui.rs` | viewport rendering (`ProgressLine` bars + prompt), wanted height |
+| `apps/tilefab-demo/src/logging.rs` | tracing `MakeWriter` that splits output into lines and sends them into the channel |
+| `apps/tilefab-demo/src/tasks.rs` | simulated tasks (`tokio::spawn` + `interval`) |
+| `apps/tilefab-demo/src/headless.rs` | degraded mode without a TTY |
 | `crates/tilefab-*`, `crates/tilefab` | the library: see below |
 | `crates/tilefab/examples/` | `fullscreen.rs` (full screen), `inline.rs` (variable-height viewport) and `cell_alloc.rs` (allocations and time per frame: `cargo run --release --example cell_alloc`) |
 | `tools/` | pty harness (`pty_harness.py`), checks (`check_app.py`, `check_inline.py`), video recording and analysis (`record_check.sh`, `frames_check.py`) |
@@ -123,7 +123,7 @@ A single UI loop owns the `Terminal`; nothing else writes to stdout.
 | `crates/tilefab-widget` | `Block`, `Paragraph`, `ProgressBar`, `ProgressLine`, `List`, `Clear`, drawn in a `Buffer` without I/O | `tilefab-core` |
 | `crates/tilefab-input` | `LineEditor`: prompt line editor (keymap, kill ring, undo, horizontal scrolling), without terminal I/O | crossterm (events), `tilefab-core` |
 | `crates/tilefab` | façade: re-exports all of the above under `tilefab::…`; features `widget` and `input` (on by default) | the four crates above |
-| `crates/tilefab-demo` | the demo application (binary `tilefab-demo`) | `tilefab` |
+| `apps/tilefab-demo` | the demo application (binary `tilefab-demo`) | `tilefab` |
 
 `tilefab-widget` and `tilefab-input` do no input/output, so they are tested without a terminal, and neither depends on `tilefab-term`. `cargo test`, `cargo clippy`… at the root apply to the whole workspace.
 
