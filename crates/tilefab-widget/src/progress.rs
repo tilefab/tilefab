@@ -1,4 +1,4 @@
-//! `Gauge` (a multi-row bar with a centered label) and `LineGauge` (a single-row bar).
+//! `ProgressBar` (a multi-row bar with a centered label) and `ProgressLine` (a single-row bar).
 //!
 //! In both cases, the ratio is an `f64` between 0 and 1, clamped to that range (an
 //! out-of-range value or `NaN` never causes a panic). Bar symbols must occupy
@@ -40,15 +40,15 @@ fn percent_label(ratio: f64) -> String {
 ///
 /// ```
 /// use tilefab_core::{Buffer, Rect, Widget};
-/// use tilefab_widget::Gauge;
+/// use tilefab_widget::ProgressBar;
 ///
 /// let mut buf = Buffer::empty(Rect::new(0, 0, 10, 1));
-/// Gauge::default().ratio(0.5).label("50").filled_symbol("#").unfilled_symbol(".")
+/// ProgressBar::default().ratio(0.5).label("50").filled_symbol("#").unfilled_symbol(".")
 ///     .render(buf.area(), &mut buf);
 /// assert_eq!(buf.lines(), ["####50...."]);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
-pub struct Gauge<'a> {
+pub struct ProgressBar<'a> {
     block: Option<Block<'a>>,
     ratio: f64,
     label: Option<Span<'a>>,
@@ -59,7 +59,7 @@ pub struct Gauge<'a> {
     unfilled_symbol: &'a str,
 }
 
-impl Default for Gauge<'_> {
+impl Default for ProgressBar<'_> {
     fn default() -> Self {
         Self {
             block: None,
@@ -74,8 +74,8 @@ impl Default for Gauge<'_> {
     }
 }
 
-impl<'a> Gauge<'a> {
-    /// Surround the gauge with a block.
+impl<'a> ProgressBar<'a> {
+    /// Surround the bar with a block.
     #[must_use]
     pub fn block(mut self, block: Block<'a>) -> Self {
         self.block = Some(block);
@@ -139,7 +139,7 @@ impl<'a> Gauge<'a> {
     }
 }
 
-impl Widget for Gauge<'_> {
+impl Widget for ProgressBar<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let area = buf.area().intersection(area);
         if area.is_empty() {
@@ -196,15 +196,15 @@ impl Widget for Gauge<'_> {
 ///
 /// ```
 /// use tilefab_core::{Buffer, Rect, Widget};
-/// use tilefab_widget::LineGauge;
+/// use tilefab_widget::ProgressLine;
 ///
 /// let mut buf = Buffer::empty(Rect::new(0, 0, 10, 1));
-/// LineGauge::default().ratio(0.5).label("ab").filled_symbol("#").unfilled_symbol(".")
+/// ProgressLine::default().ratio(0.5).label("ab").filled_symbol("#").unfilled_symbol(".")
 ///     .render(buf.area(), &mut buf);
 /// assert_eq!(buf.lines(), ["ab ###...."]);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
-pub struct LineGauge<'a> {
+pub struct ProgressLine<'a> {
     block: Option<Block<'a>>,
     ratio: f64,
     label: Option<Line<'a>>,
@@ -215,7 +215,7 @@ pub struct LineGauge<'a> {
     unfilled_symbol: &'a str,
 }
 
-impl Default for LineGauge<'_> {
+impl Default for ProgressLine<'_> {
     fn default() -> Self {
         Self {
             block: None,
@@ -230,8 +230,8 @@ impl Default for LineGauge<'_> {
     }
 }
 
-impl<'a> LineGauge<'a> {
-    /// Surround the gauge with a block.
+impl<'a> ProgressLine<'a> {
+    /// Surround the bar with a block.
     #[must_use]
     pub fn block(mut self, block: Block<'a>) -> Self {
         self.block = Some(block);
@@ -294,7 +294,7 @@ impl<'a> LineGauge<'a> {
     }
 }
 
-impl Widget for LineGauge<'_> {
+impl Widget for ProgressLine<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let area = buf.area().intersection(area);
         if area.is_empty() {
@@ -350,46 +350,52 @@ mod tests {
         buf
     }
 
-    fn gauge(ratio: f64) -> Gauge<'static> {
-        Gauge::default()
+    fn progress_bar(ratio: f64) -> ProgressBar<'static> {
+        ProgressBar::default()
             .ratio(ratio)
             .filled_symbol("#")
             .unfilled_symbol(".")
     }
 
-    fn line_gauge(ratio: f64) -> LineGauge<'static> {
-        LineGauge::default()
+    fn progress_line(ratio: f64) -> ProgressLine<'static> {
+        ProgressLine::default()
             .ratio(ratio)
             .label("")
             .filled_symbol("#")
             .unfilled_symbol(".")
     }
 
-    // --------------------------------------------------------------------- Gauge
+    // --------------------------------------------------------------------- ProgressBar
 
     #[test]
-    fn gauge_fills_proportionally_with_a_centered_label() {
-        assert_eq!(render(gauge(0.0), 10, 1).lines(), ["....0%...."]);
+    fn progress_bar_fills_proportionally_with_a_centered_label() {
+        assert_eq!(render(progress_bar(0.0), 10, 1).lines(), ["....0%...."]);
         // 5 filled columns; the “50%” label (3 columns) overwrites columns 3 to 5.
-        assert_eq!(render(gauge(0.5), 10, 1).lines(), ["###50%...."]);
-        assert_eq!(render(gauge(1.0), 10, 1).lines(), ["###100%###"]);
+        assert_eq!(render(progress_bar(0.5), 10, 1).lines(), ["###50%...."]);
+        assert_eq!(render(progress_bar(1.0), 10, 1).lines(), ["###100%###"]);
     }
 
     #[test]
-    fn gauge_custom_label_and_multiple_rows() {
-        let buf = render(gauge(0.5).label("ab"), 6, 3);
+    fn progress_bar_custom_label_and_multiple_rows() {
+        let buf = render(progress_bar(0.5).label("ab"), 6, 3);
         // The label is centered on the middle row (columns 2 and 3).
         assert_eq!(buf.lines(), ["###...", "##ab..", "###..."]);
     }
 
     #[test]
-    fn gauge_ratio_is_clamped() {
-        assert_eq!(render(gauge(-3.0).label(""), 4, 1).lines(), ["...."]);
-        assert_eq!(render(gauge(7.0).label(""), 4, 1).lines(), ["####"]);
-        assert_eq!(render(gauge(f64::NAN).label(""), 4, 1).lines(), ["...."]);
+    fn progress_bar_ratio_is_clamped() {
+        assert_eq!(render(progress_bar(-3.0).label(""), 4, 1).lines(), ["...."]);
+        assert_eq!(render(progress_bar(7.0).label(""), 4, 1).lines(), ["####"]);
+        assert_eq!(
+            render(progress_bar(f64::NAN).label(""), 4, 1).lines(),
+            ["...."]
+        );
         assert_eq!(
             render(
-                Gauge::default().percent(250).filled_symbol("#").label(""),
+                ProgressBar::default()
+                    .percent(250)
+                    .filled_symbol("#")
+                    .label(""),
                 4,
                 1
             )
@@ -399,8 +405,8 @@ mod tests {
     }
 
     #[test]
-    fn gauge_percent_is_a_fraction_of_100() {
-        let half = Gauge::default()
+    fn progress_bar_percent_is_a_fraction_of_100() {
+        let half = ProgressBar::default()
             .percent(50)
             .filled_symbol("#")
             .unfilled_symbol(".")
@@ -409,9 +415,9 @@ mod tests {
     }
 
     #[test]
-    fn gauge_styles_apply_to_each_part() {
+    fn progress_bar_styles_apply_to_each_part() {
         let buf = render(
-            gauge(0.5)
+            progress_bar(0.5)
                 .label("")
                 .style(Style::new().bg(Color::Black))
                 .filled_style(Color::Cyan)
@@ -426,52 +432,59 @@ mod tests {
     }
 
     #[test]
-    fn gauge_label_style_is_patched_over_the_bar() {
-        let buf = render(gauge(1.0).label("x".red()).filled_style(Color::Cyan), 3, 1);
+    fn progress_bar_label_style_is_patched_over_the_bar() {
+        let buf = render(
+            progress_bar(1.0).label("x".red()).filled_style(Color::Cyan),
+            3,
+            1,
+        );
         let c = buf.get(1, 0);
         assert_eq!((c.symbol(), c.fg), ("x", Color::Red));
         assert_eq!(buf.get(0, 0).fg, Color::Cyan);
     }
 
     #[test]
-    fn gauge_long_label_is_truncated() {
-        assert_eq!(render(gauge(0.0).label("abcdef"), 4, 1).lines(), ["abcd"]);
+    fn progress_bar_long_label_is_truncated() {
+        assert_eq!(
+            render(progress_bar(0.0).label("abcdef"), 4, 1).lines(),
+            ["abcd"]
+        );
     }
 
     #[test]
-    fn gauge_with_block() {
-        let buf = render(gauge(1.0).label("").block(Block::bordered()), 6, 3);
+    fn progress_bar_with_block() {
+        let buf = render(progress_bar(1.0).label("").block(Block::bordered()), 6, 3);
         assert_eq!(buf.lines(), ["┌────┐", "│####│", "└────┘"]);
     }
 
     #[test]
-    fn gauge_tiny_areas() {
+    fn progress_bar_tiny_areas() {
         for w in 0..4 {
             for h in 0..4 {
-                let _ = render(gauge(0.5).block(Block::bordered()), w, h);
-                let _ = render(gauge(0.5), w, h);
+                let _ = render(progress_bar(0.5).block(Block::bordered()), w, h);
+                let _ = render(progress_bar(0.5), w, h);
             }
         }
-        assert_eq!(render(gauge(1.0).label(""), 1, 1).lines(), ["#"]);
+        assert_eq!(render(progress_bar(1.0).label(""), 1, 1).lines(), ["#"]);
     }
 
-    // ----------------------------------------------------------------- LineGauge
+    // ----------------------------------------------------------------- ProgressLine
 
     #[test]
-    fn line_gauge_label_then_a_space_then_the_bar() {
-        let g = LineGauge::default()
+    fn progress_line_label_then_a_space_then_the_bar() {
+        let g = ProgressLine::default()
             .ratio(0.5)
             .label("ab")
             .filled_symbol("#")
             .unfilled_symbol(".");
         assert_eq!(render(g, 10, 1).lines(), ["ab ###...."]);
         // Empty label: the bar still starts in the second column.
-        assert_eq!(render(line_gauge(0.5), 9, 1).lines(), [" ####...."]);
+        assert_eq!(render(progress_line(0.5), 9, 1).lines(), [" ####...."]);
     }
 
     #[test]
-    fn line_gauge_default_label_is_the_percentage() {
-        let g = LineGauge::default()
+    fn progress_line_default_label_is_the_percentage() {
+        let g = ProgressLine::default()
             .ratio(0.25)
             .filled_symbol("#")
             .unfilled_symbol(".");
@@ -479,22 +492,22 @@ mod tests {
     }
 
     #[test]
-    fn line_gauge_rounds_down_but_100_percent_is_full() {
+    fn progress_line_rounds_down_but_100_percent_is_full() {
         // 7 bar columns at 50%: 3.5 → 3 filled.
-        assert_eq!(render(line_gauge(0.5), 8, 1).lines(), [" ###...."]);
-        assert_eq!(render(line_gauge(1.0), 8, 1).lines(), [" #######"]);
-        assert_eq!(render(line_gauge(0.99), 8, 1).lines(), [" ######."]);
-        assert_eq!(render(line_gauge(0.0), 8, 1).lines(), [" ......."]);
+        assert_eq!(render(progress_line(0.5), 8, 1).lines(), [" ###...."]);
+        assert_eq!(render(progress_line(1.0), 8, 1).lines(), [" #######"]);
+        assert_eq!(render(progress_line(0.99), 8, 1).lines(), [" ######."]);
+        assert_eq!(render(progress_line(0.0), 8, 1).lines(), [" ......."]);
     }
 
     #[test]
-    fn line_gauge_ratio_is_clamped() {
-        assert_eq!(render(line_gauge(-1.0), 5, 1).lines(), [" ...."]);
-        assert_eq!(render(line_gauge(2.0), 5, 1).lines(), [" ####"]);
-        assert_eq!(render(line_gauge(f64::NAN), 5, 1).lines(), [" ...."]);
+    fn progress_line_ratio_is_clamped() {
+        assert_eq!(render(progress_line(-1.0), 5, 1).lines(), [" ...."]);
+        assert_eq!(render(progress_line(2.0), 5, 1).lines(), [" ####"]);
+        assert_eq!(render(progress_line(f64::NAN), 5, 1).lines(), [" ...."]);
         assert_eq!(
             render(
-                LineGauge::default()
+                ProgressLine::default()
                     .percent(999)
                     .label("")
                     .filled_symbol("#"),
@@ -507,8 +520,8 @@ mod tests {
     }
 
     #[test]
-    fn line_gauge_percent_is_a_fraction_of_100() {
-        let half = LineGauge::default()
+    fn progress_line_percent_is_a_fraction_of_100() {
+        let half = ProgressLine::default()
             .percent(50)
             .label("")
             .filled_symbol("#")
@@ -517,14 +530,18 @@ mod tests {
     }
 
     #[test]
-    fn line_gauge_style_covers_the_whole_area() {
-        let buf = render(line_gauge(0.5).style(Style::new().bg(Color::Black)), 5, 2);
+    fn progress_line_style_covers_the_whole_area() {
+        let buf = render(
+            progress_line(0.5).style(Style::new().bg(Color::Black)),
+            5,
+            2,
+        );
         assert!(buf.content().iter().all(|c| c.bg == Color::Black));
     }
 
     #[test]
-    fn line_gauge_styles_label_and_bar() {
-        let g = LineGauge::default()
+    fn progress_line_styles_label_and_bar() {
+        let g = ProgressLine::default()
             .ratio(0.5)
             .label("ab".bold())
             .filled_symbol("#")
@@ -543,33 +560,33 @@ mod tests {
     }
 
     #[test]
-    fn line_gauge_label_fills_all_the_width_so_no_bar() {
+    fn progress_line_label_fills_all_the_width_so_no_bar() {
         assert_eq!(
-            render(line_gauge(1.0).label("abcdef"), 5, 1).lines(),
+            render(progress_line(1.0).label("abcdef"), 5, 1).lines(),
             ["abcde"]
         );
         assert_eq!(
-            render(line_gauge(1.0).label("abcd"), 5, 1).lines(),
+            render(progress_line(1.0).label("abcd"), 5, 1).lines(),
             ["abcd "]
         );
     }
 
     #[test]
-    fn line_gauge_is_drawn_on_the_first_row_with_block() {
-        let buf = render(line_gauge(1.0).block(Block::bordered()), 7, 3);
+    fn progress_line_is_drawn_on_the_first_row_with_block() {
+        let buf = render(progress_line(1.0).block(Block::bordered()), 7, 3);
         assert_eq!(buf.lines(), ["┌─────┐", "│ ####│", "└─────┘"]);
-        let buf = render(line_gauge(1.0), 4, 2);
+        let buf = render(progress_line(1.0), 4, 2);
         assert_eq!(buf.lines(), [" ###", "    "]);
     }
 
     #[test]
-    fn line_gauge_tiny_areas() {
+    fn progress_line_tiny_areas() {
         for w in 0..4 {
             for h in 0..4 {
-                let _ = render(line_gauge(0.5).block(Block::bordered()), w, h);
-                let _ = render(LineGauge::default().ratio(0.5), w, h);
+                let _ = render(progress_line(0.5).block(Block::bordered()), w, h);
+                let _ = render(ProgressLine::default().ratio(0.5), w, h);
             }
         }
-        assert_eq!(render(line_gauge(1.0), 1, 1).lines(), [" "]);
+        assert_eq!(render(progress_line(1.0), 1, 1).lines(), [" "]);
     }
 }

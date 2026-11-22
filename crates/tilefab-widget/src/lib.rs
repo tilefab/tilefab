@@ -1,4 +1,4 @@
-//! Widget library: gauges, blocks, lists, paragraphs, drawn in a [`Buffer`](tilefab_core::Buffer).
+//! Widget library: blocks, paragraphs, lists, progress bars, drawn in a [`Buffer`](tilefab_core::Buffer).
 //!
 //! Widgets implement the [`Widget`](tilefab_core::Widget) and
 //! [`StatefulWidget`](tilefab_core::StatefulWidget) traits of the common base
@@ -13,12 +13,12 @@
 
 mod block;
 mod clear;
-mod gauge;
 mod list;
 mod paragraph;
+mod progress;
 
 pub use block::{Block, BorderType, Borders, Padding};
 pub use clear::Clear;
-pub use gauge::{Gauge, LineGauge};
 pub use list::{List, ListItem, ListState};
 pub use paragraph::{Paragraph, Wrap};
+pub use progress::{ProgressBar, ProgressLine};

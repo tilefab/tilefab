@@ -5,9 +5,9 @@
 //! A counting global allocator (`stats_alloc`) wraps the system one. Two scenarios render real widgets
 //! into an in-memory backend (no terminal needed):
 //!
-//! - **inline**: like `tilefab`, a 6-row viewport on a 100-column screen (5 task gauges
+//! - **inline**: like `tilefab`, a 6-row viewport on a 100-column screen (5 task progress lines
 //!   and a prompt), one log line inserted above it per frame;
-//! - **fullscreen**: a 200 × 50 screen with a bordered block of wrapped text and a gauge;
+//! - **fullscreen**: a 200 × 50 screen with a bordered block of wrapped text and a progress bar;
 //! - **paragraph**: a log viewer, the `Paragraph` widget alone: 200 lines of about 150
 //!   columns, wrapped in a 120 × 40 buffer and scrolled to the middle (most lines are not
 //!   visible);
@@ -15,7 +15,7 @@
 //!   viewport), with text written by `Buffer::set_string`, which does not allocate: what
 //!   remains is the cost of `Terminal` itself.
 //!
-//! Each frame changes a little (gauge ratios, a counter), as in a real application.
+//! Each frame changes a little (bar ratios, a counter), as in a real application.
 
 use std::alloc::System;
 use std::fmt::Write as _;
@@ -24,8 +24,8 @@ use std::time::{Duration, Instant};
 
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 use tilefab::{
-    Backend, Block, Constraint, Gauge, Layout, LineGauge, Paragraph, Position, Size, Style,
-    Terminal, TerminalOptions, Viewport, Widget, Wrap,
+    Backend, Block, Constraint, Layout, Paragraph, Position, ProgressBar, ProgressLine, Size,
+    Style, Terminal, TerminalOptions, Viewport, Widget, Wrap,
 };
 
 // The system allocator, counting allocations: `stats_alloc` holds the `unsafe` code,
@@ -84,7 +84,7 @@ fn inline() -> Report {
                     let ratio =
                         f64::from((i + 17 * u32::try_from(task).unwrap_or(0)) % 100) / 100.0;
                     frame.render_widget(
-                        LineGauge::default()
+                        ProgressLine::default()
                             .ratio(ratio)
                             .label(format!("task {task}")),
                         *row,
@@ -107,7 +107,7 @@ fn fullscreen() -> Report {
     measure(500, |i| {
         terminal
             .draw(|frame| {
-                let [body, gauge] = Layout::vertical([Constraint::Fill(1), Constraint::Length(3)])
+                let [body, bar] = Layout::vertical([Constraint::Fill(1), Constraint::Length(3)])
                     .areas(frame.area());
                 frame.render_widget(
                     Paragraph::new(format!("frame {i}\n{text}"))
@@ -116,11 +116,11 @@ fn fullscreen() -> Report {
                     body,
                 );
                 frame.render_widget(
-                    Gauge::default()
+                    ProgressBar::default()
                         .ratio(f64::from(i % 100) / 100.0)
                         .block(Block::bordered())
                         .style(Style::new()),
-                    gauge,
+                    bar,
                 );
             })
             .expect("draw");

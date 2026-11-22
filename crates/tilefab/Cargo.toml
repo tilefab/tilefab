@@ -17,7 +17,7 @@ all-features = true
 
 [features]
 default = ["widget", "input"]
-# The widget library (`Block`, `Paragraph`, `Gauge`, `List`…).
+# The widget library (`Block`, `Paragraph`, `ProgressBar`, `List`…).
 widget = ["dep:tilefab-widget"]
 # The prompt line editor (`LineEditor`).
 input = ["dep:tilefab-input"]

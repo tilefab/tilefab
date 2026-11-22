@@ -460,10 +460,10 @@ mod tests {
         crate::paragraph::Paragraph::new("text")
             .block(block.clone())
             .render(area, &mut buf);
-        crate::gauge::Gauge::default()
+        crate::progress::ProgressBar::default()
             .block(block.clone())
             .render(area, &mut buf);
-        crate::gauge::LineGauge::default()
+        crate::progress::ProgressLine::default()
             .block(block.clone())
             .render(area, &mut buf);
         let mut state = crate::list::ListState::default();

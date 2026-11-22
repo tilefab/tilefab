@@ -18,7 +18,7 @@ First release on crates.io.
 - Terminal layer (`tilefab-term`): crossterm backend, double-buffered `Terminal`, full-screen and
   variable-height inline viewport, single synchronized frame commit, panic hooks.
 - Common base (`tilefab-core`): cells, buffer, styles, geometry and layout, styled text, widget traits.
-- Widgets (`tilefab-widget`): `Block`, `Paragraph`, `Gauge`, `LineGauge`, `List`, `Clear`.
+- Widgets (`tilefab-widget`): `Block`, `Paragraph`, `ProgressBar`, `ProgressLine`, `List`, `Clear`.
 - Line editor (`tilefab-input`): `LineEditor` with keymap, kill ring, undo / redo, history,
   hints, completion and bracketed paste.
 - Demo application `tilefab-demo` (`cargo install tilefab-demo`).

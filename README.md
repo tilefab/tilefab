@@ -106,7 +106,7 @@ A single UI loop owns the `Terminal`; nothing else writes to stdout.
 |---|---|
 | `crates/tilefab-demo/src/main.rs` | terminal init, keyboard thread, UI loop (one frame = lines + height + drawing) |
 | `crates/tilefab-demo/src/app.rs` | `AppEvent`, app state, command parsing and execution |
-| `crates/tilefab-demo/src/ui.rs` | viewport rendering (`LineGauge` bars + prompt), wanted height |
+| `crates/tilefab-demo/src/ui.rs` | viewport rendering (`ProgressLine` bars + prompt), wanted height |
 | `crates/tilefab-demo/src/logging.rs` | tracing `MakeWriter` that splits output into lines and sends them into the channel |
 | `crates/tilefab-demo/src/tasks.rs` | simulated tasks (`tokio::spawn` + `interval`) |
 | `crates/tilefab-demo/src/headless.rs` | degraded mode without a TTY |
@@ -120,7 +120,7 @@ A single UI loop owns the `Terminal`; nothing else writes to stdout.
 |---|---|---|
 | `crates/tilefab-core` | `Cell`, `Buffer` and diff between two buffers (wide characters included); `Color`, `Modifier`, `Style`; `Span`, `Line`, `Text`, `Alignment`, `Stylize`; `Rect`, `Position`, `Size`, `Margin`, `Constraint`, `Layout`; the `Widget` and `StatefulWidget` traits (text types are widgets) | — (no crossterm) |
 | `crates/tilefab-term` | `backend`: ANSI sequences on a `W: Write` (cells, cursor, erasing, scroll regions); `terminal`: `Terminal` and `Frame` (diff with the previous frame, cursor, viewport); `viewport`: `Viewport` (full screen or inline), `ScrollMode`, commit placement rule; `init`: `TerminalGuard` (raw mode, alternate screen), panic hook | `tilefab-core`, crossterm |
-| `crates/tilefab-widget` | `Block`, `Paragraph`, `Gauge`, `LineGauge`, `List`, `Clear`, drawn in a `Buffer` without I/O | `tilefab-core` |
+| `crates/tilefab-widget` | `Block`, `Paragraph`, `ProgressBar`, `ProgressLine`, `List`, `Clear`, drawn in a `Buffer` without I/O | `tilefab-core` |
 | `crates/tilefab-input` | `LineEditor`: prompt line editor (keymap, kill ring, undo, horizontal scrolling), without terminal I/O | crossterm (events), `tilefab-core` |
 | `crates/tilefab` | façade: re-exports all of the above under `tilefab::…`; features `widget` and `input` (on by default) | the four crates above |
 | `crates/tilefab-demo` | the demo application (binary `tilefab-demo`) | `tilefab` |
@@ -143,7 +143,7 @@ Notable choices:
 
 - **Layout**: no constraint solver, a simple four-step algorithm (see the header of `layout.rs`). No `Flex` other than `Start`; when space runs out, the last constraints are trimmed.
 - **Text wrapping**: greedy algorithm (see the header of `paragraph.rs`).
-- **Widgets**: only `Block`, `Paragraph`, `Gauge`, `LineGauge`, `List` and `Clear`. No tables, tabs, charts, or mouse support.
+- **Widgets**: only `Block`, `Paragraph`, `ProgressBar`, `ProgressLine`, `List` and `Clear`. No tables, tabs, charts, or mouse support.
 - **Viewport**: the height of an inline viewport can change from one frame to the next (`set_height`).
 
 ## Tests and checks
@@ -190,7 +190,7 @@ cargo mutants -p tilefab-term -f crates/tilefab-term/src/terminal.rs -f crates/t
 cargo mutants -p tilefab-widget -j 4   # widgets: about 3 minutes
 ```
 
-On the widgets, three mutants survive because they do not change the behavior (equivalent mutants); a comment marks each one in the code (`block.rs`, `gauge.rs`, `paragraph.rs`). The timeouts are mutants that loop forever: the tests catch them too.
+On the widgets, three mutants survive because they do not change the behavior (equivalent mutants); a comment marks each one in the code (`block.rs`, `progress.rs`, `paragraph.rs`). The timeouts are mutants that loop forever: the tests catch them too.
 
 Fuzzing with libFuzzer (`fuzz/`, a crate outside the workspace; once: `rustup toolchain install nightly --profile minimal && cargo install --locked cargo-fuzz`). Three targets, each checking invariants rather than only the absence of a panic:
 
