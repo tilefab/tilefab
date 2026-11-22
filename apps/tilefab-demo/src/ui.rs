@@ -2,7 +2,7 @@
 
 use tilefab::{
     Block, BorderType, Color, Constraint, Frame, Layout, Line, Paragraph, ProgressBar,
-    ProgressLine, Rect, Span, Style, Stylize, Wrap,
+    ProgressLine, Rect, Span, Style, Stylize, Wrap, grapheme_width,
 };
 
 use tilefab::convert::saturating_u16;
@@ -12,8 +12,9 @@ use crate::view::TaskView;
 
 /// Prefix displayed before the input.
 const PROMPT: &str = "> ";
-/// Width of the task name column (longer names are truncated).
-const NAME_WIDTH: u16 = 10;
+/// The name column of `progressline` tasks takes at most this fraction of the width (a
+/// longer name ends with `…`), so the bar keeps most of the row.
+const NAME_MAX_FRACTION: u16 = 3;
 
 /// Desired viewport height in a terminal `width` columns wide: the rows of each task (one or
 /// more, depending on its view), the prompt line, and the rows of the completion menu when
@@ -35,6 +36,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             .areas(frame.area());
 
     // The tasks from the top, each on the rows its view needs; extra rows remain empty.
+    let name_width = name_column_width(&app.tasks, tasks_area.width);
     let mut y = tasks_area.y;
     for task in &app.tasks {
         let height = task
@@ -44,21 +46,56 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         if height == 0 {
             break;
         }
-        draw_task(
-            frame,
-            task,
-            Rect::new(tasks_area.x, y, tasks_area.width, height),
-        );
+        let area = Rect::new(tasks_area.x, y, tasks_area.width, height);
+        draw_task(frame, task, area, name_width);
         y += height;
     }
     draw_prompt(frame, app, prompt_area);
 }
 
-fn draw_task(frame: &mut Frame, task: &Task, area: Rect) {
+/// Width of the name column shared by the `progressline` tasks, so that their bars line up:
+/// the longest of their names, capped at a fraction of `width`.
+fn name_column_width(tasks: &[Task], width: u16) -> u16 {
+    let longest = tasks
+        .iter()
+        .filter(|task| task.view.is_line())
+        .map(|task| saturating_u16(Line::from(task.name.as_str()).width()))
+        .max()
+        .unwrap_or(0);
+    longest.min(width / NAME_MAX_FRACTION)
+}
+
+/// `name` cut to `width` columns, ending with `…` when it does not fit.
+fn fit_name(name: &str, width: u16) -> String {
+    let width = usize::from(width);
+    if Line::from(name).width() <= width {
+        return name.to_string();
+    }
+    let mut fitted = String::new();
+    let mut used = 0;
+    for c in name.chars() {
+        let c_width = grapheme_width(c.encode_utf8(&mut [0; 4]));
+        // Keep one column for the `…`.
+        if used + c_width >= width {
+            break;
+        }
+        fitted.push(c);
+        used += c_width;
+    }
+    if width > 0 {
+        fitted.push('…');
+    }
+    fitted
+}
+
+fn draw_task(frame: &mut Frame, task: &Task, area: Rect, name_width: u16) {
+    let line = |frame: &mut Frame, symbols, color| {
+        draw_line(frame, task, area, name_width, symbols, color);
+    };
     match task.view {
-        TaskView::LineBlocks => draw_line(frame, task, area, ("█", "░"), Color::Cyan),
-        TaskView::LineThin => draw_line(frame, task, area, ("━", "─"), Color::Yellow),
-        TaskView::LineDots => draw_line(frame, task, area, ("●", "·"), Color::Green),
+        TaskView::LineBlocks => line(frame, ("█", "░"), Color::Cyan),
+        TaskView::LineThin => line(frame, ("━", "─"), Color::Yellow),
+        TaskView::LineDots => line(frame, ("●", "·"), Color::Green),
         TaskView::BarPlain => draw_bar(frame, task, area, None),
         TaskView::BarBordered => {
             let block = Block::bordered()
@@ -70,23 +107,28 @@ fn draw_task(frame: &mut Frame, task: &Task, area: Rect) {
     }
 }
 
-/// `name       ██████████░░░░░░░░░░  45%`: a `ProgressLine` between the name and the
-/// percentage, drawn with the `(filled, unfilled)` symbols.
+/// `name  ██████████░░░░░░░░░░  45%`: the name in a column `name_width` wide, then a
+/// `ProgressLine` filling the rest of the row up to the percentage, drawn with the
+/// `(filled, unfilled)` symbols.
 fn draw_line(
     frame: &mut Frame,
     task: &Task,
     area: Rect,
+    name_width: u16,
     (filled, unfilled): (&'static str, &'static str),
     color: Color,
 ) {
     let [name_area, bar_area, percent_area] = Layout::horizontal([
-        Constraint::Length(NAME_WIDTH),
+        Constraint::Length(name_width),
         Constraint::Fill(1),
         Constraint::Length(5),
     ])
     .areas(area);
 
-    frame.render_widget(Line::from(task.name.as_str()).bold(), name_area);
+    frame.render_widget(
+        Line::from(fit_name(&task.name, name_width)).bold(),
+        name_area,
+    );
     // Empty label: ProgressLine leaves one column of space before the bar.
     frame.render_widget(
         ProgressLine::default()
@@ -249,6 +291,33 @@ mod tests {
         app.tasks[0].view = TaskView::BarPlain;
         let rows = render(&mut app, 30, 2);
         assert_eq!(rows[0].trim(), "t0 50%", "{rows:?}");
+    }
+
+    #[test]
+    fn the_name_column_fits_the_longest_line_name_up_to_a_third_of_the_width() {
+        let mut app = app_with_tasks(3);
+        app.tasks[0].name = "cinqsixsepthuitneuf".into();
+        app.tasks[2].name = "a much longer name, drawn in a bordered bar".into();
+        app.tasks[2].view = TaskView::BarBordered;
+        // The bordered task does not count: the column is as wide as the first name.
+        assert_eq!(name_column_width(&app.tasks, 90), 19);
+        let rows = render(&mut app, 90, 6);
+        assert!(rows[0].starts_with("cinqsixsepthuitneuf █"), "{rows:?}");
+        // The bars line up after the shared column.
+        assert!(rows[1].starts_with("t1                  █"), "{rows:?}");
+        // Narrower: capped at a third of 30 columns, the name ends with `…`.
+        assert_eq!(name_column_width(&app.tasks, 30), 10);
+        let rows = render(&mut app, 30, 6);
+        assert!(rows[0].starts_with("cinqsixse… █"), "{rows:?}");
+    }
+
+    #[test]
+    fn fit_name_cuts_by_columns_and_marks_the_cut() {
+        assert_eq!(fit_name("alpha", 5), "alpha");
+        assert_eq!(fit_name("alphabet", 5), "alph…");
+        // A wide character that would overflow is dropped whole.
+        assert_eq!(fit_name("日本語", 4), "日…");
+        assert_eq!(fit_name("alpha", 0), "");
     }
 
     #[test]

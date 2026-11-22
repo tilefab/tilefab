@@ -115,6 +115,11 @@ impl TaskView {
         format!("{} {}", spec.widget, spec.variant)
     }
 
+    /// True for the `progressline` views (name column, bar, percentage).
+    pub fn is_line(self) -> bool {
+        matches!(self, Self::LineBlocks | Self::LineThin | Self::LineDots)
+    }
+
     /// Rows the task takes in the viewport.
     pub fn height(self) -> u16 {
         match self {
