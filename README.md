@@ -119,20 +119,20 @@ A single UI loop owns the `Terminal`; nothing else writes to stdout.
 | Crate | Role | Depends on |
 |---|---|---|
 | `crates/tilefab-core` | `Cell`, `Buffer` and diff between two buffers (wide characters included); `Color`, `Modifier`, `Style`; `Span`, `Line`, `Text`, `Alignment`, `Stylize`; `Rect`, `Position`, `Size`, `Margin`, `Constraint`, `Layout`; the `Widget` and `StatefulWidget` traits (text types are widgets) | — (no crossterm) |
-| `crates/tilefab-cli` | `backend`: ANSI sequences on a `W: Write` (cells, cursor, erasing, scroll regions); `terminal`: `Terminal` and `Frame` (diff with the previous frame, cursor, viewport); `viewport`: `Viewport` (full screen or inline), `ScrollMode`, commit placement rule; `init`: `TerminalGuard` (raw mode, alternate screen), panic hook | `tilefab-core`, crossterm |
+| `crates/tilefab-term` | `backend`: ANSI sequences on a `W: Write` (cells, cursor, erasing, scroll regions); `terminal`: `Terminal` and `Frame` (diff with the previous frame, cursor, viewport); `viewport`: `Viewport` (full screen or inline), `ScrollMode`, commit placement rule; `init`: `TerminalGuard` (raw mode, alternate screen), panic hook | `tilefab-core`, crossterm |
 | `crates/tilefab-widget` | `Block`, `Paragraph`, `Gauge`, `LineGauge`, `List`, `Clear`, drawn in a `Buffer` without I/O | `tilefab-core` |
 | `crates/tilefab-input` | `LineEditor`: prompt line editor (keymap, kill ring, undo, horizontal scrolling), without terminal I/O | crossterm (events), `tilefab-core` |
 | `crates/tilefab` | façade: re-exports all of the above under `tilefab::…`; features `widget` and `input` (on by default) | the four crates above |
 | `crates/tilefab-demo` | the demo application (binary `tilefab-demo`) | `tilefab` |
 
-`tilefab-widget` and `tilefab-input` do no input/output, so they are tested without a terminal, and neither depends on `tilefab-cli`. `cargo test`, `cargo clippy`… at the root apply to the whole workspace.
+`tilefab-widget` and `tilefab-input` do no input/output, so they are tested without a terminal, and neither depends on `tilefab-term`. `cargo test`, `cargo clippy`… at the root apply to the whole workspace.
 
 Rendering flow: `Frame` (current buffer) → diff with the previous buffer → `Backend` (`MoveTo` only on jumps, minimal style changes) → stdout, all inside a **single** synchronized-update block (`ESC[?2026h` … `ESC[?2026l`).
 
 Notable choices:
 
 - **A single crossterm version** (0.29) in the dependency tree, without its default `derive-more` feature (it would pull `syn` 2 next to the `syn` 3 of tokio's macros).
-- **Single frame commit**: `Terminal::insert_before` and `Terminal::set_height` write nothing, they accumulate. `draw` applies scrolling, inserted lines, the new height and the redraw in one synchronized block: the terminal never shows an intermediate state. The viewport is anchored at the bottom: its last line (the prompt) does not move on screen when the height changes. The placement rule is detailed in `crates/tilefab-cli/src/viewport.rs`.
+- **Single frame commit**: `Terminal::insert_before` and `Terminal::set_height` write nothing, they accumulate. `draw` applies scrolling, inserted lines, the new height and the redraw in one synchronized block: the terminal never shows an intermediate state. The viewport is anchored at the bottom: its last line (the prompt) does not move on screen when the height changes. The placement rule is detailed in `crates/tilefab-term/src/viewport.rs`.
 - **Task start and end lines**: produced directly in `app.output` (same `[INFO] …` format as tracing), not through tracing, so that they arrive in the **same** frame as the height change. Otherwise the viewport would shrink one frame before the line replacing it arrived.
 - **Scroll regions**: crossterm has no DECSTBM command, `backend.rs` implements it (`SetScrollRegion`). Only the area above the viewport scrolls. `ScrollMode::Fallback` does the same without a region, for terminals that handle them poorly.
 - **Cursor position**: a single `ESC[6n` query at startup, then internal tracking; a new query only after a resize. If the terminal does not answer at startup, the demo falls back to the degraded mode (commands read line by line), with a warning.
@@ -186,7 +186,7 @@ tools/coverage.sh            # summary per file; --unit: unit tests only; --html
 Mutation testing of the inline placement code (`cargo install --locked cargo-mutants` once): each mutant is a small change to the code that the tests must catch.
 
 ```sh
-cargo mutants -p tilefab-cli -f crates/tilefab-cli/src/terminal.rs -f crates/tilefab-cli/src/viewport.rs -j 3   # report in mutants.out/
+cargo mutants -p tilefab-term -f crates/tilefab-term/src/terminal.rs -f crates/tilefab-term/src/viewport.rs -j 3   # report in mutants.out/
 cargo mutants -p tilefab-widget -j 4   # widgets: about 3 minutes
 ```
 
@@ -206,7 +206,7 @@ cargo +nightly fuzz run paragraph artifacts/paragraph/crash-…   # replay a cra
 
 The corpus and the crashes stay local (`fuzz/corpus/`, `fuzz/artifacts/`). `tools/ci.sh` only checks that the targets build and pass clippy.
 
-The frame commit tests (`crates/tilefab-cli/src/inline_tests.rs`) replay the emitted bytes in a small terminal simulator (`crates/tilefab-cli/src/sim.rs`): they cover every case of the placement rule, both scroll modes, lines inserted in batches and resizing.
+The frame commit tests (`crates/tilefab-term/src/inline_tests.rs`) replay the emitted bytes in a small terminal simulator (`crates/tilefab-term/src/sim.rs`): they cover every case of the placement rule, both scroll modes, lines inserted in batches and resizing.
 
 `tools/record_check.sh` films the Terminal.app or iTerm2 window and `tools/frames_check.py` analyzes the video frame by frame (transient frames, blank lines, needless rewrites). It requires the macOS "Screen Recording" and "Automation" permissions.
 

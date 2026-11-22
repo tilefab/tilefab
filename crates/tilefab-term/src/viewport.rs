@@ -53,12 +53,41 @@ pub enum ScrollMode {
 }
 
 /// Options for creating a `Terminal`.
+///
+/// New fields may come in minor versions, so it cannot be written as a struct literal outside
+/// this crate: start from `TerminalOptions::default()` and chain the setters below (or assign the
+/// public fields of a mutable value).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TerminalOptions {
     /// Fullscreen or inline band.
     pub viewport: Viewport,
     /// How to scroll the area above an inline viewport.
     pub scroll_mode: ScrollMode,
+}
+
+/// Setters, to chain from [`TerminalOptions::default`].
+///
+/// ```
+/// use tilefab_term::{ScrollMode, TerminalOptions, Viewport};
+///
+/// let options = TerminalOptions::default().viewport(Viewport::Inline(3)).scroll_mode(ScrollMode::Fallback);
+/// assert_eq!(options.viewport, Viewport::Inline(3));
+/// ```
+impl TerminalOptions {
+    /// Set [`viewport`](Self::viewport).
+    #[must_use]
+    pub const fn viewport(mut self, viewport: Viewport) -> Self {
+        self.viewport = viewport;
+        self
+    }
+
+    /// Set [`scroll_mode`](Self::scroll_mode).
+    #[must_use]
+    pub const fn scroll_mode(mut self, scroll_mode: ScrollMode) -> Self {
+        self.scroll_mode = scroll_mode;
+        self
+    }
 }
 
 /// The result of a commit's placement calculation (see the module documentation).

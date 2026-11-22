@@ -6,7 +6,7 @@
 use std::io::{self, BufWriter};
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use tilefab::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use tilefab::{
     Backend, Block, Color, Constraint, Gauge, Layout, Paragraph, Stylize, Terminal, TerminalGuard,

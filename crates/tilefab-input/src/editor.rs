@@ -19,7 +19,12 @@ use crate::undo::{Snapshot, Step, UndoStack};
 const DEFAULT_MAX_LEN: usize = 4096;
 
 /// Settings of a [`LineEditor`].
+///
+/// New fields may come in minor versions, so it cannot be written as a struct literal outside
+/// this crate: start from `EditorConfig::default()` and chain the setters below (or assign the
+/// public fields of a mutable value).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct EditorConfig {
     /// Maximum length of the line, in bytes (default 4096): a huge paste cannot exhaust
     /// memory.
@@ -42,6 +47,65 @@ pub struct EditorConfig {
     pub styles: EditorStyles,
 }
 
+/// Setters, to chain from [`EditorConfig::default`].
+impl EditorConfig {
+    /// Set [`max_len`](Self::max_len).
+    #[must_use]
+    pub const fn max_len(mut self, max_len: usize) -> Self {
+        self.max_len = max_len;
+        self
+    }
+
+    /// Set [`scroll_margin`](Self::scroll_margin).
+    #[must_use]
+    pub const fn scroll_margin(mut self, scroll_margin: u16) -> Self {
+        self.scroll_margin = scroll_margin;
+        self
+    }
+
+    /// Set [`history_capacity`](Self::history_capacity).
+    #[must_use]
+    pub const fn history_capacity(mut self, history_capacity: usize) -> Self {
+        self.history_capacity = history_capacity;
+        self
+    }
+
+    /// Set [`history_ignore_space`](Self::history_ignore_space).
+    #[must_use]
+    pub const fn history_ignore_space(mut self, history_ignore_space: bool) -> Self {
+        self.history_ignore_space = history_ignore_space;
+        self
+    }
+
+    /// Set [`hints`](Self::hints).
+    #[must_use]
+    pub const fn hints(mut self, hints: bool) -> Self {
+        self.hints = hints;
+        self
+    }
+
+    /// Set [`tab_accepts_hint`](Self::tab_accepts_hint).
+    #[must_use]
+    pub const fn tab_accepts_hint(mut self, tab_accepts_hint: bool) -> Self {
+        self.tab_accepts_hint = tab_accepts_hint;
+        self
+    }
+
+    /// Set [`menu_max_rows`](Self::menu_max_rows).
+    #[must_use]
+    pub const fn menu_max_rows(mut self, menu_max_rows: u16) -> Self {
+        self.menu_max_rows = menu_max_rows;
+        self
+    }
+
+    /// Set [`styles`](Self::styles).
+    #[must_use]
+    pub const fn styles(mut self, styles: EditorStyles) -> Self {
+        self.styles = styles;
+        self
+    }
+}
+
 impl Default for EditorConfig {
     fn default() -> Self {
         Self {
@@ -60,6 +124,8 @@ impl Default for EditorConfig {
 /// What the application must do after a key or a paste.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
+// New variants may come in minor versions: `match` on it needs a `_` arm.
+#[non_exhaustive]
 pub enum EditorEvent {
     /// Nothing changed (the key is not an editing key, or the command had no effect).
     Ignored,

@@ -9,6 +9,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 /// [`crate::LineEditor::execute`] runs a command directly, without a key: applications
 /// and tests can drive the editor with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+// New variants may come in minor versions: `match` on it needs a `_` arm.
+#[non_exhaustive]
 pub enum Command {
     /// Insert a character at the cursor (ignored for a control character, or when the
     /// line is full).

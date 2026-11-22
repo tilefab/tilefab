@@ -23,13 +23,16 @@ widget = ["dep:tilefab-widget"]
 input = ["dep:tilefab-input"]
 
 [dependencies]
-tilefab-cli.workspace = true
+# Public dependency: `LineEditor::handle_key` and `KeyBinding` take crossterm types, so it is
+# re-exported (`tilefab::crossterm`) and applications use the very same version. Moving to
+# another crossterm minor version is therefore a breaking release of tilefab.
+crossterm.workspace = true
+tilefab-term.workspace = true
 tilefab-core.workspace = true
 tilefab-input = { workspace = true, optional = true }
 tilefab-widget = { workspace = true, optional = true }
 
 [dev-dependencies]
-crossterm.workspace = true
 stats_alloc.workspace = true
 
 [[example]]

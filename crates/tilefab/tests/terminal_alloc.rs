@@ -46,10 +46,9 @@ fn steady_state_frames_allocate_nothing() {
             let backend = Backend::with_fixed(Vec::new(), Size::new(80, 20), Position::new(0, 0));
             let mut terminal = Terminal::with_options(
                 backend,
-                TerminalOptions {
-                    viewport: Viewport::Inline(6),
-                    scroll_mode: mode,
-                },
+                TerminalOptions::default()
+                    .viewport(Viewport::Inline(6))
+                    .scroll_mode(mode),
             )
             .expect("in-memory terminal");
             // Warm-up: buffers and the output grow to their final size.

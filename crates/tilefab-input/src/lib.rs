@@ -7,7 +7,7 @@
 //! terminal layer.
 //!
 //! This crate does no terminal input/output: it consumes `crossterm` key events and
-//! draws into a buffer. It depends neither on the terminal (`tilefab-cli`) nor on the
+//! draws into a buffer. It depends neither on the terminal (`tilefab-term`) nor on the
 //! widget library (`tilefab-widget`).
 
 // The entire public API is documented; the lint catches omissions.

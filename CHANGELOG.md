@@ -11,8 +11,11 @@ break the API).
 
 First release on crates.io.
 
-- `tilefab`: façade crate, features `widget` and `input` (on by default).
-- Terminal layer (`tilefab-cli`): crossterm backend, double-buffered `Terminal`, full-screen and
+- `tilefab`: façade crate, features `widget` and `input` (on by default); re-exports
+  `crossterm`, a public dependency (key events).
+- Configuration types and growing enums are `#[non_exhaustive]`; configuration types have
+  chained setters (`TerminalOptions::default().viewport(…)`).
+- Terminal layer (`tilefab-term`): crossterm backend, double-buffered `Terminal`, full-screen and
   variable-height inline viewport, single synchronized frame commit, panic hooks.
 - Common base (`tilefab-core`): cells, buffer, styles, geometry and layout, styled text, widget traits.
 - Widgets (`tilefab-widget`): `Block`, `Paragraph`, `Gauge`, `LineGauge`, `List`, `Clear`.

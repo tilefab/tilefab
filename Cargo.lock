@@ -506,21 +506,10 @@ version = "0.1.0"
 dependencies = [
  "crossterm",
  "stats_alloc",
- "tilefab-cli",
  "tilefab-core",
  "tilefab-input",
+ "tilefab-term",
  "tilefab-widget",
-]
-
-[[package]]
-name = "tilefab-cli"
-version = "0.1.0"
-dependencies = [
- "crossterm",
- "proptest",
- "tilefab-core",
- "tracing",
- "unicode-segmentation",
 ]
 
 [[package]]
@@ -537,7 +526,6 @@ name = "tilefab-demo"
 version = "0.1.0"
 dependencies = [
  "color-eyre",
- "crossterm",
  "fastrand",
  "tilefab",
  "tokio",
@@ -552,6 +540,17 @@ dependencies = [
  "crossterm",
  "proptest",
  "tilefab-core",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "tilefab-term"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "proptest",
+ "tilefab-core",
+ "tracing",
  "unicode-segmentation",
 ]
 

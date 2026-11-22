@@ -13,7 +13,12 @@ use unicode_segmentation::UnicodeSegmentation;
 const INDICATOR: &str = "…";
 
 /// Styles of the parts the editor draws on top of the text.
+///
+/// New fields may come in minor versions, so it cannot be written as a struct literal outside
+/// this crate: start from `EditorStyles::default()` and chain the setters below (or assign the
+/// public fields of a mutable value).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct EditorStyles {
     /// The hint after the line (default: dim).
     pub hint: Style,
@@ -25,6 +30,44 @@ pub struct EditorStyles {
     pub menu_selected: Style,
     /// The descriptions and the `(+N more)` counter of the menu (default: dim).
     pub menu_description: Style,
+}
+
+/// Setters, to chain from [`EditorStyles::default`].
+impl EditorStyles {
+    /// Set [`hint`](Self::hint).
+    #[must_use]
+    pub const fn hint(mut self, hint: Style) -> Self {
+        self.hint = hint;
+        self
+    }
+
+    /// Set [`indicator`](Self::indicator).
+    #[must_use]
+    pub const fn indicator(mut self, indicator: Style) -> Self {
+        self.indicator = indicator;
+        self
+    }
+
+    /// Set [`search_match`](Self::search_match).
+    #[must_use]
+    pub const fn search_match(mut self, search_match: Style) -> Self {
+        self.search_match = search_match;
+        self
+    }
+
+    /// Set [`menu_selected`](Self::menu_selected).
+    #[must_use]
+    pub const fn menu_selected(mut self, menu_selected: Style) -> Self {
+        self.menu_selected = menu_selected;
+        self
+    }
+
+    /// Set [`menu_description`](Self::menu_description).
+    #[must_use]
+    pub const fn menu_description(mut self, menu_description: Style) -> Self {
+        self.menu_description = menu_description;
+        self
+    }
 }
 
 impl Default for EditorStyles {

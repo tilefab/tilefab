@@ -1,4 +1,4 @@
-# tilefab-cli
+# tilefab-term
 
 Terminal layer of [tilefab](https://crates.io/crates/tilefab): crossterm backend, double-buffered terminal and inline viewport.
 

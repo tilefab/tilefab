@@ -1,5 +1,5 @@
 [package]
-name = "tilefab-cli"
+name = "tilefab-term"
 description = "Terminal side of tilefab: crossterm backend, double-buffered terminal, inline viewport"
 version.workspace = true
 edition.workspace = true

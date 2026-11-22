@@ -14,6 +14,14 @@ in the terminal history.
   completion and horizontal scrolling.
 - No `unsafe` code.
 
+Key events are crossterm's: use the re-exported `tilefab::crossterm` rather than a separate
+`crossterm` dependency, so that both versions always match.
+
+Options and configuration types (`TerminalOptions`, `EditorConfig`, `EditorStyles`, `Candidate`)
+and the enums that will grow (`EditorCommand`, `EditorEvent`, `BorderType`, `ClearType`) are
+`#[non_exhaustive]`: build them from `default()` with the chained setters, and give a `match` a
+`_` arm, so that new options and variants can come in minor versions.
+
 ## Example
 
 ```rust,no_run
@@ -28,7 +36,7 @@ fn main() -> io::Result<()> {
     let _guard = TerminalGuard::raw()?;
     let mut terminal = Terminal::with_options(
         Backend::new(BufWriter::new(io::stdout())),
-        TerminalOptions { viewport: Viewport::Inline(1), ..TerminalOptions::default() },
+        TerminalOptions::default().viewport(Viewport::Inline(1)),
     )?;
 
     for percent in (0..=100).step_by(10) {
@@ -67,8 +75,15 @@ For the terminal layer only: `tilefab = { version = "0.1", default-features = fa
 ## Crates
 
 `tilefab` is the crate to depend on: it re-exports everything under `tilefab::…`. It is a façade over
-`tilefab-core`, `tilefab-cli`, `tilefab-widget` and `tilefab-input`, which are published only because
+`tilefab-core`, `tilefab-term`, `tilefab-widget` and `tilefab-input`, which are published only because
 it needs them; their versions always move together.
+
+| Layer | Re-exported here |
+|---|---|
+| `tilefab-core` | cells, buffer, styles, geometry and layout, styled text, the `Widget` traits; module `convert` |
+| `tilefab-term` | `Backend`, `Terminal`, `Frame`, `TerminalGuard`, panic hooks; module `viewport` (placement rule of the inline viewport) |
+| `tilefab-widget` (feature `widget`) | `Block`, `Paragraph`, `Gauge`, `LineGauge`, `List`, `Clear` |
+| `tilefab-input` (feature `input`) | `LineEditor` and its configuration; its `Command` is re-exported as `EditorCommand` |
 
 ## Minimum supported Rust version
 

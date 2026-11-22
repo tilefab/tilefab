@@ -35,7 +35,11 @@ pub struct Completions {
 /// assert_eq!(candidate.replacement, "start");
 /// assert!(candidate.append_space);
 /// ```
+///
+/// New fields may come in minor versions, so it cannot be written as a struct literal outside
+/// this crate: build it with [`Candidate::new`] and the setters.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Candidate {
     /// The text that replaces `line[start..cursor]`.
     pub replacement: String,
