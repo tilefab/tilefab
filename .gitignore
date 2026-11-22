@@ -81,6 +81,10 @@ AGENTS.md
 # Localized documentation
 *-fr.md
 
+# backup
+.backupignore
+tools/backup.sh
+
 # Private construction documents are maintained locally, outside the repository.
 /specifications/
 
