@@ -45,7 +45,7 @@ Keys typed while it waits are echoed by the terminal but not read: stdin is the 
 |---|---|
 | `start <name>` | starts a simulated task (3 to 10 s); the name is the rest of the line |
 | `list` | logs the running tasks and their progress |
-| `select <widget> [variant]` | chooses how the tasks started next are drawn: `progressline` (`blocks`, the default, `thin`, `dots`) or `progressbar` (`plain`, `bordered`); without a variant, the widget's first one; without arguments, shows the current choice. Each task keeps the view it started with. Tab completes the widget and the variant |
+| `select <widget> [variant] [bordered]` | chooses how the tasks started next are drawn: `progressline` (`blocks`, the default, `thin`, `dots`) or `progressbar` (`plain`); without a variant, the widget's first one; `bordered` surrounds the task with a rounded border titled with its name (3 rows instead of 1); without arguments, shows the current choice. Each task keeps the view it started with. Tab completes the widget, the variant and `bordered` |
 | `help` | logs the list of commands |
 | `quit`, `exit`, Ctrl+C, Ctrl+D (on an empty line) | clean exit |
 
