@@ -9,7 +9,7 @@ in the terminal history.
   synchronized update; the terminal never shows an intermediate state, and the last viewport line
   (typically a prompt) does not move when the height changes.
 - **Double buffering**: only the cells that changed are written.
-- **Widgets** (feature `widget`): `Block`, `Paragraph`, `Gauge`, `LineGauge`, `List`, `Clear`.
+- **Widgets** (feature `widget`): `Block`, `Paragraph`, `ProgressBar`, `ProgressLine`, `List`, `Clear`.
 - **Line editor** (feature `input`): `LineEditor`, readline-style editing with history, hints,
   completion and horizontal scrolling.
 - No `unsafe` code.
@@ -28,7 +28,7 @@ and the enums that will grow (`EditorCommand`, `EditorEvent`, `BorderType`, `Cle
 use std::io::{self, BufWriter};
 use std::{thread, time::Duration};
 
-use tilefab::{Backend, LineGauge, Style, Terminal, TerminalGuard, TerminalOptions, Viewport};
+use tilefab::{Backend, ProgressLine, Style, Terminal, TerminalGuard, TerminalOptions, Viewport};
 
 fn main() -> io::Result<()> {
     tilefab::install_panic_hook();
@@ -45,8 +45,8 @@ fn main() -> io::Result<()> {
             buf.set_string(0, 0, &format!("[INFO] step {percent}%"), Style::default());
         });
         terminal.draw(|frame| {
-            let gauge = LineGauge::default().percent(percent).label("build");
-            frame.render_widget(gauge, frame.area());
+            let bar = ProgressLine::default().percent(percent).label("build");
+            frame.render_widget(bar, frame.area());
         })?;
         thread::sleep(Duration::from_millis(200));
     }
@@ -82,7 +82,7 @@ it needs them; their versions always move together.
 |---|---|
 | `tilefab-core` | cells, buffer, styles, geometry and layout, styled text, the `Widget` traits; module `convert` |
 | `tilefab-term` | `Backend`, `Terminal`, `Frame`, `TerminalGuard`, panic hooks; module `viewport` (placement rule of the inline viewport) |
-| `tilefab-widget` (feature `widget`) | `Block`, `Paragraph`, `Gauge`, `LineGauge`, `List`, `Clear` |
+| `tilefab-widget` (feature `widget`) | `Block`, `Paragraph`, `ProgressBar`, `ProgressLine`, `List`, `Clear` |
 | `tilefab-input` (feature `input`) | `LineEditor` and its configuration; its `Command` is re-exported as `EditorCommand` |
 
 ## Minimum supported Rust version

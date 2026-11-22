@@ -131,7 +131,7 @@ def estimate_pitch(prof: np.ndarray) -> tuple[float, float]:
     repeat regularly: find the period by autocorrelation, refine it,
     then place line boundaries where there is the least ink (between lines)."""
     # Work on the profile's derivative: it keeps only text line edges
-    # (large solid areas, such as gauge bars, no longer dominate the rest).
+    # (large solid areas, such as progress bars, no longer dominate the rest).
     p = np.diff(prof.astype(np.float64))
     p -= p.mean()
     n = len(p)
@@ -139,7 +139,7 @@ def estimate_pitch(prof: np.ndarray) -> tuple[float, float]:
     ac = np.correlate(p, p, mode="full")[n - 1:] / (n - np.arange(n))
     ac /= ac[0]
     # A text line is at least MIN_PITCH pixels tall: below that, autocorrelation
-    # peaks come from within glyphs (stems, bars, gauge blocks).
+    # peaks come from within glyphs (stems, bars, progress bar blocks).
     lo, hi = MIN_PITCH, min(120, n // 2)
 
     def comb(lag: int) -> float:
@@ -201,7 +201,7 @@ class Layout:
         count = int((y1 - y0 - origin) // pitch)
         starts = [int(round(y0 + origin + k * pitch)) for k in range(count)]
         # Margins at the top and bottom of each band:
-        #  - bottom: the cursor and gauge blocks fill the whole cell and spill
+        #  - bottom: the cursor and progress bar blocks fill the whole cell and spill
         #    1-2 px into the neighboring line (antialiasing, rounding);
         #  - top, wider: descenders (g, q, p, y…) from the line above extend
         #    into the next band. The first line of the area has nothing above it, so the same

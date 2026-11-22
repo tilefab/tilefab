@@ -1,4 +1,4 @@
-//! Fullscreen demo of the small `tilefab` library: border, wrapped paragraph, animated gauge.
+//! Fullscreen demo of the small `tilefab` library: border, wrapped paragraph, animated progress bar.
 //!
 //! Run: `cargo run --example fullscreen`. `q`, Escape, or Ctrl+C quits.
 //! Resize the window: everything is recalculated and redrawn.
@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use tilefab::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use tilefab::{
-    Backend, Block, Color, Constraint, Gauge, Layout, Paragraph, Stylize, Terminal, TerminalGuard,
-    Wrap, install_panic_hook,
+    Backend, Block, Color, Constraint, Layout, Paragraph, ProgressBar, Stylize, Terminal,
+    TerminalGuard, Wrap, install_panic_hook,
 };
 
 const TEXT: &str = "This is a long paragraph, automatically wrapped to the width of the \
@@ -32,7 +32,7 @@ fn main() -> io::Result<()> {
         let ratio = (elapsed % 10.0) / 10.0;
 
         terminal.draw(|frame| {
-            let [title, body, gauge, help] = Layout::vertical([
+            let [title, body, bar, help] = Layout::vertical([
                 Constraint::Length(1),
                 Constraint::Fill(1),
                 Constraint::Length(3),
@@ -48,11 +48,11 @@ fn main() -> io::Result<()> {
                 body,
             );
             frame.render_widget(
-                Gauge::default()
+                ProgressBar::default()
                     .block(Block::bordered().title(" Progress "))
                     .filled_style(Color::Green)
                     .ratio(ratio),
-                gauge,
+                bar,
             );
             frame.render_widget("q: quit".fg(Color::DarkGray), help);
         })?;

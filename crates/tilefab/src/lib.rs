@@ -31,6 +31,6 @@ pub use tilefab_term::{
 };
 #[cfg(feature = "widget")]
 pub use tilefab_widget::{
-    Block, BorderType, Borders, Clear, Gauge, LineGauge, List, ListItem, ListState, Padding,
-    Paragraph, Wrap,
+    Block, BorderType, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, ProgressBar,
+    ProgressLine, Wrap,
 };

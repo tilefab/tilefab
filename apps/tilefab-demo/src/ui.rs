@@ -1,6 +1,8 @@
 //! Rendering the inline viewport and the lines inserted above it.
 
-use tilefab::{Color, Constraint, Frame, Layout, Line, LineGauge, Paragraph, Rect, Stylize, Wrap};
+use tilefab::{
+    Color, Constraint, Frame, Layout, Line, Paragraph, ProgressLine, Rect, Stylize, Wrap,
+};
 
 use tilefab::convert::saturating_u16;
 
@@ -36,7 +38,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
 /// `name       ━━━━━━━━──────────  45%`
 fn draw_task(frame: &mut Frame, task: &Task, area: Rect) {
-    let [name_area, gauge_area, percent_area] = Layout::horizontal([
+    let [name_area, bar_area, percent_area] = Layout::horizontal([
         Constraint::Length(NAME_WIDTH),
         Constraint::Fill(1),
         Constraint::Length(5),
@@ -44,16 +46,16 @@ fn draw_task(frame: &mut Frame, task: &Task, area: Rect) {
     .areas(area);
 
     frame.render_widget(Line::from(task.name.as_str()).bold(), name_area);
-    // Empty label: LineGauge leaves one column of space before the bar.
+    // Empty label: ProgressLine leaves one column of space before the bar.
     frame.render_widget(
-        LineGauge::default()
+        ProgressLine::default()
             .ratio(task.ratio)
             .label("")
             .filled_symbol("█")
             .unfilled_symbol("░")
             .filled_style(Color::Cyan)
             .unfilled_style(Color::DarkGray),
-        gauge_area,
+        bar_area,
     );
     frame.render_widget(
         Line::from(format!("{:3.0}%", task.ratio * 100.0)).right_aligned(),
