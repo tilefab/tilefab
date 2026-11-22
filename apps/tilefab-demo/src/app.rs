@@ -13,6 +13,7 @@ use tracing::{Level, error, info, warn};
 use crate::MAX_TASKS;
 use crate::logging;
 use crate::tasks::{self, TaskId};
+use crate::view::{TaskView, ViewError};
 
 /// Everything that can wake the UI loop goes through this type over a single
 /// channel: the UI loop is the only code that writes to the terminal.
@@ -48,6 +49,8 @@ pub enum Command {
     Empty,
     Start(String),
     List,
+    /// Choose the view of the tasks started next; `None`: show the current one.
+    Select(Option<TaskView>),
     Help,
     Quit,
     /// Hidden command for testing terminal restoration. Debug builds only
@@ -61,6 +64,8 @@ pub enum Command {
 pub enum CommandError {
     /// `start` without a task name.
     MissingName,
+    /// `select` arguments that name no view.
+    View(ViewError),
     /// Unrecognized first word.
     Unknown(String),
 }
@@ -70,6 +75,7 @@ pub enum CommandError {
 enum Kind {
     Start,
     List,
+    Select,
     Help,
     Quit,
 }
@@ -97,6 +103,12 @@ const COMMANDS: &[CommandSpec] = &[
         usage: "list",
         description: "list the running tasks",
         kind: Kind::List,
+    },
+    CommandSpec {
+        name: "select",
+        usage: "select <widget> [variant]",
+        description: "choose how new tasks are drawn",
+        kind: Kind::Select,
     },
     CommandSpec {
         name: "help",
@@ -138,6 +150,10 @@ impl Command {
             Kind::Start if rest.is_empty() => Err(CommandError::MissingName),
             Kind::Start => Ok(Self::Start(rest.to_string())),
             Kind::List => Ok(Self::List),
+            Kind::Select if rest.is_empty() => Ok(Self::Select(None)),
+            Kind::Select => TaskView::parse(rest)
+                .map(|view| Self::Select(Some(view)))
+                .map_err(CommandError::View),
             Kind::Help => Ok(Self::Help),
             Kind::Quit => Ok(Self::Quit),
         }
@@ -147,13 +163,15 @@ impl Command {
     fn help() -> String {
         let usages: Vec<&str> = COMMANDS.iter().map(|spec| spec.usage).collect();
         format!(
-            "commands: {} (or Ctrl+C, Ctrl+D to quit)",
-            usages.join(", ")
+            "commands: {} (or Ctrl+C, Ctrl+D to quit); widgets: {}",
+            usages.join(", "),
+            TaskView::summary()
         )
     }
 }
 
-/// Completes the command name (the first word); nothing for the task name.
+/// Completes the command name (the first word) and the widget and variant after `select`;
+/// nothing for the task name.
 pub struct CommandCompleter;
 
 impl Completer for CommandCompleter {
@@ -162,14 +180,14 @@ impl Completer for CommandCompleter {
         let start = before.len() - before.trim_start().len();
         let word = &before[start..];
         if word.contains(char::is_whitespace) {
-            return Completions::default();
+            return complete_view(word, start);
         }
         let candidates = COMMANDS
             .iter()
             .filter(|spec| spec.name.starts_with(word))
             .map(|spec| {
                 let candidate = Candidate::new(spec.name).description(spec.description);
-                if spec.kind == Kind::Start {
+                if matches!(spec.kind, Kind::Start | Kind::Select) {
                     candidate.append_space()
                 } else {
                     candidate
@@ -177,6 +195,42 @@ impl Completer for CommandCompleter {
             })
             .collect();
         Completions { start, candidates }
+    }
+}
+
+/// After `select`, completes the widget (second word) or its variant (third word). `word` is
+/// the line from its first word to the cursor, which is `start` bytes into the line.
+fn complete_view(word: &str, start: usize) -> Completions {
+    let Some(("select", args)) = word.split_once(char::is_whitespace) else {
+        return Completions::default();
+    };
+    let args = args.trim_start();
+    let (prefix, candidates): (&str, Vec<Candidate>) = match args.split_once(char::is_whitespace) {
+        None => (
+            args,
+            TaskView::widgets()
+                .into_iter()
+                .filter(|widget| widget.starts_with(args))
+                .map(|widget| Candidate::new(widget).append_space())
+                .collect(),
+        ),
+        Some((widget, variant)) => {
+            let variant = variant.trim_start();
+            if variant.contains(char::is_whitespace) {
+                return Completions::default();
+            }
+            (
+                variant,
+                TaskView::variants(widget)
+                    .filter(|candidate| candidate.starts_with(variant))
+                    .map(Candidate::new)
+                    .collect(),
+            )
+        }
+    };
+    Completions {
+        start: start + word.len() - prefix.len(),
+        candidates,
     }
 }
 
@@ -204,6 +258,8 @@ pub struct Task {
     pub id: TaskId,
     pub name: String,
     pub ratio: f64,
+    /// How the task is drawn: the view selected when it started.
+    pub view: TaskView,
 }
 
 pub struct App {
@@ -213,6 +269,8 @@ pub struct App {
     pub tasks: Vec<Task>,
     /// Lines to insert above the viewport on the next loop iteration.
     pub output: Vec<Line<'static>>,
+    /// View given to the tasks started next (`select`).
+    pub view: TaskView,
     pub should_quit: bool,
     /// Sender given to tasks so they can report progress.
     tx: Sender<AppEvent>,
@@ -226,6 +284,7 @@ impl App {
                 .with_completer(CommandCompleter),
             tasks: Vec::new(),
             output: Vec::new(),
+            view: TaskView::default(),
             should_quit: false,
             tx,
             next_id: 1,
@@ -309,11 +368,23 @@ impl App {
             Ok(Command::Empty) => {}
             Ok(Command::Start(name)) => self.start_task(name),
             Ok(Command::List) => self.list_tasks(),
+            Ok(Command::Select(None)) => info!(
+                "selected: {}; available: {}",
+                self.view.name(),
+                TaskView::summary()
+            ),
+            Ok(Command::Select(Some(view))) => {
+                self.view = view;
+                info!("new tasks will be drawn with {}", view.name());
+            }
             Ok(Command::Help) => info!("{}", Command::help()),
             Ok(Command::Quit) => self.should_quit = true,
             #[cfg(debug_assertions)]
             Ok(Command::Panic) => panic!("deliberate panic (`panic` command)"),
             Err(CommandError::MissingName) => error!("usage: start <name>"),
+            Err(CommandError::View(error)) => {
+                warn!("{error} (available: {})", TaskView::summary());
+            }
             Err(CommandError::Unknown(word)) => {
                 warn!("unknown command: \"{word}\" (type help)");
             }
@@ -336,6 +407,7 @@ impl App {
             id,
             name,
             ratio: 0.0,
+            view: self.view,
         });
     }
 
@@ -407,6 +479,34 @@ mod tests {
             Command::parse("start\talpha"),
             Ok(Command::Start("alpha".into()))
         );
+    }
+
+    #[test]
+    fn parse_select() {
+        assert_eq!(Command::parse("select"), Ok(Command::Select(None)));
+        assert_eq!(
+            Command::parse("select progressline dots"),
+            Ok(Command::Select(Some(TaskView::LineDots)))
+        );
+        assert_eq!(
+            Command::parse("select table"),
+            Err(CommandError::View(ViewError::UnknownWidget("table".into())))
+        );
+    }
+
+    #[tokio::test]
+    async fn each_task_keeps_the_view_selected_when_it_started() {
+        let mut app = new_app();
+        app.submit("start one");
+        app.submit("select progressline dots");
+        app.submit("start two");
+        app.submit("select progressbar");
+        let views: Vec<TaskView> = app.tasks.iter().map(|task| task.view).collect();
+        assert_eq!(views, [TaskView::LineBlocks, TaskView::LineDots]);
+        assert_eq!(app.view, TaskView::BarPlain);
+        // A rejected selection keeps the current one.
+        app.submit("select progressbar dots");
+        assert_eq!(app.view, TaskView::BarPlain);
     }
 
     #[test]
@@ -507,7 +607,7 @@ mod tests {
     }
 
     #[test]
-    fn the_completer_completes_the_command_name_only() {
+    fn the_completer_completes_commands_widgets_and_variants() {
         let names = |line: &str| -> (usize, Vec<String>) {
             let completions = CommandCompleter.complete(line, line.len());
             let names = completions
@@ -521,7 +621,7 @@ mod tests {
             names(""),
             (
                 0,
-                vec!["start", "list", "help", "quit", "exit"]
+                vec!["start", "list", "select", "help", "quit", "exit"]
                     .into_iter()
                     .map(String::from)
                     .collect()
@@ -531,6 +631,24 @@ mod tests {
         assert_eq!(names("e"), (0, vec!["exit".to_string()]));
         // Nothing for the task name.
         assert_eq!(names("start a"), (0, vec![]));
+        // After `select`: the widget, then its variant, each from where it starts.
+        assert_eq!(
+            names(" select  progress"),
+            (
+                9,
+                vec!["progressline".to_string(), "progressbar".to_string()]
+            )
+        );
+        assert_eq!(
+            names("select progressline d"),
+            (20, vec!["dots".to_string()])
+        );
+        assert_eq!(names("select table "), (13, vec![]));
+        assert_eq!(names("select progressline dots x"), (0, vec![]));
+        assert!(
+            CommandCompleter.complete("select p", 8).candidates[0].append_space,
+            "a variant can follow the widget"
+        );
         let start = &CommandCompleter.complete("st", 2).candidates[0];
         assert!(start.append_space);
         assert_eq!(start.description.as_deref(), Some("start a task"));
@@ -652,7 +770,7 @@ mod tests {
         assert_eq!(
             logs,
             [
-                "[INFO] commands: start <name>, list, help, quit, exit (or Ctrl+C, Ctrl+D to quit)",
+                "[INFO] commands: start <name>, list, select <widget> [variant], help, quit, exit (or Ctrl+C, Ctrl+D to quit); widgets: progressline [blocks|thin|dots], progressbar [plain|bordered]",
                 "[INFO] no task running",
                 "[ERROR] usage: start <name>",
                 "[WARN] unknown command: \"foo\" (type help)",
