@@ -1,6 +1,6 @@
 //! Common base: cells, buffer, styles, geometry, styled text and the widget traits.
 //!
-//! The other crates of the workspace (`tilefab-cli`, `tilefab-widget`, `tilefab-input`)
+//! The other crates of the workspace (`tilefab-term`, `tilefab-widget`, `tilefab-input`)
 //! build on this one, which depends on none of them and does no input/output (no crossterm).
 
 // The entire public API is documented; the lint catches omissions.
@@ -13,7 +13,7 @@ pub mod style;
 pub mod text;
 pub mod widget;
 
-pub use buffer::{Buffer, Cell};
+pub use buffer::{Buffer, Cell, grapheme_width};
 pub use layout::{Constraint, Direction, Layout, Margin, Position, Rect, Size};
 pub use style::{Color, Modifier, Style};
 pub use text::{Alignment, Line, Span, Stylize, Text};

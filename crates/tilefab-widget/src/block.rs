@@ -48,6 +48,8 @@ impl BitOr for Borders {
 
 /// Border line style.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+// New variants may come in minor versions: `match` on it needs a `_` arm.
+#[non_exhaustive]
 pub enum BorderType {
     /// `┌─┐│└┘`
     #[default]

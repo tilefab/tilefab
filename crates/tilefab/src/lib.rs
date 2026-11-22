@@ -1,38 +1,36 @@
-//! Small TUI library built on crossterm alone, with an inline
-//! viewport whose height can change from one frame to the next.
-//!
-//! Façade: re-exports the crates of the workspace under a single path, for applications.
-//!
-//! - [`tilefab_core`]: cells, buffer, styles, geometry, styled text, widget traits;
-//! - [`tilefab_cli`]: crossterm backend, terminal, inline viewport;
-//! - `tilefab_widget` (feature `widget`, on by default): gauges, blocks, lists, paragraphs;
-//! - `tilefab_input` (feature `input`, on by default): prompt line editor (its `Command`
-//!   is re-exported as `EditorCommand`).
-
+// The crate documentation (the docs.rs front page) is README.md, also the crates.io page:
+// one text for both, and its example is compiled as a doctest. That example needs the
+// `widget` feature; without it, a short description stands in.
+#![cfg_attr(feature = "widget", doc = include_str!("../README.md"))]
+#![cfg_attr(
+    not(feature = "widget"),
+    doc = "Small TUI library on crossterm with a variable-height inline viewport (built \
+           without the `widget` feature: see README.md for the full introduction)."
+)]
 // The entire public API is documented; the lint catches omissions.
 #![warn(missing_docs)]
 
-pub use tilefab_cli::{
-    Backend, ClearType, Frame, MAX_PENDING_LINES, ScrollMode, Terminal, TerminalGuard,
-    TerminalOptions, Viewport, install_fatal_panic_hook, install_panic_hook, restore, viewport,
-};
+/// The crossterm version tilefab is built on, for key events (`LineEditor::handle_key`,
+/// `KeyBinding`) and terminal queries: use it instead of a separate `crossterm` dependency,
+/// so that both always match.
+pub use crossterm;
+
 pub use tilefab_core::{
     Alignment, Buffer, Cell, Color, Constraint, Direction, Layout, Line, Margin, Modifier,
     Position, Rect, Size, Span, StatefulWidget, Style, Stylize, Text, Widget, convert,
+    grapheme_width,
 };
 #[cfg(feature = "input")]
 pub use tilefab_input::{
     Candidate, Command as EditorCommand, Completer, Completions, EditorConfig, EditorEvent,
     EditorStyles, Hinter, History, HistoryHinter, KeyBinding, Keymap, LineEditor,
 };
+pub use tilefab_term::{
+    Backend, ClearType, Frame, MAX_PENDING_LINES, ScrollMode, Terminal, TerminalGuard,
+    TerminalOptions, Viewport, install_fatal_panic_hook, install_panic_hook, restore, viewport,
+};
 #[cfg(feature = "widget")]
 pub use tilefab_widget::{
     Block, BorderType, Borders, Clear, Gauge, LineGauge, List, ListItem, ListState, Padding,
     Paragraph, Wrap,
 };
-
-// The Rust blocks of README.md (the crates.io page) are compiled as doctests, so that the
-// example shown to new users cannot drift from the API.
-#[cfg(all(doctest, feature = "widget"))]
-#[doc = include_str!("../README.md")]
-struct ReadmeDoctests;

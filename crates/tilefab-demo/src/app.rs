@@ -3,7 +3,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use crossterm::event::KeyEvent;
+use tilefab::crossterm::event::KeyEvent;
 use tilefab::{
     Candidate, Completer, Completions, EditorConfig, EditorEvent, History, Line, LineEditor,
 };
@@ -222,11 +222,8 @@ pub struct App {
 impl App {
     pub fn new(tx: Sender<AppEvent>) -> Self {
         Self {
-            editor: LineEditor::new(EditorConfig {
-                tab_accepts_hint: true,
-                ..EditorConfig::default()
-            })
-            .with_completer(CommandCompleter),
+            editor: LineEditor::new(EditorConfig::default().tab_accepts_hint(true))
+                .with_completer(CommandCompleter),
             tasks: Vec::new(),
             output: Vec::new(),
             should_quit: false,
@@ -267,7 +264,8 @@ impl App {
             EditorEvent::Submit(line) => self.accept_line(&line),
             // Ctrl+C, or Ctrl+D on an empty line.
             EditorEvent::Interrupt | EditorEvent::Eof => self.should_quit = true,
-            EditorEvent::Changed | EditorEvent::Ignored => {}
+            // `Changed`, `Ignored`, and any event a later tilefab version adds: nothing to do.
+            _ => {}
         }
     }
 
@@ -354,7 +352,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
+    use tilefab::crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
     use tokio::sync::mpsc;
 
     #[test]

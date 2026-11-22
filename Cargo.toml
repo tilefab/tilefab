@@ -1,4 +1,4 @@
-# Cargo workspace: the library crates (`tilefab-core`, `tilefab-cli`, `tilefab-widget`,
+# Cargo workspace: the library crates (`tilefab-core`, `tilefab-term`, `tilefab-widget`,
 # `tilefab-input`), the `tilefab` façade that gathers them, and the demo application
 # (`tilefab-demo`, binary `tilefab`). Dependencies only go downward:
 # core ← cli, widget, input ← tilefab ← tilefab-demo.
@@ -25,7 +25,7 @@ publish = false
 [workspace.dependencies]
 # The workspace crates. With a version, so that each one can be published on its own.
 tilefab = { path = "crates/tilefab", version = "0.1.0" }
-tilefab-cli = { path = "crates/tilefab-cli", version = "0.1.0" }
+tilefab-term = { path = "crates/tilefab-term", version = "0.1.0" }
 tilefab-core = { path = "crates/tilefab-core", version = "0.1.0" }
 tilefab-input = { path = "crates/tilefab-input", version = "0.1.0" }
 tilefab-widget = { path = "crates/tilefab-widget", version = "0.1.0" }

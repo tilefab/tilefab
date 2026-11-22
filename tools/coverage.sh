@@ -42,7 +42,7 @@ fi
 eval "$(cargo llvm-cov show-env --export-prefix 2>/dev/null)"
 cargo llvm-cov clean --workspace
 # Whatever happens, do not leave instrumented binaries in target/ (see the header).
-trap 'cargo clean -q -p tilefab -p tilefab-cli -p tilefab-core -p tilefab-demo -p tilefab-input -p tilefab-widget' EXIT
+trap 'cargo clean -q -p tilefab -p tilefab-term -p tilefab-core -p tilefab-demo -p tilefab-input -p tilefab-widget' EXIT
 
 echo "==> unit tests"
 cargo test -q --all-features >/dev/null

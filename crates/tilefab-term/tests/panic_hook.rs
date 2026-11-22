@@ -23,7 +23,7 @@ fn a_caught_panic_does_not_end_the_process_and_runs_destructors() {
     let flag = Arc::clone(&previous_called);
     // The "previous hook" (color-eyre's in the demo): the restoring hook must chain it.
     std::panic::set_hook(Box::new(move |_| flag.store(true, Ordering::SeqCst)));
-    tilefab_cli::install_panic_hook();
+    tilefab_term::install_panic_hook();
 
     let dropped = Arc::new(AtomicBool::new(false));
     let guard = SetOnDrop(Arc::clone(&dropped));

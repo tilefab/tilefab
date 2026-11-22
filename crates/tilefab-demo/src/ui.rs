@@ -80,7 +80,7 @@ pub fn wrapped_lines(lines: Vec<Line<'static>>, width: u16) -> (Paragraph<'stati
 
 #[cfg(test)]
 mod tests {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use tilefab::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use tilefab::{Backend, Position, Size, Terminal};
     use tokio::sync::mpsc;
 

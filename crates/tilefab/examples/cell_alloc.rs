@@ -70,10 +70,7 @@ fn inline() -> Report {
     let backend = Backend::with_fixed(Vec::new(), Size::new(100, 40), Position::new(0, 0));
     let mut terminal = Terminal::with_options(
         backend,
-        TerminalOptions {
-            viewport: Viewport::Inline(6),
-            ..TerminalOptions::default()
-        },
+        TerminalOptions::default().viewport(Viewport::Inline(6)),
     )
     .expect("in-memory terminal");
     measure(2_000, |i| {
@@ -159,10 +156,7 @@ fn terminal_only() -> Report {
     let backend = Backend::with_fixed(Vec::new(), Size::new(100, 40), Position::new(0, 0));
     let mut terminal = Terminal::with_options(
         backend,
-        TerminalOptions {
-            viewport: Viewport::Inline(6),
-            ..TerminalOptions::default()
-        },
+        TerminalOptions::default().viewport(Viewport::Inline(6)),
     )
     .expect("in-memory terminal");
     let digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];

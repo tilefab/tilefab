@@ -15,7 +15,7 @@
 use std::io::{self, BufWriter};
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use tilefab::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use tilefab::{
     Backend, Color, Constraint, Layout, Line, Paragraph, Span, Style, Stylize, Terminal,
@@ -33,10 +33,7 @@ fn main() -> io::Result<()> {
     let _guard = TerminalGuard::raw()?;
     let mut terminal = Terminal::with_options(
         Backend::new(BufWriter::new(io::stdout())),
-        TerminalOptions {
-            viewport: Viewport::Inline(1),
-            ..TerminalOptions::default()
-        },
+        TerminalOptions::default().viewport(Viewport::Inline(1)),
     )?;
 
     let mut input = String::new();

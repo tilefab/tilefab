@@ -48,6 +48,8 @@ use tilefab_core::style::{Color, Modifier};
 
 /// What `clear` erases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// New variants may come in minor versions: `match` on it needs a `_` arm.
+#[non_exhaustive]
 pub enum ClearType {
     /// The entire visible screen (`ESC[2J`).
     All,
@@ -64,7 +66,7 @@ pub enum ClearType {
 /// **one-based** row numbers. One side effect: the cursor returns to the top-left
 /// of the screen. Always reposition the cursor afterward.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SetScrollRegion {
+pub(crate) struct SetScrollRegion {
     /// First row of the region (zero-based, inclusive).
     pub top: u16,
     /// Last row of the region (zero-based, inclusive).
@@ -95,7 +97,7 @@ impl crossterm::Command for SetScrollRegion {
 /// DECSTBM sequence without parameters: `ESC [ r`. Like `SetScrollRegion`, it moves the cursor
 /// to the top-left corner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ResetScrollRegion;
+pub(crate) struct ResetScrollRegion;
 
 impl crossterm::Command for ResetScrollRegion {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {

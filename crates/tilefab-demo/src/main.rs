@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use color_eyre::Result;
-use crossterm::event::{self, EnableBracketedPaste, Event};
-use crossterm::execute;
+use tilefab::crossterm::event::{self, EnableBracketedPaste, Event};
+use tilefab::crossterm::execute;
 use tilefab::{
     Backend, Line, Terminal, TerminalGuard, TerminalOptions, Viewport, install_fatal_panic_hook,
 };
@@ -62,10 +62,7 @@ async fn main() -> Result<()> {
     // A single-line viewport when idle (the prompt); it grows with the tasks.
     let started = Terminal::with_options(
         Backend::new(BufWriter::new(stdout())),
-        TerminalOptions {
-            viewport: Viewport::Inline(1),
-            ..TerminalOptions::default()
-        },
+        TerminalOptions::default().viewport(Viewport::Inline(1)),
     );
     let mut terminal: AppTerminal = match started {
         Ok(terminal) => terminal,
@@ -273,10 +270,7 @@ mod tests {
         let backend = Backend::with_fixed(Vec::new(), Size::new(0, 10), Position::new(0, 0));
         let mut terminal = Terminal::with_options(
             backend,
-            TerminalOptions {
-                viewport: Viewport::Inline(1),
-                ..TerminalOptions::default()
-            },
+            TerminalOptions::default().viewport(Viewport::Inline(1)),
         )
         .unwrap();
         terminal.draw(|_| {}).unwrap();
@@ -306,15 +300,12 @@ mod tests {
 
     #[tokio::test]
     async fn the_burst_that_quits_is_written_before_leaving() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use tilefab::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
         let backend = Backend::with_fixed(Vec::new(), Size::new(30, 10), Position::new(0, 0));
         let mut terminal = Terminal::with_options(
             backend,
-            TerminalOptions {
-                viewport: Viewport::Inline(1),
-                ..TerminalOptions::default()
-            },
+            TerminalOptions::default().viewport(Viewport::Inline(1)),
         )
         .unwrap();
         let (tx, rx) = mpsc::channel(16);
