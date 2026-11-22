@@ -1,5 +1,5 @@
 //! Headless mode, used when stdin or stdout is not a terminal
-//! (`echo "start a" | tilefab`, redirection to a file…).
+//! (`echo "start a" | tilefab-demo`, redirection to a file…).
 //!
 //! No UI: commands are read line by line from stdin and logs are
 //! written to stderr. The logic (commands, tasks) is the same as in
@@ -57,7 +57,7 @@ fn flush_output(app: &mut App, out: &mut impl Write) -> std::io::Result<()> {
 }
 
 /// Read stdin line by line in a thread (blocking reads). The channel is bounded: when it
-/// is full, reading waits, so a large input (`cat big_file | tilefab`) is not loaded
+/// is full, reading waits, so a large input (`cat big_file | tilefab-demo`) is not loaded
 /// into memory faster than it is processed.
 fn spawn_stdin_thread(tx: Sender<AppEvent>) {
     std::thread::spawn(move || read_lines(std::io::stdin().lock(), &tx));

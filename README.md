@@ -22,6 +22,8 @@ beta       ██████████████░░░░░░░░░
 cargo run
 ```
 
+Without cloning the repository: `cargo install tilefab-demo`, then `tilefab-demo`. To use the library in a project, depend on the [`tilefab`](crates/tilefab/README.md) crate only; the `tilefab-*` crates are its internal layers.
+
 Outside a terminal (stdin or stdout redirected), the tool switches to **degraded mode**: no UI, commands are read line by line from stdin and logs are written to stderr. When stdin ends, it waits for the started tasks to finish.
 
 ```sh
@@ -121,7 +123,7 @@ A single UI loop owns the `Terminal`; nothing else writes to stdout.
 | `crates/tilefab-widget` | `Block`, `Paragraph`, `Gauge`, `LineGauge`, `List`, `Clear`, drawn in a `Buffer` without I/O | `tilefab-core` |
 | `crates/tilefab-input` | `LineEditor`: prompt line editor (keymap, kill ring, undo, horizontal scrolling), without terminal I/O | crossterm (events), `tilefab-core` |
 | `crates/tilefab` | façade: re-exports all of the above under `tilefab::…`; features `widget` and `input` (on by default) | the four crates above |
-| `crates/tilefab-demo` | the demo application (binary `tilefab`), not published | `tilefab` |
+| `crates/tilefab-demo` | the demo application (binary `tilefab-demo`) | `tilefab` |
 
 `tilefab-widget` and `tilefab-input` do no input/output, so they are tested without a terminal, and neither depends on `tilefab-cli`. `cargo test`, `cargo clippy`… at the root apply to the whole workspace.
 

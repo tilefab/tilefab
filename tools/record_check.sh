@@ -7,7 +7,7 @@
 #   tools/record_check.sh <terminal|iterm> <scenario> [command]
 #
 #   scenario   file name in tools/scenarios/ (without .scn) or path to a .scn file
-#   command    program to launch (default: target/debug/tilefab)
+#   command    program to launch (default: target/debug/tilefab-demo)
 #
 # Output: target/recordings/<date>-<terminal>-<scenario>.mov and .log (timestamped log).
 # Then:  tools/.venv/bin/python tools/frames_check.py <video>.mov --log <video>.log
@@ -37,7 +37,7 @@ export LC_ALL=C
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TERM_NAME="${1:-}"
 SCENARIO="${2:-}"
-COMMAND="${3:-$ROOT/target/debug/tilefab}"
+COMMAND="${3:-$ROOT/target/debug/tilefab-demo}"
 # The command runs with TILEFAB_HISTORY= (no history file): recordings never touch the
 # user's history.
 COLS="${COLS:-100}"

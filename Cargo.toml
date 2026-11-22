@@ -15,11 +15,11 @@ edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/tilefab/tilefab"
-readme = "README.md"
 keywords = ["tui", "terminal", "crossterm", "inline", "viewport"]
 categories = ["command-line-interface"]
-# Not on crates.io yet: remove this line once the `tilefab-*` names are checked and
-# the API is ready to publish.
+# Not on crates.io yet: remove this line for the first release. Every crate is published
+# (crates.io needs the dependencies of `tilefab` in the registry), but only `tilefab` is
+# the public entry point; the `tilefab-*` crates say so in their README.
 publish = false
 
 [workspace.dependencies]

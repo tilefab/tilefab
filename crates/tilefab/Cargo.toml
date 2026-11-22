@@ -6,10 +6,14 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 publish.workspace = true
+
+# docs.rs: document the optional modules too (`widget` and `input` are on by default, but
+# the build there must not depend on that).
+[package.metadata.docs.rs]
+all-features = true
 
 [features]
 default = ["widget", "input"]
