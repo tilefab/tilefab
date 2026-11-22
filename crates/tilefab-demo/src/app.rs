@@ -222,7 +222,11 @@ pub struct App {
 impl App {
     pub fn new(tx: Sender<AppEvent>) -> Self {
         Self {
-            editor: LineEditor::new(EditorConfig::default()).with_completer(CommandCompleter),
+            editor: LineEditor::new(EditorConfig {
+                tab_accepts_hint: true,
+                ..EditorConfig::default()
+            })
+            .with_completer(CommandCompleter),
             tasks: Vec::new(),
             output: Vec::new(),
             should_quit: false,

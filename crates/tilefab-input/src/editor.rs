@@ -33,6 +33,9 @@ pub struct EditorConfig {
     pub history_ignore_space: bool,
     /// Show hints (autosuggestions) after the line (default true).
     pub hints: bool,
+    /// Tab accepts the whole hint when completion has nothing to do (no completer, no
+    /// candidate, or the word is already complete) (default false).
+    pub tab_accepts_hint: bool,
     /// Maximum number of rows of the completion menu (default 5).
     pub menu_max_rows: u16,
     /// Styles of the hint, the indicators, the search match and the menu.
@@ -47,6 +50,7 @@ impl Default for EditorConfig {
             history_capacity: history::DEFAULT_CAPACITY,
             history_ignore_space: true,
             hints: true,
+            tab_accepts_hint: false,
             menu_max_rows: 5,
             styles: EditorStyles::default(),
         }
@@ -636,7 +640,10 @@ impl LineEditor {
             Command::HistoryLast => self.recall(Recall::Newest, false),
             Command::Cancel => self.cancel(),
             Command::ReverseSearch => self.start_search(),
-            Command::Complete => self.complete(false),
+            Command::Complete => match self.complete(false) {
+                EditorEvent::Ignored if self.config.tab_accepts_hint => self.accept_hint(false),
+                event => event,
+            },
             Command::CompletePrevious => self.complete(true),
             Command::ForwardSearch | Command::Abort => EditorEvent::Ignored,
         }
@@ -1641,6 +1648,38 @@ mod tests {
         assert_eq!(e.execute(Command::Complete), EditorEvent::Ignored);
         let mut plain = editor("li|");
         assert_eq!(plain.execute(Command::Complete), EditorEvent::Ignored);
+    }
+
+    #[test]
+    fn tab_accepts_the_hint_only_when_enabled_and_completion_has_nothing_to_do() {
+        let history = || with_history(&["start alpha now"]).history;
+        let config = EditorConfig {
+            tab_accepts_hint: true,
+            ..EditorConfig::default()
+        };
+        // Completion first: the command name, then the hint for the rest.
+        let mut e = LineEditor::new(config.clone())
+            .with_completer(Names(&["start", "list"]))
+            .with_history(history());
+        type_text(&mut e, "st");
+        assert_eq!(e.execute(Command::Complete), EditorEvent::Changed);
+        assert_eq!(shown(&e), "start |");
+        assert_eq!(e.execute(Command::Complete), EditorEvent::Changed);
+        assert_eq!(shown(&e), "start alpha now|");
+        let _ = e.execute(Command::Undo);
+        assert_eq!(shown(&e), "start |");
+        // Without a completer too.
+        let mut plain = LineEditor::new(config).with_history(history());
+        type_text(&mut plain, "sta");
+        assert_eq!(plain.execute(Command::Complete), EditorEvent::Changed);
+        assert_eq!(shown(&plain), "start alpha now|");
+        // Disabled (the default): Tab leaves the hint alone.
+        let mut off = LineEditor::new(EditorConfig::default())
+            .with_completer(Names(&["start"]))
+            .with_history(history());
+        type_text(&mut off, "start ");
+        assert_eq!(off.execute(Command::Complete), EditorEvent::Ignored);
+        assert_eq!(shown(&off), "start |");
     }
 
     #[test]

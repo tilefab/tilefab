@@ -69,7 +69,7 @@ The prompt uses the line editor of `tilefab-input`: readline-style Emacs keys, U
 | ↑/↓ | previous / next history entry that starts with what is typed |
 | Ctrl+P/Ctrl+N, Alt+</Alt+> | previous / next history entry, oldest / newest |
 | Ctrl+R | search the history (see below) |
-| Tab, Shift+Tab | complete the command name (see below) |
+| Tab, Shift+Tab | complete the command name (see below); with nothing to complete, Tab accepts the hint |
 | Esc | hide the hint; back to the typed line while browsing the history |
 | Enter (Ctrl+J, Ctrl+M) | run the line |
 
@@ -79,7 +79,7 @@ The prompt uses the line editor of `tilefab-input`: readline-style Emacs keys, U
 
 **Hints.** While typing, the rest of the newest matching history entry is shown dim after the line: → / End / Ctrl+F accepts it, Alt+F accepts one word, Esc hides it.
 
-**Completion.** Tab completes the command name (`st` → `start `). When several commands match, Tab inserts their common part, then a second Tab opens a menu below the prompt (the viewport grows to show it): Tab/↓ and Shift+Tab/↑ select, ←/→ change column, Enter keeps the selection without running the line, typing goes on after it, Esc restores the line.
+**Completion.** Tab completes the command name (`st` → `start `). When several commands match, Tab inserts their common part, then a second Tab opens a menu below the prompt (the viewport grows to show it): Tab/↓ and Shift+Tab/↑ select, ←/→ change column, Enter keeps the selection without running the line, typing goes on after it, Esc restores the line. When there is nothing left to complete (for instance after `start `), Tab accepts the whole hint, like →.
 
 **Paste.** The application turns bracketed paste on: a pasted text is inserted on the prompt line in one go (line breaks and tabs become spaces) and nothing runs before Enter. In a terminal without bracketed paste, pasted text arrives as typed keys and each line break runs a line.
 
