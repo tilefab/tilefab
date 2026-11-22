@@ -8,7 +8,7 @@ use tilefab::{
 use tilefab::convert::saturating_u16;
 
 use crate::app::{App, Task};
-use crate::view::TaskView;
+use crate::view::Look;
 
 /// Prefix displayed before the input.
 const PROMPT: &str = "> ";
@@ -58,7 +58,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 fn name_column_width(tasks: &[Task], width: u16) -> u16 {
     let longest = tasks
         .iter()
-        .filter(|task| task.view.is_line())
+        .filter(|task| task.view.uses_name_column())
         .map(|task| saturating_u16(Line::from(task.name.as_str()).width()))
         .max()
         .unwrap_or(0);
@@ -92,24 +92,30 @@ fn draw_task(frame: &mut Frame, task: &Task, area: Rect, name_width: u16) {
     let line = |frame: &mut Frame, symbols, color| {
         draw_line(frame, task, area, name_width, symbols, color);
     };
-    match task.view {
-        TaskView::LineBlocks => line(frame, ("█", "░"), Color::Cyan),
-        TaskView::LineThin => line(frame, ("━", "─"), Color::Yellow),
-        TaskView::LineDots => line(frame, ("●", "·"), Color::Green),
-        TaskView::BarPlain => draw_bar(frame, task, area, None),
-        TaskView::BarBordered => {
-            let block = Block::bordered()
-                .border_type(BorderType::Rounded)
-                .border_style(Color::Blue)
-                .title(Line::from(format!(" {} ", task.name)).bold());
-            draw_bar(frame, task, area, Some(block));
-        }
+    match task.view.look {
+        Look::LineBlocks => line(frame, ("█", "░"), Color::Cyan),
+        Look::LineThin => line(frame, ("━", "─"), Color::Yellow),
+        Look::LineDots => line(frame, ("●", "·"), Color::Green),
+        Look::Bar => draw_bar(frame, task, area, Color::Blue),
     }
+}
+
+/// The rounded border of a bordered task, in `color` and titled with its name; `None`
+/// when the task has no border.
+fn task_block(task: &Task, color: Color) -> Option<Block<'static>> {
+    task.view.bordered.then(|| {
+        Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(color)
+            .title(Line::from(format!(" {} ", task.name)).bold())
+    })
 }
 
 /// `name  ██████████░░░░░░░░░░  45%`: the name in a column `name_width` wide, then a
 /// `ProgressLine` filling the rest of the row up to the percentage, drawn with the
-/// `(filled, unfilled)` symbols.
+/// `(filled, unfilled)` symbols and `color`. With a border (in `color`, the name as its
+/// title), the `ProgressLine` takes the whole area and its label is the percentage:
+/// ` 45% ██████████░░░░░░░░░░`.
 fn draw_line(
     frame: &mut Frame,
     task: &Task,
@@ -118,6 +124,19 @@ fn draw_line(
     (filled, unfilled): (&'static str, &'static str),
     color: Color,
 ) {
+    let percent = format!("{:3.0}%", task.ratio * 100.0);
+    let bar = ProgressLine::default()
+        .ratio(task.ratio)
+        .filled_symbol(filled)
+        .unfilled_symbol(unfilled)
+        .filled_style(color)
+        .unfilled_style(Color::DarkGray);
+    if let Some(block) = task_block(task, color) {
+        // Fixed-width label, so that the bar does not move when the percentage grows.
+        frame.render_widget(bar.label(percent).block(block), area);
+        return;
+    }
+
     let [name_area, bar_area, percent_area] = Layout::horizontal([
         Constraint::Length(name_width),
         Constraint::Fill(1),
@@ -130,25 +149,15 @@ fn draw_line(
         name_area,
     );
     // Empty label: ProgressLine leaves one column of space before the bar.
-    frame.render_widget(
-        ProgressLine::default()
-            .ratio(task.ratio)
-            .label("")
-            .filled_symbol(filled)
-            .unfilled_symbol(unfilled)
-            .filled_style(color)
-            .unfilled_style(Color::DarkGray),
-        bar_area,
-    );
-    frame.render_widget(
-        Line::from(format!("{:3.0}%", task.ratio * 100.0)).right_aligned(),
-        percent_area,
-    );
+    frame.render_widget(bar.label(""), bar_area);
+    frame.render_widget(Line::from(percent).right_aligned(), percent_area);
 }
 
-/// A `ProgressBar` drawn with background colors, its label centered over it: `name 45%`
-/// without a block, `45%` inside one (the block's title then gives the name).
-fn draw_bar(frame: &mut Frame, task: &Task, area: Rect, block: Option<Block<'static>>) {
+/// A `ProgressBar` drawn with background colors (`color` for the filled part), its label
+/// centered over it: `name 45%` without a border, `45%` inside one (the border, in `color`,
+/// then gives the name as its title).
+fn draw_bar(frame: &mut Frame, task: &Task, area: Rect, color: Color) {
+    let block = task_block(task, color);
     let percent = format!("{:.0}%", task.ratio * 100.0);
     let label = if block.is_some() {
         percent
@@ -160,7 +169,7 @@ fn draw_bar(frame: &mut Frame, task: &Task, area: Rect, block: Option<Block<'sta
         .label(Span::raw(label).fg(Color::White).bold())
         .filled_symbol(" ")
         .unfilled_symbol(" ")
-        .filled_style(Style::new().bg(Color::Blue))
+        .filled_style(Style::new().bg(color))
         .unfilled_style(Style::new().bg(Color::DarkGray));
     if let Some(block) = block {
         bar = bar.block(block);
@@ -192,6 +201,7 @@ mod tests {
     use tokio::sync::mpsc;
 
     use crate::app::AppEvent;
+    use crate::view::TaskView;
 
     use super::*;
 
@@ -272,8 +282,8 @@ mod tests {
     #[test]
     fn each_task_is_drawn_with_its_own_view() {
         let mut app = app_with_tasks(3);
-        app.tasks[1].view = TaskView::LineDots;
-        app.tasks[2].view = TaskView::BarBordered;
+        app.tasks[1].view = TaskView::new(Look::LineDots);
+        app.tasks[2].view = TaskView::new(Look::Bar).with_border();
         // 1 + 1 + 3 task rows, then the prompt.
         assert_eq!(viewport_height(&app, 30), 6);
         let rows = render(&mut app, 30, 6);
@@ -286,9 +296,21 @@ mod tests {
     }
 
     #[test]
+    fn a_bordered_line_puts_the_name_in_the_title_and_the_percentage_before_the_bar() {
+        let mut app = app_with_tasks(1);
+        app.tasks[0].view = TaskView::new(Look::LineDots).with_border();
+        app.tasks[0].ratio = 0.05;
+        let rows = render(&mut app, 12, 4);
+        assert_eq!(rows, ["╭ t0 ──────╮", "│  5% ·····│", "╰──────────╯", ">"]);
+        // The bar stays in place as the percentage grows.
+        app.tasks[0].ratio = 1.0;
+        assert_eq!(render(&mut app, 12, 4)[1], "│100% ●●●●●│");
+    }
+
+    #[test]
     fn the_plain_bar_puts_the_name_and_percentage_in_its_label() {
         let mut app = app_with_tasks(1);
-        app.tasks[0].view = TaskView::BarPlain;
+        app.tasks[0].view = TaskView::new(Look::Bar);
         let rows = render(&mut app, 30, 2);
         assert_eq!(rows[0].trim(), "t0 50%", "{rows:?}");
     }
@@ -297,14 +319,15 @@ mod tests {
     fn the_name_column_fits_the_longest_line_name_up_to_a_third_of_the_width() {
         let mut app = app_with_tasks(3);
         app.tasks[0].name = "cinqsixsepthuitneuf".into();
-        app.tasks[2].name = "a much longer name, drawn in a bordered bar".into();
-        app.tasks[2].view = TaskView::BarBordered;
+        app.tasks[1].view = TaskView::new(Look::LineThin);
+        app.tasks[2].name = "a much longer name, drawn in a bordered line".into();
+        app.tasks[2].view = TaskView::new(Look::LineDots).with_border();
         // The bordered task does not count: the column is as wide as the first name.
         assert_eq!(name_column_width(&app.tasks, 90), 19);
         let rows = render(&mut app, 90, 6);
         assert!(rows[0].starts_with("cinqsixsepthuitneuf █"), "{rows:?}");
         // The bars line up after the shared column.
-        assert!(rows[1].starts_with("t1                  █"), "{rows:?}");
+        assert!(rows[1].starts_with("t1                  ━"), "{rows:?}");
         // Narrower: capped at a third of 30 columns, the name ends with `…`.
         assert_eq!(name_column_width(&app.tasks, 30), 10);
         let rows = render(&mut app, 30, 6);

@@ -106,7 +106,7 @@ const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "select",
-        usage: "select <widget> [variant]",
+        usage: "select <widget> [variant] [bordered]",
         description: "choose how new tasks are drawn",
         kind: Kind::Select,
     },
@@ -170,7 +170,8 @@ impl Command {
     }
 }
 
-/// Completes the command name (the first word) and the widget and variant after `select`;
+/// Completes the command name (the first word) and the widget, variant and border after
+/// `select`;
 /// nothing for the task name.
 pub struct CommandCompleter;
 
@@ -198,36 +199,29 @@ impl Completer for CommandCompleter {
     }
 }
 
-/// After `select`, completes the widget (second word) or its variant (third word). `word` is
-/// the line from its first word to the cursor, which is `start` bytes into the line.
+/// After `select`, completes the word being typed: the widget, its variant, then
+/// `bordered`. `word` is the line from its first word to the cursor, which is `start` bytes
+/// into the line.
 fn complete_view(word: &str, start: usize) -> Completions {
     let Some(("select", args)) = word.split_once(char::is_whitespace) else {
         return Completions::default();
     };
-    let args = args.trim_start();
-    let (prefix, candidates): (&str, Vec<Candidate>) = match args.split_once(char::is_whitespace) {
-        None => (
-            args,
-            TaskView::widgets()
-                .into_iter()
-                .filter(|widget| widget.starts_with(args))
-                .map(|widget| Candidate::new(widget).append_space())
-                .collect(),
-        ),
-        Some((widget, variant)) => {
-            let variant = variant.trim_start();
-            if variant.contains(char::is_whitespace) {
-                return Completions::default();
+    let (done, prefix) = args.rsplit_once(char::is_whitespace).unwrap_or(("", args));
+    let done: Vec<&str> = done.split_whitespace().collect();
+    let candidates = TaskView::next_words(&done)
+        .into_iter()
+        .filter(|candidate| candidate.starts_with(prefix))
+        .map(|name| {
+            // A space after the word when another one can follow it.
+            let mut words = done.clone();
+            words.push(name);
+            if TaskView::next_words(&words).is_empty() {
+                Candidate::new(name)
+            } else {
+                Candidate::new(name).append_space()
             }
-            (
-                variant,
-                TaskView::variants(widget)
-                    .filter(|candidate| candidate.starts_with(variant))
-                    .map(Candidate::new)
-                    .collect(),
-            )
-        }
-    };
+        })
+        .collect();
     Completions {
         start: start + word.len() - prefix.len(),
         candidates,
@@ -424,6 +418,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::view::Look;
     use tilefab::crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
     use tokio::sync::mpsc;
 
@@ -486,7 +481,7 @@ mod tests {
         assert_eq!(Command::parse("select"), Ok(Command::Select(None)));
         assert_eq!(
             Command::parse("select progressline dots"),
-            Ok(Command::Select(Some(TaskView::LineDots)))
+            Ok(Command::Select(Some(TaskView::new(Look::LineDots))))
         );
         assert_eq!(
             Command::parse("select table"),
@@ -502,11 +497,11 @@ mod tests {
         app.submit("start two");
         app.submit("select progressbar");
         let views: Vec<TaskView> = app.tasks.iter().map(|task| task.view).collect();
-        assert_eq!(views, [TaskView::LineBlocks, TaskView::LineDots]);
-        assert_eq!(app.view, TaskView::BarPlain);
+        assert_eq!(views, [TaskView::default(), TaskView::new(Look::LineDots)]);
+        assert_eq!(app.view, TaskView::new(Look::Bar));
         // A rejected selection keeps the current one.
         app.submit("select progressbar dots");
-        assert_eq!(app.view, TaskView::BarPlain);
+        assert_eq!(app.view, TaskView::new(Look::Bar));
     }
 
     #[test]
@@ -643,11 +638,34 @@ mod tests {
             names("select progressline d"),
             (20, vec!["dots".to_string()])
         );
+        assert_eq!(
+            names("select progressbar "),
+            (19, vec!["plain".to_string(), "bordered".to_string()])
+        );
+        assert_eq!(
+            names("select progressline dots  b"),
+            (26, vec!["bordered".to_string()])
+        );
         assert_eq!(names("select table "), (13, vec![]));
-        assert_eq!(names("select progressline dots x"), (0, vec![]));
-        assert!(
-            CommandCompleter.complete("select p", 8).candidates[0].append_space,
-            "a variant can follow the widget"
+        assert_eq!(names("select progressline dots x"), (25, vec![]));
+        assert_eq!(names("select progressline bordered "), (29, vec![]));
+        let append_space = |line: &str| -> Vec<bool> {
+            let completions = CommandCompleter.complete(line, line.len());
+            completions
+                .candidates
+                .iter()
+                .map(|c| c.append_space)
+                .collect()
+        };
+        assert_eq!(
+            append_space("select p"),
+            [true, true],
+            "a variant can follow"
+        );
+        assert_eq!(
+            append_space("select progressbar "),
+            [true, false],
+            "`bordered` can follow the variant, nothing follows `bordered`"
         );
         let start = &CommandCompleter.complete("st", 2).candidates[0];
         assert!(start.append_space);
@@ -770,7 +788,7 @@ mod tests {
         assert_eq!(
             logs,
             [
-                "[INFO] commands: start <name>, list, select <widget> [variant], help, quit, exit (or Ctrl+C, Ctrl+D to quit); widgets: progressline [blocks|thin|dots], progressbar [plain|bordered]",
+                "[INFO] commands: start <name>, list, select <widget> [variant] [bordered], help, quit, exit (or Ctrl+C, Ctrl+D to quit); widgets: progressline [blocks|thin|dots], progressbar [plain], then [bordered]",
                 "[INFO] no task running",
                 "[ERROR] usage: start <name>",
                 "[WARN] unknown command: \"foo\" (type help)",

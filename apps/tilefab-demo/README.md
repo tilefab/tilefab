@@ -21,7 +21,7 @@ cargo install tilefab-demo
 tilefab-demo
 ```
 
-Type `help` at the prompt for the list of commands (`start <name>`, `list`, `select <widget> [variant]`, `quit`…).
+Type `help` at the prompt for the list of commands (`start <name>`, `list`, `select <widget> [variant] [bordered]`, `quit`…).
 Outside a terminal (stdin or stdout redirected) it reads commands line by line from stdin:
 `printf 'start a\nstart b\n' | tilefab-demo`.
 
