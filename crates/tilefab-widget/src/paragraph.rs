@@ -17,7 +17,7 @@
 //! 6. omit a grapheme wider than the entire area (an ideograph in a one-column area);
 //!    an empty line stays empty.
 //!
-//! Differences from ratatui: non-breaking space (U+00A0) does not separate words; an oversized
+//! Notes: non-breaking space (U+00A0) does not separate words; an oversized
 //! word never fills the end of the previous line; tabs and other control characters
 //! are ignored.
 

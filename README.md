@@ -137,12 +137,12 @@ Notable choices:
 - **Keyboard thread using `poll` + `read`** rather than a lone blocking `read()`: crossterm has only one global input reader, locked for the whole duration of a `read()` wait. But the cursor position query needs the same lock and gives up after 2 s. With `poll(50 ms)`, the lock is released regularly.
 - **Panic hook**: `install_panic_hook` restores the terminal (cursor visible, main screen, line mode) **before** calling the previous hook, color-eyre's, installed earlier. The panic then unwinds as usual (destructors run, `catch_unwind` can stop it). The demo uses `install_fatal_panic_hook` instead: every panic is fatal, after the report the hook ends the process with code 101, even for a panic in a tokio task or a secondary thread.
 
-### Differences from ratatui
+### Scope and simplifications
 
 - **Layout**: no constraint solver, a simple four-step algorithm (see the header of `layout.rs`). No `Flex` other than `Start`; when space runs out, the last constraints are trimmed.
-- **Text wrapping**: greedy algorithm, simpler than ratatui's (see the header of `paragraph.rs`).
+- **Text wrapping**: greedy algorithm (see the header of `paragraph.rs`).
 - **Widgets**: only `Block`, `Paragraph`, `Gauge`, `LineGauge`, `List` and `Clear`. No tables, tabs, charts, or mouse support.
-- **Viewport**: the height of an inline viewport can change (`set_height`), which ratatui does not allow.
+- **Viewport**: the height of an inline viewport can change from one frame to the next (`set_height`).
 
 ## Tests and checks
 

@@ -2,10 +2,9 @@
 //!
 //! # Splitting algorithm (without a solver)
 //!
-//! ratatui resolves constraints with a solver (Cassowary). Here, a simple deterministic
-//! algorithm runs in four steps along the split axis (width for `horizontal`, height
-//! for `vertical`). Let `available` be the area length (after subtracting margins) minus
-//! the spacing between elements.
+//! No constraint solver: a simple deterministic algorithm runs in four steps along the
+//! split axis (width for `horizontal`, height for `vertical`). Let `available` be the area
+//! length (after subtracting margins) minus the spacing between elements.
 //!
 //! 1. **Each constraint's request**:
 //!    `Length(n)`, `Min(n)`, and `Max(n)` request `n`; `Percentage(p)` and `Ratio(a, b)` request
@@ -20,10 +19,10 @@
 //! 3. **Sharing the remainder**: leftover space goes to `Fill` constraints by weight (the same
 //!    largest remainder method, so the sum is exact); without a nonzero-weight `Fill`, it goes
 //!    to `Min` constraints equally. Otherwise the remainder stays empty **at the end of the
-//!    area** (ratatui's start-aligned behavior, `Flex::Start`).
+//!    area** (start-aligned behavior, `Flex::Start`).
 //! 4. **Positions**: rectangles follow in order, separated by the spacing.
 //!
-//! Differences from ratatui: `Max(n)` behaves like `Length(n)`, reduced when space is scarce
+//! Notes: `Max(n)` behaves like `Length(n)`, reduced when space is scarce
 //! (it never grows); percentages use the available space after spacing, not the whole
 //! area; when space is scarce, the last constraints are clipped regardless of type;
 //! no `Flex` mode other than `Start`.

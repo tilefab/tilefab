@@ -325,7 +325,7 @@ impl Widget for LineGauge<'_> {
             return;
         }
         let bar_width = inner.right() - start;
-        // Filled columns: round down (like ratatui); 100% fills everything.
+        // Filled columns: round down; 100% fills everything.
         let filled = scale(bar_width, self.ratio, f64::floor);
         for dx in 0..bar_width {
             let (symbol, style) = if dx < filled {

@@ -26,7 +26,7 @@
 //!   the cursor offset within it, then clear from the viewport top to the screen bottom
 //!   (`ESC[J`) and redraw everything. **Known limitation**: Terminal.app and iTerm2 reflow
 //!   existing lines when the window shrinks, which may leave copies of the old
-//!   viewport above it. This is the same strategy as ratatui.
+//!   viewport above it.
 //!   If the terminal does not answer the cursor query (slow SSH link, multiplexer), the
 //!   position is estimated instead of failing: the viewport keeps its row, moved up just
 //!   enough to stay on screen (anchored at the bottom) when the screen shrinks. A warning is

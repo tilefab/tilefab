@@ -1,4 +1,4 @@
-//! Small TUI library inspired by ratatui, built on crossterm alone, with an inline
+//! Small TUI library built on crossterm alone, with an inline
 //! viewport whose height can change from one frame to the next.
 //!
 //! Façade: re-exports the crates of the workspace under a single path, for applications.
@@ -8,9 +8,6 @@
 //! - `tilefab_widget` (feature `widget`, on by default): gauges, blocks, lists, paragraphs;
 //! - `tilefab_input` (feature `input`, on by default): prompt line editor (its `Command`
 //!   is re-exported as `EditorCommand`).
-//!
-//! Names (`Rect`, `Buffer`, `Style`…) follow ratatui, to feel familiar to its users,
-//! without promising compatibility.
 
 // The entire public API is documented; the lint catches omissions.
 #![warn(missing_docs)]
