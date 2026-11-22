@@ -30,3 +30,9 @@ pub use tilefab_widget::{
     Block, BorderType, Borders, Clear, Gauge, LineGauge, List, ListItem, ListState, Padding,
     Paragraph, Wrap,
 };
+
+// The Rust blocks of README.md (the crates.io page) are compiled as doctests, so that the
+// example shown to new users cannot drift from the API.
+#[cfg(all(doctest, feature = "widget"))]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

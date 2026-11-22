@@ -6,18 +6,15 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-
-# Command-line utility only: never published, whatever the workspace setting becomes.
-publish = false
+# Published so that `cargo install tilefab-demo` gives a ready-to-run demo.
+publish.workspace = true
 
 [[bin]]
-name = "tilefab"
+# Not `tilefab`: an installed binary with the library's name would look like an official tool.
+name = "tilefab-demo"
 path = "src/main.rs"
-# Same name as the library crate: document the library only.
-doc = false
 
 [dependencies]
 color-eyre.workspace = true
