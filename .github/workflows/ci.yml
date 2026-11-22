@@ -8,8 +8,11 @@
 # being updated.
 name: CI
 
+# `push` only on main: a branch with an open pull request is already checked by the
+# `pull_request` event, so the workflow does not run twice for the same commit.
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
