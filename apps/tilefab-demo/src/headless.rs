@@ -112,6 +112,7 @@ mod tests {
             id: 1,
             name: "a".into(),
             ratio: 0.5,
+            view: crate::view::TaskView::default(),
         });
         app.handle_event(AppEvent::TaskDone(1));
 

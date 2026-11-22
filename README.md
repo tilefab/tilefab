@@ -45,10 +45,11 @@ Keys typed while it waits are echoed by the terminal but not read: stdin is the 
 |---|---|
 | `start <name>` | starts a simulated task (3 to 10 s); the name is the rest of the line |
 | `list` | logs the running tasks and their progress |
+| `select <widget> [variant]` | chooses how the tasks started next are drawn: `progressline` (`blocks`, the default, `thin`, `dots`) or `progressbar` (`plain`, `bordered`); without a variant, the widget's first one; without arguments, shows the current choice. Each task keeps the view it started with. Tab completes the widget and the variant |
 | `help` | logs the list of commands |
 | `quit`, `exit`, Ctrl+C, Ctrl+D (on an empty line) | clean exit |
 
-At most 5 simultaneous tasks (`MAX_TASKS`); beyond that, the command is refused with a WARN. An unknown command gives a WARN, `start` without a name an ERROR.
+At most 5 simultaneous tasks (`MAX_TASKS`); beyond that, the command is refused with a WARN. An unknown command gives a WARN, `start` without a name an ERROR, an unknown widget or variant for `select` a WARN.
 The hidden `panic` command triggers a deliberate panic, to check that the terminal is properly restored. It exists in debug builds only (`cargo build`, used by `tools/check_app.py`); in a release build, `panic` is an unknown command.
 
 ## Line editing

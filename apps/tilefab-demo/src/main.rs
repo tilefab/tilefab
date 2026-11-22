@@ -6,6 +6,7 @@ mod headless;
 mod logging;
 mod tasks;
 mod ui;
+mod view;
 
 use std::io::{BufWriter, IsTerminal, Stdout, Write, stdin, stdout};
 use std::path::PathBuf;
