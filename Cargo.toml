@@ -1,7 +1,7 @@
 # Cargo workspace: the library crates in `crates/` (`tilefab-core`, `tilefab-term`,
 # `tilefab-widget`, `tilefab-input`, and the `tilefab` façade that gathers them), and the
-# demo application in `apps/` (`tilefab-demo`, binary `tilefab-demo`). Dependencies only
-# go downward: core ← cli, widget, input ← tilefab ← tilefab-demo.
+# demo application in `apps/` (`widget-demo`, binary `widget-demo`). Dependencies only
+# go downward: core ← cli, widget, input ← tilefab ← widget-demo.
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*"]

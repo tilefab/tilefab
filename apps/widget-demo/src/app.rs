@@ -718,7 +718,7 @@ mod tests {
 
     #[test]
     fn submitted_lines_go_to_the_history_file() {
-        let dir = std::env::temp_dir().join(format!("tilefab-demo-history-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("widget-demo-history-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("history");
         std::fs::create_dir_all(&dir).unwrap();
@@ -738,7 +738,7 @@ mod tests {
     #[test]
     fn an_unusable_history_file_is_reported_once() {
         let dir =
-            std::env::temp_dir().join(format!("tilefab-demo-bad-history-{}", std::process::id()));
+            std::env::temp_dir().join(format!("widget-demo-bad-history-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut app = new_app();
         // A directory is not a history file.

@@ -1,4 +1,4 @@
-# tilefab-demo
+# widget-demo
 
 Demo of the [tilefab](https://crates.io/crates/tilefab) TUI library: log lines scroll above an
 **inline viewport** that shows one progress bar per running task, with an input prompt on its last
@@ -17,13 +17,13 @@ beta       ██████████████░░░░░░░░░
 ## Install and run
 
 ```sh
-cargo install tilefab-demo
-tilefab-demo
+cargo install widget-demo
+widget-demo
 ```
 
 Type `help` at the prompt for the list of commands (`start <name>`, `list`, `select <widget> [variant] [bordered]`, `quit`…).
 Outside a terminal (stdin or stdout redirected) it reads commands line by line from stdin:
-`printf 'start a\nstart b\n' | tilefab-demo`.
+`printf 'start a\nstart b\n' | widget-demo`.
 
 More details in the [repository README](https://github.com/tilefab/tilefab#readme).
 

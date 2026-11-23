@@ -21,7 +21,7 @@ First release on crates.io.
 - Widgets (`tilefab-widget`): `Block`, `Paragraph`, `ProgressBar`, `ProgressLine`, `List`, `Clear`.
 - Line editor (`tilefab-input`): `LineEditor` with keymap, kill ring, undo / redo, history,
   hints, completion and bracketed paste.
-- Demo application `tilefab-demo` (`cargo install tilefab-demo`).
+- Demo application `widget-demo` (`cargo install widget-demo`).
 
 [Unreleased]: https://github.com/tilefab/tilefab/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/tilefab/tilefab/releases/tag/v0.1.0

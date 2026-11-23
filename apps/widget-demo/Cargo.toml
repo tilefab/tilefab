@@ -1,5 +1,5 @@
 [package]
-name = "tilefab-demo"
+name = "widget-demo"
 description = "Demo CLI with a variable-height inline viewport, built on tilefab"
 version.workspace = true
 edition.workspace = true
@@ -8,12 +8,12 @@ license.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
-# Published so that `cargo install tilefab-demo` gives a ready-to-run demo.
+# Published so that `cargo install widget-demo` gives a ready-to-run demo.
 publish.workspace = true
 
 [[bin]]
 # Not `tilefab`: an installed binary with the library's name would look like an official tool.
-name = "tilefab-demo"
+name = "widget-demo"
 path = "src/main.rs"
 
 [dependencies]
