@@ -9,7 +9,7 @@ Setup (once, from the repository root):
 Library usage (see tools/scenarios_pty.py):
 
     from pty_harness import Term
-    t = Term(["target/debug/tilefab-demo"], rows=30, cols=100)
+    t = Term(["target/debug/widget-demo"], rows=30, cols=100)
     t.wait_idle()
     t.send("start alpha\\r")
     t.wait_for("started")

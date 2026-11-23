@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""End-to-end verification of `tilefab-demo` in a pty.
+"""End-to-end verification of `widget-demo` in a pty.
 
     cargo build            # or `cargo build --release` with --release
     tools/.venv/bin/python tools/check_app.py [--rows 24] [--cols 100] [--prefill 40] [--release]
 
-With --release, the scenarios run `target/release/tilefab-demo` instead of `target/debug/tilefab-demo`:
+With --release, the scenarios run `target/release/widget-demo` instead of `target/debug/widget-demo`:
 release-only code paths (no overflow checks, no `debug_assert!`) are checked end to end too.
 
 Scenarios:
@@ -47,7 +47,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from pty_harness import SYNC_END, Term, outside_sync  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-BIN = ROOT / "target" / "debug" / "tilefab-demo"  # target/release/tilefab-demo with --release (see main)
+BIN = ROOT / "target" / "debug" / "widget-demo"  # target/release/widget-demo with --release (see main)
 NAMES = ["alpha", "beta", "gamma", "delta", "epsilon"]
 # Sequences sought in emitted bytes (outside f-strings: Python 3.9 forbids backslashes).
 CPR = b"\x1b[6n"  # cursor position query
@@ -449,7 +449,7 @@ def main() -> int:
     args = parser.parse_args()
     global BIN
     if args.release:
-        BIN = ROOT / "target" / "release" / "tilefab-demo"
+        BIN = ROOT / "target" / "release" / "widget-demo"
     if not BIN.exists():
         build = "cargo build --release" if args.release else "cargo build"
         print("%s not found: run `%s`" % (BIN, build), file=sys.stderr)

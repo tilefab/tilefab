@@ -59,7 +59,7 @@ fn main() -> io::Result<()> {
 ## See it running
 
 - The demo application (tasks with progress bars above a prompt):
-  `cargo install tilefab-demo`, then run `tilefab-demo`.
+  `cargo install widget-demo`, then run `widget-demo`.
 - The examples of the repository, after a `git clone`:
   `cargo run --example inline` (variable-height viewport) and `cargo run --example fullscreen`.
 
