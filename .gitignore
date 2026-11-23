@@ -70,6 +70,7 @@ $RECYCLE.BIN/
 # AI agent instructions and configurations (MCP servers, Serena project and memories):
 # personal tooling, kept local.
 .bob/
+.bobignore
 .claude/
 CLAUDE.md
 .codex/

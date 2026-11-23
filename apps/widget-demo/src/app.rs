@@ -159,14 +159,32 @@ impl Command {
         }
     }
 
-    /// The `help` message.
+    /// The `help` message, on several lines: the command names, the usage of the commands
+    /// that take arguments, the ways to quit, then the widgets and their variants.
     fn help() -> String {
-        let usages: Vec<&str> = COMMANDS.iter().map(|spec| spec.usage).collect();
-        format!(
-            "commands: {} (or Ctrl+C, Ctrl+D to quit); widgets: {}",
-            usages.join(", "),
-            TaskView::summary()
-        )
+        let names: Vec<&str> = COMMANDS.iter().map(|spec| spec.name).collect();
+        let mut lines = vec![format!("commands: {}", names.join(", "))];
+        lines.extend(
+            COMMANDS
+                .iter()
+                .filter(|spec| spec.usage != spec.name)
+                .map(|spec| format!("  {}", spec.usage)),
+        );
+        let quits: Vec<&str> = COMMANDS
+            .iter()
+            .filter(|spec| spec.kind == Kind::Quit)
+            .map(|spec| spec.name)
+            .collect();
+        lines.push(format!(
+            "  {} (or Ctrl+C, Ctrl+D to quit)",
+            quits.join(", ")
+        ));
+        lines.push("  widgets:".to_string());
+        lines.extend(TaskView::widgets().into_iter().map(|widget| {
+            let variants: Vec<&str> = TaskView::variants(widget).collect();
+            format!("    {widget} [{}]", variants.join("|"))
+        }));
+        lines.join("\n")
     }
 }
 
@@ -788,7 +806,13 @@ mod tests {
         assert_eq!(
             logs,
             [
-                "[INFO] commands: start <name>, list, select <widget> [variant] [bordered], help, quit, exit (or Ctrl+C, Ctrl+D to quit); widgets: progressline [blocks|thin|dots], progressbar [plain], then [bordered]",
+                "[INFO] commands: start, list, select, help, quit, exit",
+                "  start <name>",
+                "  select <widget> [variant] [bordered]",
+                "  quit, exit (or Ctrl+C, Ctrl+D to quit)",
+                "  widgets:",
+                "    progressline [blocks|thin|dots]",
+                "    progressbar [plain]",
                 "[INFO] no task running",
                 "[ERROR] usage: start <name>",
                 "[WARN] unknown command: \"foo\" (type help)",
