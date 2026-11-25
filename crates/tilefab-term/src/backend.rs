@@ -31,7 +31,7 @@
 use std::fmt;
 use std::io::{self, Write};
 
-use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::cursor::{Hide, MoveTo, RestorePosition, SavePosition, Show};
 use crossterm::queue;
 use crossterm::style::{
     Attribute, Color as CtColor, Print, SetAttribute, SetBackgroundColor, SetForegroundColor,
@@ -192,6 +192,8 @@ enum Source {
 pub struct Backend<W: Write> {
     writer: W,
     source: Source,
+    /// A synchronized update was begun and not ended yet (see [`Backend::abort_sync`]).
+    in_sync: bool,
 }
 
 impl<W: Write> Backend<W> {
@@ -200,6 +202,7 @@ impl<W: Write> Backend<W> {
         Self {
             writer,
             source: Source::Terminal,
+            in_sync: false,
         }
     }
 
@@ -211,6 +214,7 @@ impl<W: Write> Backend<W> {
                 size,
                 cursor: Some(cursor),
             },
+            in_sync: false,
         }
     }
 
@@ -359,6 +363,8 @@ impl<W: Write> Backend<W> {
     ///
     /// Returns an error if writing to the underlying stream fails.
     pub fn begin_sync(&mut self) -> io::Result<()> {
+        // Set first: even a partly written opening must be closed.
+        self.in_sync = true;
         queue!(self.writer, BeginSynchronizedUpdate)
     }
 
@@ -368,7 +374,27 @@ impl<W: Write> Backend<W> {
     ///
     /// Returns an error if writing to the underlying stream fails.
     pub fn end_sync(&mut self) -> io::Result<()> {
-        queue!(self.writer, EndSynchronizedUpdate)
+        queue!(self.writer, EndSynchronizedUpdate)?;
+        self.in_sync = false;
+        Ok(())
+    }
+
+    /// Close a frame interrupted by an error or a panic, on a best-effort basis (errors are
+    /// ignored): reset the scroll region, which an interrupted `scroll_region_up` may leave
+    /// set, then end the synchronized update, so that the terminal does not keep its display
+    /// frozen. `ESC[r` moves the cursor to the top-left corner: it is saved before (`ESC 7`)
+    /// and restored after (`ESC 8`). Nothing is written when no update is open.
+    pub fn abort_sync(&mut self) {
+        if std::mem::replace(&mut self.in_sync, false) {
+            let _ = queue!(
+                self.writer,
+                SavePosition,
+                ResetScrollRegion,
+                RestorePosition,
+                EndSynchronizedUpdate
+            );
+            let _ = self.writer.flush();
+        }
     }
 
     /// Hide the terminal cursor.
