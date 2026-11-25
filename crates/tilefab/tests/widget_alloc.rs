@@ -1,6 +1,6 @@
-//! Drawing `LineWidget`s in the frames of an inline `Terminal` allocates nothing: a warm frame
-//! that updates and draws them stays allocation-free (see `terminal_alloc.rs` for the
-//! `Terminal` side alone).
+//! Drawing `LineWidget`s and a `LineEditor` in the frames of an inline `Terminal` allocates
+//! nothing: a warm frame that updates the widgets and draws them, with the prompt line and its
+//! hint, stays allocation-free (see `terminal_alloc.rs` for the `Terminal` side alone).
 //!
 //! A separate test binary, because the counting allocator is global to the whole binary:
 //! it holds this single test, so no other test thread allocates during the measurement.
@@ -11,8 +11,8 @@ use std::alloc::System;
 
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 use tilefab::{
-    Backend, Color, Entry, LineWidget, Position, Size, Style, Terminal, TerminalOptions, Viewport,
-    WallTime,
+    Backend, Color, EditorCommand, EditorConfig, Entry, History, Line, LineEditor, LineWidget,
+    Position, Size, Style, Terminal, TerminalOptions, Viewport, WallTime,
 };
 
 // `stats_alloc` holds the `unsafe` code, which this project forbids in its own sources.
@@ -43,11 +43,19 @@ fn drawing_line_widgets_in_frames_allocates_nothing() {
     let backend = Backend::with_fixed(Vec::new(), Size::new(120, 20), Position::new(0, 0));
     let mut terminal = Terminal::with_options(
         backend,
-        TerminalOptions::default().viewport(Viewport::Inline(3)),
+        TerminalOptions::default().viewport(Viewport::Inline(4)),
     )
     .expect("in-memory terminal");
     let mut tasks = [task("alpha"), task("beta"), task("a much longer task name")];
-    let frame = |i: u16, terminal: &mut Terminal<Vec<u8>>, tasks: &mut [LineWidget]| {
+    // A prompt line with a hint from the history: `start a` + dim `lpha`.
+    let mut history = History::new(10);
+    history.add("start alpha");
+    let mut editor = LineEditor::new(EditorConfig::default()).with_history(history);
+    for c in "start a".chars() {
+        let _ = editor.execute(EditorCommand::InsertChar(c));
+    }
+    let prompt = Line::from("> ");
+    let mut frame = |i: u16, terminal: &mut Terminal<Vec<u8>>, tasks: &mut [LineWidget]| {
         for (offset, task) in (0..).step_by(7).zip(tasks.iter_mut()) {
             let step = (i + offset) % 100;
             let index = usize::from(step % 2);
@@ -79,6 +87,10 @@ fn drawing_line_widgets_in_frames_allocates_nothing() {
                 for (task, row) in tasks.iter().zip(area.rows()) {
                     frame.render_widget(task, row);
                 }
+                let last = area.rows().last().unwrap_or(area);
+                if let Some(cursor) = editor.render(last, frame.buffer_mut(), &prompt) {
+                    frame.set_cursor_position(cursor);
+                }
             })
             .unwrap();
         // Keep the memory of the output, as a real terminal writer would.
@@ -97,6 +109,6 @@ fn drawing_line_widgets_in_frames_allocates_nothing() {
     assert_eq!(
         (stats.allocations, stats.reallocations),
         (0, 0),
-        "line widget frames: {stats:?}"
+        "line widget and line editor frames: {stats:?}"
     );
 }

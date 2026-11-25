@@ -113,24 +113,25 @@ pub(crate) fn draw_line(
     let text_x = row.x + to_u16(prompt_width);
     let width = usize::from(row.width) - prompt_width;
 
-    // Columns of each grapheme.
-    let mut graphemes = Vec::new();
+    // Width of the line and column of the cursor: a first pass over the graphemes, a second
+    // one draws them (no list of them, so that a frame allocates nothing).
     let mut total = 0;
     let mut cursor_col = None;
     for (start, grapheme) in line.text.grapheme_indices(true) {
         if start == line.cursor {
             cursor_col = Some(total);
         }
-        let columns = grapheme_width(grapheme);
-        graphemes.push((start, grapheme, total, columns));
-        total += columns;
+        total += grapheme_width(grapheme);
     }
     let cursor_col = cursor_col.unwrap_or(total);
 
     *scroll = scroll_offset(*scroll, cursor_col, total, width, usize::from(margin));
     let offset = *scroll;
 
-    for &(start, grapheme, col, columns) in &graphemes {
+    let mut next_col = 0;
+    for (start, grapheme) in line.text.grapheme_indices(true) {
+        let (col, columns) = (next_col, grapheme_width(grapheme));
+        next_col += columns;
         // A grapheme cut by an edge is not drawn: its visible column stays blank (or
         // becomes an indicator).
         if columns == 0 || col < offset || col + columns > offset + width {

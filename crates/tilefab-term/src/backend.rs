@@ -33,9 +33,7 @@ use std::io::{self, Write};
 
 use crossterm::cursor::{Hide, MoveTo, RestorePosition, SavePosition, Show};
 use crossterm::queue;
-use crossterm::style::{
-    Attribute, Color as CtColor, Print, SetAttribute, SetBackgroundColor, SetForegroundColor,
-};
+use crossterm::style::{Color as CtColor, Print, SetBackgroundColor, SetForegroundColor};
 use crossterm::terminal::{
     BeginSynchronizedUpdate, Clear, ClearType as CtClearType, EndSynchronizedUpdate, ScrollDown,
     ScrollUp,
@@ -112,18 +110,42 @@ impl crossterm::Command for ResetScrollRegion {
     }
 }
 
-/// The modifiers in [`Modifier`] and the SGR attribute that enables each one.
-const ATTRIBUTES: [(Modifier, Attribute); 9] = [
-    (Modifier::BOLD, Attribute::Bold),
-    (Modifier::DIM, Attribute::Dim),
-    (Modifier::ITALIC, Attribute::Italic),
-    (Modifier::UNDERLINED, Attribute::Underlined),
-    (Modifier::SLOW_BLINK, Attribute::SlowBlink),
-    (Modifier::RAPID_BLINK, Attribute::RapidBlink),
-    (Modifier::REVERSED, Attribute::Reverse),
-    (Modifier::HIDDEN, Attribute::Hidden),
-    (Modifier::CROSSED_OUT, Attribute::CrossedOut),
+/// The modifiers in [`Modifier`] and the SGR code that enables each one.
+const ATTRIBUTES: [(Modifier, u8); 9] = [
+    (Modifier::BOLD, 1),
+    (Modifier::DIM, 2),
+    (Modifier::ITALIC, 3),
+    (Modifier::UNDERLINED, 4),
+    (Modifier::SLOW_BLINK, 5),
+    (Modifier::RAPID_BLINK, 6),
+    (Modifier::REVERSED, 7),
+    (Modifier::HIDDEN, 8),
+    (Modifier::CROSSED_OUT, 9),
 ];
+
+/// SGR code that resets every attribute and color.
+const SGR_RESET: u8 = 0;
+
+/// Select a graphic rendition: `ESC [ code m` (SGR), with one numeric code.
+///
+/// crossterm's `SetAttribute` writes the same sequence, but formats the code through a
+/// `String` (`Attribute::sgr`): a frame that changes a modifier would allocate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SetGraphicRendition(u8);
+
+impl crossterm::Command for SetGraphicRendition {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        // `ESC [` (CSI), the code, then `m`: “select graphic rendition”.
+        write!(f, "\x1b[{}m", self.0)
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> io::Result<()> {
+        Err(io::Error::other(
+            "SetGraphicRendition is only available through ANSI sequences",
+        ))
+    }
+}
 
 /// Convert a library color to a crossterm color.
 ///
@@ -325,7 +347,7 @@ impl<W: Write> Backend<W> {
         }
 
         if pen != Pen::DEFAULT {
-            queue!(self.writer, SetAttribute(Attribute::Reset))?;
+            queue!(self.writer, SetGraphicRendition(SGR_RESET))?;
         }
         Ok(())
     }
@@ -335,13 +357,13 @@ impl<W: Write> Backend<W> {
         if cell.modifier != pen.modifier {
             // A modifier needs removing: reset fully, then start from the default style.
             if !(pen.modifier - cell.modifier).is_empty() {
-                queue!(self.writer, SetAttribute(Attribute::Reset))?;
+                queue!(self.writer, SetGraphicRendition(SGR_RESET))?;
                 *pen = Pen::DEFAULT;
             }
             // Only modifiers to add remain.
-            for (flag, attribute) in ATTRIBUTES {
+            for (flag, code) in ATTRIBUTES {
                 if cell.modifier.contains(flag) && !pen.modifier.contains(flag) {
-                    queue!(self.writer, SetAttribute(attribute))?;
+                    queue!(self.writer, SetGraphicRendition(code))?;
                 }
             }
             pen.modifier = cell.modifier;

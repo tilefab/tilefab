@@ -53,7 +53,7 @@ required-features = ["widget"]
 
 [[test]]
 name = "widget_alloc"
-required-features = ["widget"]
+required-features = ["widget", "input"]
 
 [lints]
 workspace = true

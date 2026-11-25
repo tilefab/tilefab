@@ -210,7 +210,21 @@ pub struct LineEditor {
     completer: Option<Box<dyn Completer>>,
     /// `Esc` hid the hint; shown again after the next change of the line.
     hint_dismissed: bool,
+    /// The hint drawn by `render`, computed again only when the line or the history changed.
+    hint_cache: HintCache,
     mode: Mode,
+}
+
+/// The last hint computed for `render`: a frame that does not change the line asks nothing
+/// of the hinter, and allocates nothing.
+#[derive(Debug, Default)]
+struct HintCache {
+    /// The line the hint was computed for.
+    text: String,
+    /// The hint, if any.
+    hint: Option<String>,
+    /// False when the history or the hinter changed since.
+    valid: bool,
 }
 
 impl std::fmt::Debug for LineEditor {
@@ -243,6 +257,7 @@ impl LineEditor {
             hinter: Some(Box::new(HistoryHinter)),
             completer: None,
             hint_dismissed: false,
+            hint_cache: HintCache::default(),
             mode: Mode::Normal,
         }
     }
@@ -251,6 +266,7 @@ impl LineEditor {
     #[must_use]
     pub fn with_history(mut self, history: History) -> Self {
         self.history = history;
+        self.hint_cache.valid = false;
         self
     }
 
@@ -277,6 +293,7 @@ impl LineEditor {
     /// The history, to add entries or replace it (for instance with one loaded from a
     /// file, see [`History::with_file`]).
     pub fn history_mut(&mut self) -> &mut History {
+        self.hint_cache.valid = false;
         &mut self.history
     }
 
@@ -387,7 +404,11 @@ impl LineEditor {
             return None;
         }
         let row = Rect::new(area.x, area.y, area.width, 1);
-        let hint = self.current_hint();
+        let hint = if self.refresh_hint() {
+            self.hint_cache.hint.as_deref()
+        } else {
+            None
+        };
         let (search_prompt, highlight) = match &self.mode {
             Mode::Search(search) => (
                 Some(Line::from(search.prompt())),
@@ -398,7 +419,7 @@ impl LineEditor {
         let view = LineView {
             text: self.buffer.value(),
             cursor: self.buffer.cursor(),
-            hint: hint.as_deref(),
+            hint,
             highlight,
         };
         let cursor = render::draw_line(
@@ -721,19 +742,39 @@ impl LineEditor {
         }
     }
 
+    /// Whether a hint may be shown now: hints enabled, cursor at the end of a non-empty line,
+    /// not dismissed with `Esc`, no search nor menu.
+    fn hint_allowed(&self) -> bool {
+        let text = self.buffer.value();
+        self.config.hints
+            && matches!(self.mode, Mode::Normal)
+            && !self.hint_dismissed
+            && !text.is_empty()
+            && self.buffer.cursor() == text.len()
+    }
+
+    /// Bring the hint cache up to date for `render`; false when no hint may be shown now.
+    fn refresh_hint(&mut self) -> bool {
+        if !self.hint_allowed() {
+            return false;
+        }
+        if !self.hint_cache.valid || self.hint_cache.text != self.buffer.value() {
+            self.hint_cache.hint = self.current_hint();
+            self.hint_cache.text.clear();
+            self.hint_cache.text.push_str(self.buffer.value());
+            self.hint_cache.valid = true;
+        }
+        true
+    }
+
     /// The hint to show after the line, if any: hints enabled, cursor at the end of a
     /// non-empty line, not dismissed with `Esc`. Sanitized and cut so that accepting it
     /// keeps the line within its maximum length.
     fn current_hint(&self) -> Option<String> {
-        let text = self.buffer.value();
-        if !self.config.hints
-            || !matches!(self.mode, Mode::Normal)
-            || self.hint_dismissed
-            || text.is_empty()
-            || self.buffer.cursor() != text.len()
-        {
+        if !self.hint_allowed() {
             return None;
         }
+        let text = self.buffer.value();
         let hint = self.hinter.as_ref()?.hint(text, &self.history)?;
         let hint = buffer::sanitize(&hint);
         let room = self.config.max_len.saturating_sub(text.len());
@@ -972,6 +1013,7 @@ impl LineEditor {
         let line = self.buffer.value().to_string();
         if !(self.config.history_ignore_space && line.starts_with(' ')) {
             self.history.add(&line);
+            self.hint_cache.valid = false;
         }
         self.buffer.clear();
         self.undo.clear();
