@@ -21,11 +21,56 @@ break the API).
   `Paragraph`, `Wrap`, `ProgressBar` and `ProgressLine` are removed, from `tilefab-widget` and
   from the re-exports of `tilefab` (feature `widget`), which now re-exports the new types.
 
+### Changed
+
+- `ScrollMode::Screen`, the new default of the inline terminal: it makes room for the inserted
+  lines by scrolling the whole screen with line feeds, so that every log line reaches the
+  scrollback in every terminal. `ScrollMode::Region` stays, documented as able to lose the
+  scrollback (xterm.js in VS Code, iTerm2 by default…).
+- Workspace lints `allow_attributes` and `allow_attributes_without_reason`: every lint
+  exception is an `#[expect(…, reason = …)]`.
+
+### Fixed
+
+- `tilefab-term`: in inline mode, the log lines that scrolled above the viewport were deleted
+  instead of entering the scrollback in terminals that do not save the lines leaving a scroll
+  region (VS Code's terminal among them).
+- `tilefab-input`: `LineEditor::set_value` right after a yank made the next `YankPop` panic;
+  with the search or the completion menu open, the next key threw the new value away.
+- `tilefab-input`: the history rewrite used a predictable temporary name, followed through a
+  symbolic link; it now creates a new file that nobody else uses. An existing history file
+  readable by others is made private (`0600`), as documented.
+- `tilefab-input`: loading the history read the whole file, and blocked or exhausted memory on
+  a FIFO or `/dev/zero`; it now refuses anything but a regular file and reads at most its last
+  16 MiB.
+- `tilefab-input`: the rewrite of a history file lost the lines that another instance
+  appended since the load.
+- `tilefab-core`: `Buffer::filled` with a wide cell broke the invariant of wide characters
+  (now head and continuation pairs); a `Rect` written literally past `u16::MAX` made
+  `Buffer` overflow (the area is clipped like `Rect::new`).
+- `tilefab-term`: the initial placement of an inline viewport overflowed at extreme sizes.
+- `tilefab-term`: a frame interrupted by a write error or a panic left the synchronized update
+  open (frozen display) and maybe a scroll region set; the terminal restoration also closes
+  both now.
+- `tilefab-term`: `insert_before` could queue lines without bound until the next `draw`.
+- `tilefab-term`: a frame that changed a text modifier (bold, dim…) allocated.
+- `tilefab-input`: `LineEditor::render` allocated at every frame.
+- `tilefab-widget`: the layout of a `LineWidget` was quadratic in its number of components.
+- Demo: a task name with control characters (read on stdin) reached the terminal raw in the
+  task started / finished lines; it is now escaped.
+- Demo: a failure of the keyboard reader left the application running in raw mode without
+  input; it now quits through the normal clean-up.
+- Demo: a stdin line had no length limit in headless mode; a line longer than the prompt
+  (4096 bytes) is refused whole.
+- Demo: the lines waiting while the terminal had no columns were kept without bound.
+
 ### Demo
 
 - `compose "<composition>"` replaces `select`: it sets the composition of the tasks started
   next; `start <name> "<composition>"` gives a task its own. Each task is one row drawn by a
   `LineWidget` (name, local time, state symbol, progress bar and percentage, current step).
+- `TILEFAB_SCROLL_MODE=screen|region|fallback` chooses the scroll mode of the inline terminal.
+- On Windows, closing the console, logging off or shutting down quit through the clean-up.
 
 ## [0.1.0]
 
