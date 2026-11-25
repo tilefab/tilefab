@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub(crate) const DEFAULT_CAPACITY: usize = 1000;
 /// Most bytes read from the end of the history file when it is loaded: a larger file keeps
 /// only its newest lines (and is rewritten). Far more than 1000 entries of a 4 KiB line.
-pub const MAX_LOAD_BYTES: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_LOAD_BYTES: u64 = 16 * 1024 * 1024;
 /// Attempts at creating a temporary file with a new name before giving up.
 const TEMPORARY_ATTEMPTS: u32 = 8;
 
@@ -56,8 +56,8 @@ impl History {
     ///
     /// Format: UTF-8, one entry per line. Lines that are not valid UTF-8 or that contain a
     /// control character are skipped; duplicates are removed (the latest is kept), then
-    /// the last `capacity` entries are kept. Only the last [`MAX_LOAD_BYTES`] of the file are
-    /// read. When the file holds more than twice the capacity, or more than that many bytes,
+    /// the last `capacity` entries are kept. Only the last 16 MiB of the file are
+    /// read. When the file holds more than twice the capacity, or more than 16 MiB,
     /// it is rewritten: through a new temporary file in the same directory (created with a
     /// name nobody else uses, never through an existing file or symbolic link) and a rename.
     /// Just before the rename, the lines another instance appended since the load are read
