@@ -20,17 +20,28 @@ struct SmallRect {
     y: u16,
     width: u8,
     height: u8,
+    /// Build it as a literal `Rect { … }`, which skips the clipping of `Rect::new`: the
+    /// buffer must clip it itself.
+    literal: bool,
 }
 
 impl SmallRect {
     /// The rectangle, its sides limited to `max` cells.
     fn rect(&self, max: u16) -> Rect {
-        Rect::new(
-            self.x,
-            self.y,
+        let (width, height) = (
             u16::from(self.width) % (max + 1),
             u16::from(self.height) % (max + 1),
-        )
+        );
+        if self.literal {
+            Rect {
+                x: self.x,
+                y: self.y,
+                width,
+                height,
+            }
+        } else {
+            Rect::new(self.x, self.y, width, height)
+        }
     }
 }
 
@@ -50,8 +61,11 @@ struct Input {
 }
 
 fuzz_target!(|input: Input| {
-    let area = input.area.rect(40);
-    let mut buf = Buffer::empty(area);
+    let mut buf = Buffer::empty(input.area.rect(40));
+    // The area the buffer kept (clipped when the rectangle was literal).
+    let area = buf.area();
+    // Diffing against a copy covers the conversion of every index to coordinates.
+    let empty = Buffer::empty(area);
     for write in input.writes.iter().take(16) {
         let x = area.x.saturating_add_signed(i16::from(write.dx));
         let y = area.y.saturating_add_signed(i16::from(write.dy));
@@ -69,5 +83,6 @@ fuzz_target!(|input: Input| {
             assert!(end_x <= area.right(), "written past the buffer edge");
         }
         check_buffer(&buf);
+        let _ = buf.diff(&empty);
     }
 });
