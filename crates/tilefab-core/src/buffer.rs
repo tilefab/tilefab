@@ -440,7 +440,7 @@ impl Buffer {
 
     /// Write a grapheme at `(x, y)` and return the number of columns written (1 or 2,
     /// [`grapheme_width`] of `grapheme`); the caller has already checked the available
-    /// space (`Paragraph` uses it to write graphemes it has already measured). A wide
+    /// space (to write graphemes already measured). A wide
     /// grapheme also turns `(x + 1, y)` into its continuation.
     ///
     /// Unlike [`Buffer::set_stringn`], nothing is clipped. `grapheme` is normalized like

@@ -1,6 +1,6 @@
 [package]
 name = "tilefab-widget"
-description = "Widgets of tilefab (blocks, paragraphs, lists, progress bars), drawn in a buffer without I/O"
+description = "One-line composed widget of tilefab, drawn in a buffer without I/O"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

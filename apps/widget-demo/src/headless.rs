@@ -108,12 +108,8 @@ mod tests {
     fn task_finished_line_is_flushed_and_output_emptied() {
         let (tx, _rx) = mpsc::channel(16);
         let mut app = App::new(tx);
-        app.tasks.push(Task {
-            id: 1,
-            name: "a".into(),
-            ratio: 0.5,
-            view: crate::view::TaskView::default(),
-        });
+        app.tasks
+            .push(Task::new(1, "a".into(), crate::line::DEFAULT_COMPOSITION).unwrap());
         app.handle_event(AppEvent::TaskDone(1));
 
         let mut out = Vec::new();

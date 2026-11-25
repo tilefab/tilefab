@@ -1,12 +1,14 @@
 //! CLI demo: logs scroll above an inline viewport whose height follows the number of
-//! tasks (one line per task + the prompt), built on the small `tilefab` library.
+//! tasks (one line per task, drawn by a `LineWidget`, + the prompt), built on the small
+//! `tilefab` library.
 
 mod app;
 mod headless;
+mod line;
 mod logging;
 mod tasks;
 mod ui;
-mod view;
+mod wrap;
 
 use std::io::{BufWriter, IsTerminal, Stdout, Write, stdin, stdout};
 use std::path::PathBuf;
@@ -227,13 +229,11 @@ fn queue_output<W: Write>(terminal: &mut Terminal<W>, app: &mut App) {
     }
     // The width `insert_before` gives its buffer (the screen width known at the last
     // `draw`), not the current terminal width: after a resize they differ until the
-    // next `draw`, and wrapping at another width would truncate the paragraph.
+    // next `draw`, and wrapping at another width would truncate the lines.
     let width = terminal.area().width;
-    let (paragraph, height) = ui::wrapped_lines(std::mem::take(&mut app.output), width);
-    terminal.insert_before(height, |buf| {
-        use tilefab::Widget;
-        paragraph.render(buf.area(), buf);
-    });
+    let rows = wrap::wrap(std::mem::take(&mut app.output), width);
+    let height = u16::try_from(rows.len()).unwrap_or(u16::MAX);
+    terminal.insert_before(height, |buf| wrap::render(&rows, buf));
 }
 
 #[cfg(test)]

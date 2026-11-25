@@ -27,8 +27,8 @@ doc = false
 bench = false
 
 [[bin]]
-name = "paragraph"
-path = "fuzz_targets/paragraph.rs"
+name = "line_widget"
+path = "fuzz_targets/line_widget.rs"
 test = false
 doc = false
 bench = false

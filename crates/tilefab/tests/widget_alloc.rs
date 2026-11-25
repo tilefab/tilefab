@@ -1,68 +1,102 @@
-//! Rendering a `List` or a titled `Block` allocates nothing: a warm frame that draws them
-//! stays allocation-free (see `terminal_alloc.rs` for the `Terminal` side).
+//! Drawing `LineWidget`s in the frames of an inline `Terminal` allocates nothing: a warm frame
+//! that updates and draws them stays allocation-free (see `terminal_alloc.rs` for the
+//! `Terminal` side alone).
 //!
 //! A separate test binary, because the counting allocator is global to the whole binary:
 //! it holds this single test, so no other test thread allocates during the measurement.
-//! Building a widget allocates (its items, its title spans), and rendering consumes it:
-//! the widgets are built before the measurement, only their rendering is measured.
+//! Building a widget allocates (its lists): the widgets are built before the measurement,
+//! only their updates and their drawing are measured.
 
 use std::alloc::System;
 
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 use tilefab::{
-    Alignment, Block, Buffer, Line, List, ListItem, ListState, Modifier, Rect, StatefulWidget,
-    Style, Widget,
+    Backend, Color, Entry, LineWidget, Position, Size, Style, Terminal, TerminalOptions, Viewport,
+    WallTime,
 };
 
 // `stats_alloc` holds the `unsafe` code, which this project forbids in its own sources.
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
-const RENDERS: usize = 100;
+const FRAMES: u16 = 100;
+const STEPS: [&str; 3] = ["resolving", "compiling a crate", "linking"];
 
-/// A titled, bordered block (the title alignment comes from the block, not the line).
-fn titled_block() -> Block<'static> {
-    Block::bordered()
-        .title(Line::from("tasks"))
-        .title_alignment(Alignment::Center)
-}
-
-/// A list with a block, a highlight symbol and multi-line items, wider than the area.
-fn list() -> List<'static> {
-    List::new([
-        ListItem::new("first"),
-        ListItem::new("second\nwith two lines"),
-        ListItem::new("third"),
-        ListItem::new("fourth"),
-    ])
-    .block(titled_block())
-    .highlight_symbol("> ")
-    .highlight_style(Style::new().add_modifier(Modifier::BOLD))
+/// A task line with every kind of component.
+fn task(name: &str) -> LineWidget {
+    LineWidget::builder("B0 D1 B2 T0 B1 B2 S B2 K B2 N B2 I B2 P5 B2 V4U/ B2 L")
+        .barriers([Entry::new("["), Entry::new("]"), Entry::new(" ")])
+        .symbols([
+            Entry::styled("🔴", Style::new().fg(Color::Red)),
+            Entry::new("x"),
+        ])
+        .keywords([Entry::new("run"), Entry::new("done")])
+        .names([Entry::new(name), Entry::new("界界")])
+        .units([Entry::new("KB"), Entry::new("MB")])
+        .illustration(Entry::new("█"), Entry::new("░"))
+        .build()
+        .expect("valid task line")
 }
 
 #[test]
-fn rendering_a_list_or_a_titled_block_allocates_nothing() {
-    let mut buf = Buffer::empty(Rect::new(0, 0, 30, 6));
-    // Warm-up: anything lazily initialized is set up before measuring.
-    list().render(buf.area(), &mut buf, &mut ListState::with_selected(Some(1)));
-    titled_block().render(buf.area(), &mut buf);
-
-    let lists: Vec<List<'static>> = (0..RENDERS).map(|_| list()).collect();
-    let blocks: Vec<Block<'static>> = (0..RENDERS).map(|_| titled_block()).collect();
-    let mut list_states: Vec<ListState> = (0..RENDERS)
-        .map(|i| ListState::with_selected(Some(i % 4)))
-        .collect();
-    let area = buf.area();
+fn drawing_line_widgets_in_frames_allocates_nothing() {
+    let backend = Backend::with_fixed(Vec::new(), Size::new(120, 20), Position::new(0, 0));
+    let mut terminal = Terminal::with_options(
+        backend,
+        TerminalOptions::default().viewport(Viewport::Inline(3)),
+    )
+    .expect("in-memory terminal");
+    let mut tasks = [task("alpha"), task("beta"), task("a much longer task name")];
+    let frame = |i: u16, terminal: &mut Terminal<Vec<u8>>, tasks: &mut [LineWidget]| {
+        for (offset, task) in (0..).step_by(7).zip(tasks.iter_mut()) {
+            let step = (i + offset) % 100;
+            let index = usize::from(step % 2);
+            task.set_progress(f64::from(step)).unwrap();
+            task.set_symbol(0, index).unwrap();
+            task.set_keyword(index).unwrap();
+            task.set_name(0, index).unwrap();
+            task.set_value(f64::from(step) * 1.5, Some(index), Some((150.0, Some(1))))
+                .unwrap();
+            task.set_time(WallTime {
+                year: 2026,
+                month: 11,
+                day: 25,
+                hour: 8,
+                minute: 0,
+                second: u8::try_from(step % 60).unwrap(),
+                millis: step * 7,
+            })
+            .unwrap();
+            task.set_log(STEPS[usize::from(step % 3)]);
+        }
+        // The width changes too: the widgets are laid out again.
+        terminal
+            .backend_mut()
+            .set_fixed_size(Size::new(40 + i % 80, 20));
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                for (task, row) in tasks.iter().zip(area.rows()) {
+                    frame.render_widget(task, row);
+                }
+            })
+            .unwrap();
+        // Keep the memory of the output, as a real terminal writer would.
+        terminal.backend_mut().writer_mut().clear();
+    };
+    // Warm-up: every width and every entry once.
+    for i in 0..FRAMES {
+        frame(i, &mut terminal, &mut tasks);
+    }
 
     let region = Region::new(GLOBAL);
-    for ((list, block), state) in lists.into_iter().zip(blocks).zip(&mut list_states) {
-        list.render(area, &mut buf, state);
-        block.render(area, &mut buf);
+    for i in 0..FRAMES {
+        frame(i, &mut terminal, &mut tasks);
     }
     let stats = region.change();
     assert_eq!(
         (stats.allocations, stats.reallocations),
         (0, 0),
-        "list and titled block rendering: {stats:?}"
+        "line widget frames: {stats:?}"
     );
 }
