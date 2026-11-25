@@ -455,8 +455,10 @@ impl<W: Write> Backend<W> {
 
     /// Scroll the area `top..=bottom` upward by `n` rows (zero-based screen rows).
     ///
-    /// The first `n` rows enter scrollback **only if
-    /// `top` is 0**; otherwise they are lost. The last `n` rows of the region are
+    /// The first `n` rows enter scrollback **only in some terminals, and only if `top` is 0**
+    /// (xterm does it); many terminals (xterm.js in VS Code, iTerm2 by default…) delete them
+    /// in every case, as when `top` is not 0. To keep them, scroll the whole screen with line
+    /// feeds on its last row instead (`append_lines`). The last `n` rows of the region are
     /// cleared. Three sequences: set the region, `CSI n S`, restore the region. The cursor
     /// ends up at the top-left: reposition it.
     ///

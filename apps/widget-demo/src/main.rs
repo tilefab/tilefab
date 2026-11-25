@@ -18,7 +18,8 @@ use color_eyre::Result;
 use tilefab::crossterm::event::{self, EnableBracketedPaste, Event};
 use tilefab::crossterm::execute;
 use tilefab::{
-    Backend, Line, Terminal, TerminalGuard, TerminalOptions, Viewport, install_fatal_panic_hook,
+    Backend, Line, ScrollMode, Terminal, TerminalGuard, TerminalOptions, Viewport,
+    install_fatal_panic_hook,
 };
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -63,9 +64,12 @@ async fn main() -> Result<()> {
     // text arrives as keys.
     let _ = execute!(stdout(), EnableBracketedPaste);
     // A single-line viewport when idle (the prompt); it grows with the tasks.
+    let (scroll_mode, scroll_warning) = scroll_mode(std::env::var_os("TILEFAB_SCROLL_MODE"));
     let started = Terminal::with_options(
         Backend::new(BufWriter::new(stdout())),
-        TerminalOptions::default().viewport(Viewport::Inline(1)),
+        TerminalOptions::default()
+            .viewport(Viewport::Inline(1))
+            .scroll_mode(scroll_mode),
     );
     let mut terminal: AppTerminal = match started {
         Ok(terminal) => terminal,
@@ -85,6 +89,9 @@ async fn main() -> Result<()> {
     #[cfg(unix)]
     spawn_signal_listener(tx.clone())?;
     let dropped_logs = logging::init_channel(tx.clone());
+    if let Some(warning) = scroll_warning {
+        tracing::warn!("{warning}");
+    }
 
     let history = app::history_path(|name| std::env::var_os(name));
     let result = run(&mut terminal, tx, rx, &dropped_logs, history).await;
@@ -93,6 +100,26 @@ async fn main() -> Result<()> {
     // its start. The shell resumes just below the logs, which remain in scrollback.
     let cleanup = terminal.clear().map_err(Into::into);
     result.and(cleanup)
+}
+
+/// The scroll mode named by `TILEFAB_SCROLL_MODE` (`screen`, the default, `region` or
+/// `fallback`; see `tilefab::ScrollMode`), and a warning for a value it does not know.
+fn scroll_mode(value: Option<std::ffi::OsString>) -> (ScrollMode, Option<String>) {
+    let Some(value) = value else {
+        return (ScrollMode::default(), None);
+    };
+    match value.to_str() {
+        Some("screen") => (ScrollMode::Screen, None),
+        Some("region") => (ScrollMode::Region, None),
+        Some("fallback") => (ScrollMode::Fallback, None),
+        _ => (
+            ScrollMode::default(),
+            Some(format!(
+                "TILEFAB_SCROLL_MODE={}: unknown mode (screen, region or fallback), using screen",
+                value.to_string_lossy().escape_debug()
+            )),
+        ),
+    }
 }
 
 /// Dedicated keyboard reader thread: reading blocks, so it should not run
@@ -323,6 +350,25 @@ mod tests {
         let written =
             String::from_utf8(std::mem::take(terminal.backend_mut().writer_mut())).unwrap();
         assert!(written.contains("kept"), "line not written: {written:?}");
+    }
+
+    #[test]
+    fn the_scroll_mode_comes_from_the_environment() {
+        use std::ffi::OsString;
+        let mode = |value: Option<&str>| scroll_mode(value.map(OsString::from));
+        assert_eq!(mode(None), (ScrollMode::Screen, None));
+        assert_eq!(mode(Some("region")), (ScrollMode::Region, None));
+        assert_eq!(mode(Some("fallback")), (ScrollMode::Fallback, None));
+        assert_eq!(mode(Some("screen")), (ScrollMode::Screen, None));
+        let (fallback, warning) = mode(Some("Region\u{1b}"));
+        assert_eq!(fallback, ScrollMode::Screen);
+        assert_eq!(
+            warning.as_deref(),
+            Some(
+                "TILEFAB_SCROLL_MODE=Region\\u{1b}: unknown mode (screen, region or fallback), \
+                 using screen"
+            )
+        );
     }
 
     #[test]

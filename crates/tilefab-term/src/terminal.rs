@@ -559,11 +559,21 @@ impl<W: Write> Terminal<W> {
         let mut moved = false;
         let mut erase = plan.erase.clone();
         let mut model_is_blank = false;
+        // The whole screen scrolled with the viewport (`ScrollMode::Screen`).
+        let mut shifted = false;
         if plan.scroll > 0 {
             moved = true;
             if self.scroll_mode == ScrollMode::Region && top >= 2 {
                 // Only the area above the viewport scrolls; the viewport stays put.
                 self.backend.scroll_region_up(0, top - 1, plan.scroll)?;
+            } else if self.scroll_mode == ScrollMode::Screen && plan.scroll <= top {
+                // Only rows above the viewport leave the screen, into the scrollback: line
+                // feeds on the last row scroll everything, the viewport moves up with the rest
+                // and the diff below rewrites what differs.
+                self.backend
+                    .set_cursor_position(0, screen.height.saturating_sub(1))?;
+                self.backend.append_lines(plan.scroll)?;
+                shifted = true;
             } else {
                 // Fallback (or region too small: terminals ignore single-line regions).
                 // Clear the old viewport, then scroll the whole screen by writing
@@ -585,7 +595,13 @@ impl<W: Write> Terminal<W> {
         let lo = top - plan.scroll;
         let span = Rect::new(0, lo, screen.width, lines + new_height);
         self.model.reset_to(span);
-        if !model_is_blank {
+        if shifted {
+            // The old viewport is now `plan.scroll` rows higher: from `lo`, the top of the
+            // model. The rows below it scrolled in blank.
+            let rows = usize::from(height).min(usize::from(span.height));
+            self.model.content_mut()[..rows * width]
+                .clone_from_slice(&self.previous.content()[..rows * width]);
+        } else if !model_is_blank {
             // The old viewport lines have not moved on screen: reuse them.
             for y in lo.max(top)..old_bottom.min(span.bottom()) {
                 let from = usize::from(y - top) * width;

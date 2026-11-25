@@ -69,7 +69,15 @@ pub enum Command {
     /// in a release build, `panic` is an unknown command.
     #[cfg(debug_assertions)]
     Panic,
+    /// Hidden command for checking the scrollback (`count <n>`): write `n` numbered log
+    /// lines at once, to find again by scrolling up. Debug builds only, like `panic`.
+    #[cfg(debug_assertions)]
+    Count(u32),
 }
+
+/// Most lines `count` writes at once.
+#[cfg(debug_assertions)]
+pub const MAX_COUNT: u32 = 10_000;
 
 /// Command parsing error.
 #[derive(Debug, PartialEq, Eq)]
@@ -197,6 +205,13 @@ impl Command {
         #[cfg(debug_assertions)]
         if word == "panic" {
             return Ok(Self::Panic);
+        }
+        #[cfg(debug_assertions)]
+        if word == "count" {
+            return match rest.parse() {
+                Ok(n @ 1..=MAX_COUNT) => Ok(Self::Count(n)),
+                _ => Err(CommandError::Unknown(format!("count {rest}"))),
+            };
         }
         let Some(spec) = COMMANDS.iter().find(|spec| spec.name == word) else {
             return Err(CommandError::Unknown(word.to_string()));
@@ -492,6 +507,13 @@ impl App {
             Ok(Command::Quit) => self.should_quit = true,
             #[cfg(debug_assertions)]
             Ok(Command::Panic) => panic!("deliberate panic (`panic` command)"),
+            #[cfg(debug_assertions)]
+            Ok(Command::Count(n)) => {
+                // Straight into the output, not through tracing: its channel could drop some.
+                for i in 1..=n {
+                    self.log_info(&format!("count {i:05}/{n:05}"));
+                }
+            }
             Err(CommandError::MissingName) => error!("usage: start <name> [\"<composition>\"]"),
             Err(CommandError::Quotes(error)) => {
                 error!("{error}: compose \"<composition>\"");
@@ -583,6 +605,26 @@ mod tests {
     #[test]
     fn panic_command_exists_in_debug_builds() {
         assert_eq!(Command::parse("panic"), Ok(Command::Panic));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn count_writes_numbered_lines_in_debug_builds() {
+        assert_eq!(Command::parse("count 3"), Ok(Command::Count(3)));
+        assert!(Command::parse("count 0").is_err());
+        assert!(Command::parse("count 10001").is_err());
+        assert!(Command::parse("count x").is_err());
+        let mut app = new_app();
+        app.submit("count 3");
+        let lines: Vec<String> = app.output.iter().map(|l| text(l)).collect();
+        assert_eq!(
+            lines,
+            [
+                "[INFO] count 00001/00003",
+                "[INFO] count 00002/00003",
+                "[INFO] count 00003/00003"
+            ]
+        );
     }
 
     #[cfg(not(debug_assertions))]
