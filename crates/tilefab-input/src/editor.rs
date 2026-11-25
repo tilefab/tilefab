@@ -342,7 +342,13 @@ impl LineEditor {
 
     /// Replace the line with `value` (control characters removed, cut to the maximum
     /// length), cursor at the end. It is one undo step.
+    ///
+    /// It also ends what the previous keys had started: a search or the completion menu is
+    /// closed (the new value is kept, not the match nor the candidate), and a following
+    /// `YankPop` has no yank to replace.
     pub fn set_value(&mut self, value: &str) {
+        self.last = Last::Other;
+        self.mode = Mode::Normal;
         let before = self.snapshot();
         self.undo.close_group();
         self.buffer.set(value, usize::MAX);
@@ -1905,6 +1911,39 @@ mod tests {
     }
 
     #[test]
+    fn set_value_after_a_yank_forgets_the_yanked_range() {
+        let mut e = editor("|");
+        e.set_value("hello");
+        let _ = e.execute(Command::KillLine);
+        let _ = e.execute(Command::Yank);
+        e.set_value("x");
+        // The yank no longer applies to the line: nothing to replace.
+        assert_eq!(e.execute(Command::YankPop), EditorEvent::Ignored);
+        assert_eq!(shown(&e), "x|");
+    }
+
+    #[test]
+    fn set_value_closes_the_menu_and_keeps_the_new_value() {
+        let mut e = completing(&["status", "stop"], "st");
+        let _ = e.execute(Command::CompletePrevious);
+        assert!(menu_open(&e));
+        e.set_value("list");
+        assert!(!menu_open(&e));
+        let _ = e.execute(Command::Complete);
+        assert_eq!(e.value(), "list");
+    }
+
+    #[test]
+    fn set_value_leaves_the_search_and_keeps_the_new_value() {
+        let mut e = searching(&["start alpha", "list"], "", "st");
+        e.set_value("help");
+        assert_eq!(search_prompt(&e), None);
+        assert_eq!(shown(&e), "help|");
+        type_text(&mut e, "!");
+        assert_eq!(e.value(), "help!");
+    }
+
+    #[test]
     fn the_public_cursor_counts_graphemes() {
         let e = editor("🤦🏼\u{200d}♂\u{fe0f}e\u{301}|");
         assert_eq!(e.cursor(), 2);
@@ -1966,6 +2005,22 @@ mod tests {
         ]
     }
 
+    /// A call on the editor: a command, or one of the methods that replace or insert text.
+    #[derive(Debug, Clone)]
+    enum Action {
+        Run(Command),
+        SetValue(String),
+        Paste(String),
+    }
+
+    fn action_strategy() -> impl Strategy<Value = Action> {
+        prop_oneof![
+            8 => command_strategy().prop_map(Action::Run),
+            1 => text_strategy().prop_map(Action::SetValue),
+            1 => text_strategy().prop_map(Action::Paste),
+        ]
+    }
+
     /// Check the invariants of the line.
     fn assert_invariants(e: &LineEditor, max_len: usize) {
         let text = e.value();
@@ -1995,6 +2050,28 @@ mod tests {
             assert_invariants(&e, max_len);
             for command in commands {
                 let _ = e.execute(command);
+                assert_invariants(&e, max_len);
+            }
+        }
+
+        #[test]
+        fn invariants_hold_after_set_value_and_paste_calls(
+            text in text_strategy(),
+            actions in prop::collection::vec(action_strategy(), 0..40),
+            max_len in 1usize..40,
+        ) {
+            let mut e = LineEditor::new(EditorConfig { max_len, ..EditorConfig::default() });
+            e.set_value(&text);
+            for action in actions {
+                match action {
+                    Action::Run(command) => {
+                        let _ = e.execute(command);
+                    }
+                    Action::SetValue(text) => e.set_value(&text),
+                    Action::Paste(text) => {
+                        let _ = e.paste(&text);
+                    }
+                }
                 assert_invariants(&e, max_len);
             }
         }
