@@ -49,7 +49,8 @@ impl KillRing {
             .map(String::as_str)
     }
 
-    /// Number of entries.
+    /// Number of entries (`get` wraps around them: only the tests need it).
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }

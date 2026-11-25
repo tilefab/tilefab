@@ -940,7 +940,7 @@ impl LineEditor {
         let start = range.start;
         let before = self.snapshot();
         self.buffer.replace(range, &text);
-        let index = index % self.kill_ring.len();
+        // No modulo here: `KillRing::get` wraps the index around the ring.
         self.last = Last::Yank {
             range: (start, self.buffer.cursor()),
             index,
@@ -1988,6 +1988,111 @@ mod tests {
     fn the_public_cursor_counts_graphemes() {
         let e = editor("🤦🏼\u{200d}♂\u{fe0f}e\u{301}|");
         assert_eq!(e.cursor(), 2);
+    }
+
+    #[test]
+    fn the_accessors_reach_the_editor_itself() {
+        let config = EditorConfig::default().max_len(12);
+        let mut e = LineEditor::new(config.clone());
+        assert_eq!(e.config().max_len, 12);
+        e.history_mut().add("from outside");
+        assert_eq!(e.history().get(0), Some("from outside"));
+        // A key bound through `keymap_mut` runs its command.
+        let key =
+            crate::KeyBinding::new(crossterm::event::KeyCode::F(2), KeyModifiers::NONE).unwrap();
+        e.keymap_mut().bind(key, Command::InsertChar('!'));
+        let _ = e.handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::F(2),
+            KeyModifiers::NONE,
+        ));
+        assert_eq!(e.value(), "!");
+        let debug = format!("{e:?}");
+        assert!(
+            debug.contains("LineEditor") && debug.contains("\"!\""),
+            "{debug}"
+        );
+    }
+
+    #[test]
+    fn a_history_write_error_is_reported_once_by_the_editor() {
+        let dir =
+            std::env::temp_dir().join(format!("tilefab-editor-history-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("history");
+        let (history, error) = History::with_file(&path, 10);
+        assert!(error.is_none());
+        // The file becomes a directory: the next append fails.
+        std::fs::create_dir_all(&path).unwrap();
+        let mut e = LineEditor::new(EditorConfig::default()).with_history(history);
+        type_text(&mut e, "ls");
+        let _ = e.execute(Command::Submit);
+        assert!(e.take_history_error().is_some());
+        assert!(e.take_history_error().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_search_query_refuses_control_characters_and_stays_within_max_len() {
+        let mut history = History::new(10);
+        history.add("abc");
+        let mut e = LineEditor::new(EditorConfig::default().max_len(3)).with_history(history);
+        let _ = e.execute(Command::ReverseSearch);
+        assert_eq!(
+            e.execute(Command::InsertChar('\u{7}')),
+            EditorEvent::Ignored
+        );
+        for c in ['a', 'b', 'c'] {
+            assert_ne!(e.execute(Command::InsertChar(c)), EditorEvent::Ignored);
+        }
+        // 3 bytes, the maximum: a fourth is refused.
+        assert_eq!(e.execute(Command::InsertChar('d')), EditorEvent::Ignored);
+        assert_eq!(search_prompt(&e).as_deref(), Some("(search) abc: "));
+    }
+
+    #[test]
+    fn next_and_previous_match_need_a_query() {
+        let mut e = searching(&["start alpha"], "", "");
+        assert_eq!(e.execute(Command::ReverseSearch), EditorEvent::Ignored);
+        assert_eq!(e.execute(Command::ForwardSearch), EditorEvent::Ignored);
+        assert_eq!(search_prompt(&e).as_deref(), Some("(search) : "));
+    }
+
+    #[test]
+    fn unfiltered_history_goes_back_down_to_newer_entries() {
+        let mut e = with_history(&["one", "two", "three"]);
+        let _ = e.execute(Command::HistoryPreviousAll);
+        let _ = e.execute(Command::HistoryPreviousAll);
+        assert_eq!(e.value(), "two");
+        let _ = e.execute(Command::HistoryNextAll);
+        assert_eq!(e.value(), "three");
+    }
+
+    #[test]
+    fn transpose_words_uses_the_word_after_the_cursor_when_there_is_one() {
+        assert_eq!(
+            run("one |two three", Command::TransposeWords).1,
+            "two one| three"
+        );
+    }
+
+    /// The hint drawn after the line, as `render` shows it.
+    fn drawn_hint(e: &mut LineEditor) -> String {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 30, 1));
+        let _ = e.render(buf.area(), &mut buf, &Line::from(""));
+        buf.lines()[0].trim_end()[e.value().len()..].to_string()
+    }
+
+    #[test]
+    fn the_drawn_hint_follows_the_line_and_the_history() {
+        let mut e = with_history(&["start alpha"]);
+        type_text(&mut e, "st");
+        assert_eq!(drawn_hint(&mut e), "art alpha");
+        // The same line, a new history entry: computed again.
+        e.history_mut().add("stop now");
+        assert_eq!(drawn_hint(&mut e), "op now");
+        // Another line: computed again.
+        type_text(&mut e, "a");
+        assert_eq!(drawn_hint(&mut e), "rt alpha");
     }
 
     /// Random text mixing ASCII, combining marks, wide characters, emoji and controls.

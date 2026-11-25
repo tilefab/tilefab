@@ -300,7 +300,7 @@ impl Keymap {
         match key.code {
             KeyCode::Char(c)
                 if key.modifiers.is_empty()
-                    || key.modifiers == KeyModifiers::CONTROL | KeyModifiers::ALT =>
+                    || key.modifiers == KeyModifiers::CONTROL.union(KeyModifiers::ALT) =>
             {
                 Some(Command::InsertChar(c))
             }

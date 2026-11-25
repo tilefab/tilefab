@@ -83,8 +83,9 @@ impl LineBuffer {
         self.text.replace_range(range.clone(), "");
         if self.cursor >= range.end {
             self.cursor -= range.len();
-        } else if self.cursor > range.start {
-            self.cursor = range.start;
+        } else {
+            // In the removed range (or before it): at its start (or unchanged).
+            self.cursor = self.cursor.min(range.start);
         }
         self.snap();
         removed
@@ -109,7 +110,8 @@ impl LineBuffer {
         self.cursor = self.cursor.min(self.text.len());
         for (start, grapheme) in self.text.grapheme_indices(true) {
             let end = start + grapheme.len();
-            if start < self.cursor && self.cursor < end {
+            // Strictly inside the grapheme.
+            if (start + 1..end).contains(&self.cursor) {
                 self.cursor = end;
                 return;
             }
@@ -269,6 +271,27 @@ mod tests {
         let mut b = LineBuffer::new(4096);
         b.set(text, cursor);
         b
+    }
+
+    #[test]
+    fn replace_at_the_maximum_length_counts_the_replaced_bytes_as_room() {
+        let mut b = LineBuffer::new(5);
+        b.set("abcde", 5);
+        assert_eq!(b.replace(0..2, "xy"), 2);
+        assert_eq!(b.value(), "xycde");
+        // One byte more than the room: cut.
+        assert_eq!(b.replace(0..1, "123"), 1);
+        assert_eq!(b.value(), "1ycde");
+    }
+
+    #[test]
+    fn remove_puts_a_cursor_inside_the_range_at_its_start() {
+        let mut b = buffer("abcdef", 3);
+        b.remove(1..5);
+        assert_eq!((b.value(), b.cursor()), ("af", 1));
+        let mut b = buffer("abcdef", 1);
+        b.remove(2..4);
+        assert_eq!(b.cursor(), 1);
     }
 
     /// The byte offsets where each word movement stops, applied repeatedly from one end.

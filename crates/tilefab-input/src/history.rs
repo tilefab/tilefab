@@ -189,11 +189,7 @@ fn load(path: &Path, capacity: usize, max_bytes: u64) -> io::Result<Loaded> {
     let mut text: &[u8] = &bytes;
     if start > 0 {
         // The first line is probably cut: start after it.
-        let first_end = text
-            .iter()
-            .position(|&b| b == b'\n')
-            .map_or(text.len(), |i| i + 1);
-        text = &text[first_end..];
+        text = text.splitn(2, |&b| b == b'\n').nth(1).unwrap_or_default();
     }
     let (entries, lines) = newest_entries(text, capacity, Vec::new());
     Ok(Loaded {
@@ -321,14 +317,13 @@ fn rewrite_with<'a>(
 }
 
 /// The bytes of the file after `offset` (at most [`MAX_LOAD_BYTES`]): what other instances
-/// appended since it was read. Empty if the file got shorter (rewritten meanwhile).
+/// appended since it was read. Empty if the file got shorter (rewritten meanwhile): reading
+/// from past its end gives nothing.
 fn read_after(path: &Path, offset: u64) -> io::Result<Vec<u8>> {
     let mut file = File::open(path)?;
     let mut bytes = Vec::new();
-    if file.metadata()?.len() > offset {
-        file.seek(SeekFrom::Start(offset))?;
-        file.take(MAX_LOAD_BYTES).read_to_end(&mut bytes)?;
-    }
+    file.seek(SeekFrom::Start(offset))?;
+    file.take(MAX_LOAD_BYTES).read_to_end(&mut bytes)?;
     Ok(bytes)
 }
 
@@ -585,5 +580,97 @@ mod tests {
         let (history, error) = History::with_file("/dev/zero", 10);
         assert_eq!(error.unwrap().kind(), io::ErrorKind::InvalidInput);
         assert!(history.is_empty());
+    }
+    #[test]
+    fn capacity_and_emptiness() {
+        let mut history = History::new(7);
+        assert_eq!(history.capacity(), 7);
+        assert!(history.is_empty());
+        history.add("a");
+        assert!(!history.is_empty());
+    }
+
+    #[test]
+    fn a_file_of_exactly_twice_the_capacity_is_not_rewritten() {
+        let dir = TempDir::new();
+        let path = dir.0.join("history");
+        let text = "a\nb\n".repeat(4);
+        fs::write(&path, &text).unwrap();
+        // 8 lines, capacity 4: not more than twice.
+        let _ = History::with_file(&path, 4);
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+    }
+
+    #[test]
+    fn the_load_bound_is_16_mib() {
+        assert_eq!(MAX_LOAD_BYTES, 16 * 1024 * 1024);
+        // 2 MiB: read whole.
+        let dir = TempDir::new();
+        let path = dir.0.join("history");
+        let mut text = "x".repeat(2 * 1024 * 1024);
+        text.push_str("\nfirst\n");
+        let text = format!("oldest\n{text}");
+        fs::write(&path, &text).unwrap();
+        let loaded = load(&path, 10, MAX_LOAD_BYTES).unwrap();
+        assert!(!loaded.truncated);
+        assert_eq!(loaded.entries.first().map(String::as_str), Some("oldest"));
+    }
+
+    #[test]
+    fn reading_after_the_end_gives_nothing() {
+        let dir = TempDir::new();
+        let path = dir.0.join("history");
+        fs::write(&path, "abc\n").unwrap();
+        assert_eq!(read_after(&path, 4).unwrap(), b"");
+        assert_eq!(read_after(&path, 100).unwrap(), b"");
+        assert_eq!(read_after(&path, 1).unwrap(), b"bc\n");
+    }
+
+    #[test]
+    fn only_a_taken_name_makes_the_rewrite_try_another_one() {
+        let dir = TempDir::new();
+        let path = dir.0.join("history");
+        fs::write(&path, "a\n").unwrap();
+        // A name in a missing directory: that error is returned, the next name is not tried.
+        let names = [dir.0.join("missing/tmp"), dir.0.join("free")].into_iter();
+        let error = rewrite_with(&path, ["x"].into_iter(), 0, 4, names).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(!dir.0.join("free").exists());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "a\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_private_to_the_user_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new();
+        let path = dir.0.join("history");
+        fs::write(&path, "a\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
+        let _ = History::with_file(&path, 10);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o400
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_directory_is_an_error_not_an_empty_history() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new();
+        let locked = dir.0.join("locked");
+        fs::create_dir(&locked).unwrap();
+        fs::write(locked.join("history"), "a\n").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let result = load(&locked.join("history"), 10, MAX_LOAD_BYTES);
+        // As root, permissions stop nothing: the file can be read, and loading succeeds.
+        let root = fs::read(locked.join("history")).is_ok();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+        if root {
+            assert!(result.is_ok());
+        } else {
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        }
     }
 }

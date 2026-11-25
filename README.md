@@ -214,9 +214,10 @@ Mutation testing of the inline placement code (`cargo install --locked cargo-mut
 ```sh
 cargo mutants -p tilefab-term -f crates/tilefab-term/src/terminal.rs -f crates/tilefab-term/src/viewport.rs -j 3   # report in mutants.out/
 cargo mutants -p tilefab-widget -j 4   # the line widget
+cargo mutants -p tilefab-input -j 4    # the line editor and its history
 ```
 
-On the line widget, every mutant is caught by the tests (none is marked as equivalent). The timeouts are mutants that loop forever: the tests catch them too.
+On the line widget and the line editor, every mutant is caught by the tests (none is marked as equivalent). The timeouts are mutants that loop forever: the tests catch them too.
 
 Fuzzing with libFuzzer (`fuzz/`, a crate outside the workspace; once: `rustup toolchain install nightly --profile minimal && cargo install --locked cargo-fuzz`). Four targets, each checking invariants rather than only the absence of a panic:
 

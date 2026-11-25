@@ -145,9 +145,10 @@ pub(crate) fn draw_line(
     }
 
     let cursor_x = cursor_col - offset;
+    // With the cursor at the end, the column after the line is always visible (see
+    // `scroll_offset`): the hint starts there.
     if let Some(hint) = line.hint
         && line.cursor == line.text.len()
-        && total - offset < width
     {
         let x = total - offset;
         buf.set_stringn(text_x + to_u16(x), row.y, hint, width - x, styles.hint);
@@ -157,7 +158,9 @@ pub(crate) fn draw_line(
     if indicators && offset > 0 && cursor_x != 0 {
         buf.write_grapheme(text_x, row.y, INDICATOR, styles.indicator);
     }
-    if indicators && total > offset + width && cursor_x + 1 != width {
+    // The margin keeps at least one column right of the cursor when text is hidden there:
+    // the right indicator is never under the cursor.
+    if indicators && total > offset + width {
         buf.write_grapheme(
             text_x + to_u16(width - 1),
             row.y,
@@ -196,11 +199,9 @@ fn scroll_offset(
     let right = margin.min(total - cursor);
     let lowest = (cursor + right + 1).saturating_sub(width);
     let highest = (cursor - left).min(total + 1 - width);
-    if lowest > highest {
-        lowest
-    } else {
-        previous.clamp(lowest, highest)
-    }
+    // `lowest <= highest`: the margins take at most half of the width, and `right` never
+    // goes past the end of the line.
+    previous.clamp(lowest, highest)
 }
 
 /// A column count that fits the buffer (always the case: the buffer is at most
@@ -362,5 +363,37 @@ mod tests {
         assert_eq!(scroll_offset(0, 7, 9, 1, 4), 7);
         // A previous offset out of range after a resize is clamped again.
         assert_eq!(scroll_offset(100, 10, 20, 8, 4), 8);
+        // A line that got shorter: the end comes back to the right edge.
+        assert_eq!(scroll_offset(25, 25, 30, 10, 2), 21);
+        assert_eq!(scroll_offset(10, 12, 12, 10, 2), 3);
+    }
+
+    #[test]
+    fn the_hint_of_a_scrolled_line_starts_after_its_end_and_stays_in_the_row() {
+        // A buffer wider than the row: nothing may be written past the row.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+        let view = LineView {
+            text: "abcdefghij",
+            cursor: 10,
+            hint: Some("XYZ"),
+            highlight: None,
+        };
+        let mut scroll = 0;
+        let styles = EditorStyles::default();
+        let row = Rect::new(0, 0, 10, 1);
+        let position = draw_line(
+            &mut buf,
+            row,
+            &Line::from("> "),
+            &view,
+            &mut scroll,
+            4,
+            &styles,
+        );
+        // 8 columns for the text: scrolled so that the cursor has the last one, where the
+        // hint starts; the rest of the hint is cut at the row edge.
+        assert_eq!(scroll, 3);
+        assert_eq!(position.x, 9);
+        assert_eq!(buf.lines()[0], format!("{:<20}", "> …efghijX"));
     }
 }
