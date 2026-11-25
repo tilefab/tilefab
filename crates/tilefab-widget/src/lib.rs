@@ -17,9 +17,19 @@ mod builder;
 mod clear;
 mod composition;
 mod entry;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the drawing, not written yet")
+)]
+mod format;
 mod list;
 mod paragraph;
 mod progress;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the drawing, not written yet")
+)]
+mod time;
 mod widget;
 
 pub use block::{Block, BorderType, Borders, Padding};
@@ -32,4 +42,5 @@ pub use entry::{Entry, EntryProblem};
 pub use list::{List, ListItem, ListState};
 pub use paragraph::{Paragraph, Wrap};
 pub use progress::{ProgressBar, ProgressLine};
+pub use time::{TimeField, WallTime};
 pub use widget::LineWidget;

@@ -175,8 +175,8 @@ impl LineWidget {
         Some(match component {
             Component::Symbol(_) => self.symbol_width,
             Component::Barrier(i) => self.barriers[usize::from(i)].width,
-            Component::Date(format) => [10, 8, 5][usize::from(format)],
-            Component::Time(format) => [12, 9, 6, 8, 5, 5][usize::from(format)],
+            Component::Date(format) => crate::time::date_width(format),
+            Component::Time(format) => crate::time::time_width(format),
             Component::Progress(size) => usize::from(size) + 1,
             Component::Keyword(_) => self.keyword_width,
             Component::Value => {
