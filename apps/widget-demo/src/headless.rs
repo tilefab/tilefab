@@ -146,7 +146,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(16);
         let mut app = App::new(tx);
         app.tasks
-            .push(Task::new(1, "a".into(), crate::line::DEFAULT_COMPOSITION).unwrap());
+            .push(Task::new(1, "a".into(), crate::line::DEFAULT_COMPOSITION, 1).unwrap());
         app.handle_event(AppEvent::TaskDone(1));
 
         let mut out = Vec::new();

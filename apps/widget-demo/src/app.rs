@@ -329,16 +329,25 @@ pub struct Task {
     pub widget: LineWidget,
     /// Simulated download size shown by `V`, in MB.
     pub total_mb: f64,
+    /// Width of the name column the widget was built with (see `line::name_column`).
+    pub column: usize,
+    /// The last step reported, shown again when the widget is built again.
+    step: &'static str,
 }
 
 impl Task {
-    /// A task drawn with `composition`.
+    /// A task drawn with `composition`, its name in a column `column` wide.
     ///
     /// # Errors
     ///
     /// The error of an invalid composition.
-    pub fn new(id: TaskId, name: String, composition: &str) -> Result<Self, tilefab::BuildError> {
-        let mut widget = line::build(composition, &name)?;
+    pub fn new(
+        id: TaskId,
+        name: String,
+        composition: &str,
+        column: usize,
+    ) -> Result<Self, tilefab::BuildError> {
+        let mut widget = line::build(composition, &name, column)?;
         // Without `D` and `T`, there is no time to show.
         widget.set_time(line::now()).ok();
         Ok(Self {
@@ -348,12 +357,15 @@ impl Task {
             composition: composition.to_string(),
             widget,
             total_mb: f64::from(fastrand::u16(5..=500)),
+            column,
+            step: "",
         })
     }
 
     /// Show the progress `ratio` and the current `step`.
-    fn progress(&mut self, ratio: f64, step: &str) {
+    fn progress(&mut self, ratio: f64, step: &'static str) {
         self.ratio = ratio;
+        self.step = step;
         line::update(
             &mut self.widget,
             &self.composition,
@@ -361,6 +373,19 @@ impl Task {
             step,
             self.total_mb,
         );
+    }
+
+    /// Build the widget again with a name column `column` wide, showing the same values.
+    fn set_column(&mut self, column: usize) {
+        // The composition already built a widget: it cannot fail now.
+        if let Ok(widget) = line::build(&self.composition, &self.name, column) {
+            self.widget = widget;
+            self.column = column;
+            self.widget.set_time(line::now()).ok();
+            if self.ratio > 0.0 {
+                self.progress(self.ratio, self.step);
+            }
+        }
     }
 }
 
@@ -419,6 +444,7 @@ impl App {
                 if let Some(pos) = self.tasks.iter().position(|t| t.id == id) {
                     let task = self.tasks.remove(pos);
                     self.log_info(&format!("task \"{}\" finished", task.name));
+                    self.align_names();
                 }
             }
             AppEvent::Line(line) => self.submit(&line),
@@ -547,7 +573,13 @@ impl App {
         }
         let own = composition.is_some();
         let composition = composition.unwrap_or_else(|| self.composition.clone());
-        let task = match Task::new(self.next_id, name, &composition) {
+        let column = line::name_column(
+            self.tasks
+                .iter()
+                .map(|task| task.name.as_str())
+                .chain([name.as_str()]),
+        );
+        let task = match Task::new(self.next_id, name, &composition, column) {
             Ok(task) => task,
             Err(error) => {
                 error!("invalid composition: {error}");
@@ -567,6 +599,18 @@ impl App {
             duration.as_secs_f64()
         ));
         self.tasks.push(task);
+        self.align_names();
+    }
+
+    /// Give every task the name column of the longest running name, so that what follows
+    /// the names lines up (the bars of the default composition).
+    fn align_names(&mut self) {
+        let column = line::name_column(self.tasks.iter().map(|task| task.name.as_str()));
+        for task in &mut self.tasks {
+            if task.column != column {
+                task.set_column(column);
+            }
+        }
     }
 
     fn list_tasks(&self) {
