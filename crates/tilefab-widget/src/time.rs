@@ -3,7 +3,7 @@
 use std::fmt::{self, Write};
 
 /// A date and a time of day, already in local time, given by the caller to
-/// `LineWidget::set_time`.
+/// [`LineWidget::set_time`](crate::LineWidget::set_time).
 ///
 /// `tilefab-widget` has no date or time-zone dependency: the application converts its clock
 /// (for instance with the `jiff` crate) and fills the fields. [`WallTime::default()`] has every

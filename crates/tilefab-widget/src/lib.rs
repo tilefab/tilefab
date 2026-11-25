@@ -43,4 +43,4 @@ pub use list::{List, ListItem, ListState};
 pub use paragraph::{Paragraph, Wrap};
 pub use progress::{ProgressBar, ProgressLine};
 pub use time::{TimeField, WallTime};
-pub use widget::LineWidget;
+pub use widget::{LineWidget, UpdateError};
