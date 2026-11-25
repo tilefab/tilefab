@@ -33,6 +33,13 @@ step cargo test --locked --all-features
 step cargo clippy --locked --release --all-targets --all-features -- -D warnings
 step cargo test --locked --profile ci --all-features
 RUSTDOCFLAGS="-D warnings" step cargo doc --locked --no-deps
+# The façade with fewer features: each optional layer alone, and none (the terminal layer
+# only). The workspace runs above enable every feature, which hides a missing `cfg`.
+for features in "" "input" "widget"; do
+    step cargo clippy --locked -p tilefab --all-targets --no-default-features --features "$features" -- -D warnings
+    step cargo test --locked -p tilefab --no-default-features --features "$features"
+    RUSTDOCFLAGS="-D warnings" step cargo doc --locked --no-deps -p tilefab --no-default-features --features "$features"
+done
 # Fuzz targets (fuzz/, a crate outside the workspace): running them needs nightly, but they
 # build with this toolchain, so an API change that breaks them fails here.
 step cargo fmt --check --manifest-path fuzz/Cargo.toml

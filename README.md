@@ -218,15 +218,16 @@ cargo mutants -p tilefab-widget -j 4   # the line widget
 
 On the line widget, every mutant is caught by the tests (none is marked as equivalent). The timeouts are mutants that loop forever: the tests catch them too.
 
-Fuzzing with libFuzzer (`fuzz/`, a crate outside the workspace; once: `rustup toolchain install nightly --profile minimal && cargo install --locked cargo-fuzz`). Three targets, each checking invariants rather than only the absence of a panic:
+Fuzzing with libFuzzer (`fuzz/`, a crate outside the workspace; once: `rustup toolchain install nightly --profile minimal && cargo install --locked cargo-fuzz`). Four targets, each checking invariants rather than only the absence of a panic:
 
 - `buffer_set_string`: successive `Buffer::set_stringn` writes with tricky text (wide characters, combining marks, emoji sequences, control characters), at positions inside and outside the buffer; the buffer invariants hold after each write (one printable grapheme of width 1 or 2 per cell, a wide character always followed by its continuation);
 - `line_widget`: `LineWidget` with an arbitrary composition (grammar tokens and raw text), lists, setter calls and widths; `build`, the setters and the drawing never panic, the buffer invariants hold, and nothing is written outside the first row of the area;
 - `layout_split`: `Layout::split` with arbitrary constraints, margins and spacing; one rectangle per constraint, within the area, none overlapping.
+- `line_editor`: `LineEditor` with arbitrary commands, pastes, `set_value` calls and renders at any width; the line never exceeds `max_len` nor holds a control character, the cursor stays in the line, and the rendered buffer keeps its invariants.
 
 ```sh
 cd fuzz
-cargo +nightly fuzz run line_widget -- -max_total_time=60   # or buffer_set_string, layout_split
+cargo +nightly fuzz run line_widget -- -max_total_time=60   # or buffer_set_string, layout_split, line_editor
 cargo +nightly fuzz run line_widget artifacts/line_widget/crash-…   # replay a crash
 ```
 

@@ -18,6 +18,8 @@ arbitrary = { version = "1.5.0", features = ["derive"] }
 libfuzzer-sys = "0.4.13"
 tilefab-core = { path = "../crates/tilefab-core" }
 tilefab-widget = { path = "../crates/tilefab-widget" }
+tilefab-input = { path = "../crates/tilefab-input" }
+unicode-segmentation = "1.13"
 
 [[bin]]
 name = "buffer_set_string"
@@ -36,6 +38,13 @@ bench = false
 [[bin]]
 name = "layout_split"
 path = "fuzz_targets/layout_split.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "line_editor"
+path = "fuzz_targets/line_editor.rs"
 test = false
 doc = false
 bench = false
