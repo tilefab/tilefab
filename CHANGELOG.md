@@ -69,6 +69,8 @@ break the API).
 - `compose "<composition>"` replaces `select`: it sets the composition of the tasks started
   next; `start <name> "<composition>"` gives a task its own. Each task is one row drawn by a
   `LineWidget` (name, local time, state symbol, progress bar and percentage, current step).
+- The tasks share a name column, as wide as the longest running name (at most 20 columns, a
+  longer name ends with `…`), so that their bars line up.
 - `TILEFAB_SCROLL_MODE=screen|region|fallback` chooses the scroll mode of the inline terminal.
 - On Windows, closing the console, logging off or shutting down quit through the clean-up.
 
