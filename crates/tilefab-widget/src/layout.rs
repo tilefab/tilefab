@@ -147,47 +147,87 @@ pub(crate) struct Plan {
 /// Lay out the `len` components described by `item` in `width` columns. `receiver` is the
 /// index of the component that takes the extra columns (the elastic `L`, otherwise the elastic
 /// `I`), if any.
+///
+/// Linear in `len`: the sums of the widths are computed once for the whole composition, and
+/// the last component is subtracted at each drop (step 5); only the final sharing goes over
+/// the kept components again.
 pub(crate) fn plan(
     len: usize,
     receiver: Option<usize>,
     width: usize,
     item: impl Fn(usize) -> Item,
 ) -> Plan {
-    (0..=len)
-        .rev()
-        .find_map(|kept| fit(kept, receiver, width, &item))
-        .unwrap_or(Plan {
-            kept: 0,
-            receiver: None,
-            extra: 0,
-            shrink: Share::Nominal,
-            names: Share::Nominal,
-        })
+    let mut sums = Sums::default();
+    for i in 0..len {
+        sums.add(item(i));
+    }
+    let mut kept = len;
+    loop {
+        if let Some(plan) = fit(kept, &sums, receiver, width, &item) {
+            return plan;
+        }
+        // `fit` always succeeds with nothing kept (no width is needed): `kept` is positive.
+        kept -= 1;
+        sums.remove(item(kept));
+    }
 }
 
-/// The layout of the first `kept` components in `width` columns, if they fit (steps 1–4).
+/// The sums `fit` needs over the kept components.
+#[derive(Debug, Default, Clone, Copy)]
+struct Sums {
+    /// Widths of the fixed components.
+    fixed: usize,
+    /// Nominal widths of `L` and `I`.
+    shrink_nominal: usize,
+    /// Number of `L` and `I`.
+    shrink_count: usize,
+    /// Nominal widths of the `N`.
+    names_nominal: usize,
+    /// Minimum widths of the `N`.
+    names_minimum: usize,
+}
+
+impl Sums {
+    fn add(&mut self, item: Item) {
+        match item {
+            Item::Fixed(w) => self.fixed += w,
+            Item::Shrink(w) => {
+                self.shrink_nominal += w;
+                self.shrink_count += 1;
+            }
+            Item::Name(w) => {
+                self.names_nominal += w;
+                self.names_minimum += minimum(w);
+            }
+        }
+    }
+
+    /// Undo [`Sums::add`] for a component added before.
+    fn remove(&mut self, item: Item) {
+        match item {
+            Item::Fixed(w) => self.fixed -= w,
+            Item::Shrink(w) => {
+                self.shrink_nominal -= w;
+                self.shrink_count -= 1;
+            }
+            Item::Name(w) => {
+                self.names_nominal -= w;
+                self.names_minimum -= minimum(w);
+            }
+        }
+    }
+}
+
+/// The layout of the first `kept` components in `width` columns, if they fit (steps 1–4);
+/// `sums` are the sums over these components.
 fn fit(
     kept: usize,
+    sums: &Sums,
     receiver: Option<usize>,
     width: usize,
     item: &impl Fn(usize) -> Item,
 ) -> Option<Plan> {
-    let (mut fixed, mut shrink_nominal, mut shrink_count, mut names_nominal, mut names_minimum) =
-        (0, 0, 0, 0, 0);
-    for i in 0..kept {
-        match item(i) {
-            Item::Fixed(w) => fixed += w,
-            Item::Shrink(w) => {
-                shrink_nominal += w;
-                shrink_count += 1;
-            }
-            Item::Name(w) => {
-                names_nominal += w;
-                names_minimum += minimum(w);
-            }
-        }
-    }
-    let available = width.checked_sub(fixed)?;
+    let available = width.checked_sub(sums.fixed)?;
     // A receiver that is not kept gets nothing: `Widths` never reaches it.
     let mut plan = Plan {
         kept,
@@ -196,7 +236,7 @@ fn fit(
         shrink: Share::Nominal,
         names: Share::Nominal,
     };
-    let shrink_minimum = shrink_count * MIN_FLEXIBLE_WIDTH;
+    let shrink_minimum = sums.shrink_count * MIN_FLEXIBLE_WIDTH;
     let shrinks = move || {
         (0..kept).filter_map(move |i| match item(i) {
             Item::Shrink(w) => Some(w),
@@ -209,13 +249,13 @@ fn fit(
             _ => None,
         })
     };
-    if available >= shrink_nominal + names_nominal {
+    if available >= sums.shrink_nominal + sums.names_nominal {
         // Step 2: everything at its nominal width.
-        plan.extra = available - shrink_nominal - names_nominal;
-    } else if available >= names_nominal + shrink_minimum {
+        plan.extra = available - sums.shrink_nominal - sums.names_nominal;
+    } else if available >= sums.names_nominal + shrink_minimum {
         // Step 3: `L` and `I` shrink.
-        plan.shrink = Share::proportional(available - names_nominal, shrinks);
-    } else if available >= shrink_minimum + names_minimum {
+        plan.shrink = Share::proportional(available - sums.names_nominal, shrinks);
+    } else if available >= shrink_minimum + sums.names_minimum {
         // Step 4: `L` and `I` at 2, the `N` shrink.
         plan.shrink = Share::Minimum;
         plan.names = Share::proportional(available - shrink_minimum, names);
@@ -373,6 +413,52 @@ pub(crate) mod tests {
         assert_eq!(layout(&[], None, 10), Vec::<usize>::new());
     }
 
+    /// The previous `plan`, as a reference: the sums computed again for each prefix, from the
+    /// longest down (quadratic in the number of components).
+    fn reference_plan(items: &[Item], receiver: Option<usize>, width: usize) -> Plan {
+        let item = |i: usize| items[i];
+        (0..=items.len())
+            .rev()
+            .find_map(|kept| {
+                let mut sums = Sums::default();
+                for i in 0..kept {
+                    sums.add(item(i));
+                }
+                fit(kept, &sums, receiver, width, &item)
+            })
+            .expect("nothing kept always fits")
+    }
+
+    #[test]
+    fn the_layout_visits_each_component_a_few_times() {
+        // 1 360 components (a 4 096-byte composition), most of them dropped.
+        let items: Vec<Item> = (0..1360)
+            .map(|i| match i % 4 {
+                0 => Fixed(3),
+                1 => Name(5 + i % 7),
+                2 => Fixed(1),
+                _ => Name(2),
+            })
+            .chain([Shrink(10), Shrink(30)])
+            .collect();
+        for width in [0, 80, 400, 2000, 10_000] {
+            let calls = std::cell::Cell::new(0);
+            let item = |i: usize| {
+                calls.set(calls.get() + 1);
+                items[i]
+            };
+            let plan = plan(items.len(), Some(items.len() - 1), width, item);
+            let widths: usize = plan.widths(item).sum();
+            assert!(widths <= width);
+            assert!(
+                calls.get() <= 8 * items.len(),
+                "width {width}: {} calls for {} components",
+                calls.get(),
+                items.len()
+            );
+        }
+    }
+
     /// Reference sharing with a list of the members held, as the specification says.
     fn reference_share(nominals: &[usize], budget: usize) -> Vec<usize> {
         let mut held = vec![false; nominals.len()];
@@ -466,6 +552,9 @@ pub(crate) mod tests {
             // The next component (if any) did not fit.
             let more = layout(&items, receiver, width + 1);
             prop_assert!(more.len() >= widths.len());
+            // Same plan as the previous, quadratic, algorithm.
+            let item = |i: usize| items[i];
+            prop_assert_eq!(plan(items.len(), receiver, width, item), reference_plan(&items, receiver, width));
         }
 
         #[test]

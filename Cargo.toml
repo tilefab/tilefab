@@ -62,6 +62,10 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+# Every exception to a lint is an `#[expect(…, reason = "…")]`: it says why, and it warns once
+# the exception is no longer needed (an `#[allow]` would stay silently).
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
 
 # Release binary (`cargo build --release`): a single, fully optimized codegen unit with
 # thin LTO across crates; in exchange, a release build links in about 12 s instead of 1 s.

@@ -983,7 +983,6 @@ impl LineEditor {
 
 #[cfg(test)]
 // The command tables of the tests read better without the `Command::` prefix.
-#[allow(clippy::enum_glob_use)]
 mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
