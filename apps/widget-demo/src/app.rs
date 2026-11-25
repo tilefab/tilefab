@@ -45,6 +45,9 @@ pub enum AppEvent {
     /// Termination signal received (`SIGTERM`, `SIGINT`, `SIGHUP`): quit through
     /// the normal path so the terminal is restored.
     Quit,
+    /// The keyboard could not be read any more (the error message): quit through the normal
+    /// path, instead of running on without input in raw mode.
+    InputFailed(String),
 }
 
 /// A command entered at the prompt.
@@ -294,6 +297,11 @@ pub fn history_path(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
         .map(|home| PathBuf::from(home).join(".local/state/tilefab/history"))
 }
 
+/// Most lines kept in `App::output` while they cannot be shown.
+pub const MAX_KEPT_LINES: usize = 1000;
+/// Most bytes of text kept in `App::output` while it cannot be shown.
+pub const MAX_KEPT_BYTES: usize = 1024 * 1024;
+
 /// A running task, as seen by the UI.
 #[derive(Debug)]
 pub struct Task {
@@ -348,6 +356,8 @@ pub struct App {
     pub tasks: Vec<Task>,
     /// Lines to insert above the viewport on the next loop iteration.
     pub output: Vec<Line<'static>>,
+    /// Lines dropped from `output` while they could not be shown (see [`App::limit_output`]).
+    pub dropped_output: usize,
     /// Composition given to the tasks started next (`compose`).
     pub composition: String,
     pub should_quit: bool,
@@ -363,6 +373,7 @@ impl App {
                 .with_completer(CommandCompleter),
             tasks: Vec::new(),
             output: Vec::new(),
+            dropped_output: 0,
             composition: line::DEFAULT_COMPOSITION.to_string(),
             should_quit: false,
             tx,
@@ -397,6 +408,10 @@ impl App {
             }
             AppEvent::Line(line) => self.submit(&line),
             AppEvent::Quit => self.should_quit = true,
+            AppEvent::InputFailed(error) => {
+                error!("keyboard input failed ({error}): quitting");
+                self.should_quit = true;
+            }
             // The headless loop handles the end of stdin.
             AppEvent::Resize | AppEvent::InputClosed => {}
         }
@@ -421,6 +436,23 @@ impl App {
             warn!("cannot write the history file ({error}): history kept in memory only");
         }
         self.submit(line);
+    }
+
+    /// Keep only the newest lines of `output`, at most [`MAX_KEPT_LINES`] and
+    /// [`MAX_KEPT_BYTES`] (the newest line is always kept), while they cannot be shown (a
+    /// terminal with no columns); the others are counted in `dropped_output`.
+    pub fn limit_output(&mut self) {
+        let size = |line: &Line<'_>| line.spans.iter().map(|s| s.content.len()).sum::<usize>();
+        let mut bytes: usize = self.output.iter().map(size).sum();
+        let mut drop = 0;
+        while self.output.len() - drop > 1
+            && (self.output.len() - drop > MAX_KEPT_LINES || bytes > MAX_KEPT_BYTES)
+        {
+            bytes -= size(&self.output[drop]);
+            drop += 1;
+        }
+        self.output.drain(..drop);
+        self.dropped_output += drop;
     }
 
     /// Use the history file at `path` (loaded now, each submitted line appended). An error

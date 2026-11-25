@@ -9,7 +9,7 @@
 //! itself, its only consumer: waiting for room there would deadlock. So a line that finds
 //! the channel full is dropped and counted in [`DroppedLogs`]; the UI loop reports the count.
 
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -72,8 +72,21 @@ pub fn level_prefix(level: Level) -> String {
 /// Used for lines produced directly by the application, bypassing tracing (task
 /// started or finished): they arrive in the same frame as the accompanying viewport
 /// height change, instead of the next frame.
+///
+/// Control characters of `message` (a task name read on stdin may hold some) are escaped as
+/// `tracing-subscriber` does for the other lines (`\x1b`), so that no escape sequence reaches
+/// the terminal through them.
 pub fn format_line(level: Level, message: &str) -> String {
-    format!("{}{message}", level_prefix(level))
+    let mut line = level_prefix(level);
+    for c in message.chars() {
+        if c.is_control() {
+            // Writing to a `String` cannot fail.
+            let _ = write!(line, "\\x{:02x}", u32::from(c));
+        } else {
+            line.push(c);
+        }
+    }
+    line
 }
 
 /// Compact format: `[INFO] message field=value`.
