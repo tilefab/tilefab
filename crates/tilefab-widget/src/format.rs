@@ -314,6 +314,10 @@ mod tests {
         assert_eq!(progress(49.999_999, 5), " 49.9%");
         assert_eq!(progress(99.999_999_999_999_9, 3), " 99%");
         assert_eq!(progress(f64::from(1) - 1e-12, 4), "   0%");
+        // Within a few ULPs of 100: the product would round to 100, but the value is below.
+        let below = 100.0_f64.next_down();
+        assert_eq!(progress(below, 3), " 99%");
+        assert_eq!(progress(below, 5), " 99.9%");
     }
 
     #[test]

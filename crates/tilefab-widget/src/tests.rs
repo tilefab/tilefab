@@ -131,6 +131,31 @@ fn a_log_is_padded_only_when_something_follows() {
 }
 
 #[test]
+fn a_centered_keyword_at_the_end_writes_only_its_width() {
+    let mut widget = LineWidget::builder("K")
+        .keywords(entries(&["abcd", "a"]))
+        .keyword_alignment(Alignment::Center)
+        .build()
+        .unwrap();
+    widget.set_keyword(1).unwrap();
+    let mut buf = Buffer::filled(Rect::new(0, 0, 8, 1), tilefab_core::Cell::new("x"));
+    (&widget).render(buf.area(), &mut buf);
+    assert_eq!(buf, Buffer::with_lines([" a  xxxx"]));
+}
+
+#[test]
+fn a_log_followed_by_a_component_is_padded() {
+    let mut widget = LineWidget::builder("L B0")
+        .barriers(entries(&["|"]))
+        .build()
+        .unwrap();
+    widget.set_log("ab");
+    let mut buf = Buffer::filled(Rect::new(0, 0, 6, 1), tilefab_core::Cell::new("x"));
+    (&widget).render(buf.area(), &mut buf);
+    assert_eq!(buf, Buffer::with_lines(["ab   |"]));
+}
+
+#[test]
 fn cells_after_the_widget_are_untouched() {
     let widget = LineWidget::builder("B0")
         .barriers(entries(&["[]"]))

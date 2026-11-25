@@ -7,6 +7,26 @@ break the API).
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- `tilefab-widget` is rewritten around a single widget, `LineWidget`: one line composed from a
+  short description string (`"B0 T2 B1 B2 S B2 L"`: barriers, date and time, symbols, keyword,
+  names, log, value, progress and its illustration) and lists of values, laid out again at
+  every draw (flexible components shrink, then the last components are dropped). Built by
+  `LineWidget::builder(…)…build()`, which returns a `BuildError` or warnings; updated by
+  setters that return an `UpdateError` and keep the previous value. New types: `Entry`,
+  `WallTime`, `LineWidgetBuilder`, `BuildError`, `UpdateError`, `Warning`, `ListName`,
+  `TokenProblem`, `EntryProblem`, `TimeField`.
+- `Block`, `Borders`, `BorderType`, `Padding`, `Clear`, `List`, `ListItem`, `ListState`,
+  `Paragraph`, `Wrap`, `ProgressBar` and `ProgressLine` are removed, from `tilefab-widget` and
+  from the re-exports of `tilefab` (feature `widget`), which now re-exports the new types.
+
+### Demo
+
+- `compose "<composition>"` replaces `select`: it sets the composition of the tasks started
+  next; `start <name> "<composition>"` gives a task its own. Each task is one row drawn by a
+  `LineWidget` (name, local time, state symbol, progress bar and percentage, current step).
+
 ## [0.1.0]
 
 First release on crates.io.

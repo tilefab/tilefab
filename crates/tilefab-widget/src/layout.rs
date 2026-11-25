@@ -188,7 +188,7 @@ fn fit(
         }
     }
     let available = width.checked_sub(fixed)?;
-    let receiver = receiver.filter(|&r| r < kept);
+    // A receiver that is not kept gets nothing: `Widths` never reaches it.
     let mut plan = Plan {
         kept,
         receiver,

@@ -168,5 +168,10 @@ mod tests {
             Entry::new("ab").check_one_column(),
             Err(EntryProblem::NotOneColumn)
         );
+        // One column wide, but two graphemes (a zero-width space after the letter).
+        let two = Entry::new("a\u{200b}");
+        assert_eq!(two.text().graphemes(true).count(), 2);
+        assert_eq!(two.check_text(), Ok(1));
+        assert_eq!(two.check_one_column(), Err(EntryProblem::NotOneColumn));
     }
 }
