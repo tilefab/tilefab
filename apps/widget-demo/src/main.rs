@@ -86,7 +86,6 @@ async fn main() -> Result<()> {
     let (tx, rx) = mpsc::channel(EVENT_QUEUE);
     spawn_keyboard_thread(tx.clone());
     spawn_ticker(tx.clone());
-    #[cfg(unix)]
     spawn_signal_listener(tx.clone())?;
     let dropped_logs = logging::init_channel(tx.clone());
     if let Some(warning) = scroll_warning {
@@ -208,6 +207,39 @@ fn spawn_signal_listener(tx: Sender<AppEvent>) -> Result<()> {
         // Waits for room if needed: the request to quit must not be lost.
         let _ = tx.send(AppEvent::Quit).await;
     });
+    Ok(())
+}
+
+/// Windows variant of the signal listener: closing the console window, logging off and
+/// shutting down (`CTRL_CLOSE_EVENT`, `CTRL_LOGOFF_EVENT`, `CTRL_SHUTDOWN_EVENT`) quit through
+/// the normal cleanup. Ctrl+C arrives as a key in raw mode, as on Unix. Not built by the CI
+/// (no Windows job).
+#[cfg(windows)]
+fn spawn_signal_listener(tx: Sender<AppEvent>) -> Result<()> {
+    use tokio::signal::windows::{ctrl_close, ctrl_logoff, ctrl_shutdown};
+
+    let mut close = ctrl_close()?;
+    let mut logoff = ctrl_logoff()?;
+    let mut shutdown = ctrl_shutdown()?;
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = close.recv() => {}
+            _ = logoff.recv() => {}
+            _ = shutdown.recv() => {}
+        }
+        // Waits for room if needed: the request to quit must not be lost.
+        let _ = tx.send(AppEvent::Quit).await;
+    });
+    Ok(())
+}
+
+/// Elsewhere, no signal to listen to.
+#[cfg(not(any(unix, windows)))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the same signature as the Unix and Windows variants"
+)]
+fn spawn_signal_listener(_tx: Sender<AppEvent>) -> Result<()> {
     Ok(())
 }
 
