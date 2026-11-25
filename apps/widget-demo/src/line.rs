@@ -1,11 +1,17 @@
 //! The line widget of each task: the lists of values the compositions can use, the default
 //! composition, and how a task drives its widget (state, progress, value, step, time).
 
-use tilefab::{BuildError, Color, Entry, LineWidget, Modifier, Style, WallTime, Warning};
+use tilefab::{
+    BuildError, Color, Entry, LineWidget, Modifier, Style, WallTime, Warning, grapheme_width,
+};
+use unicode_segmentation::UnicodeSegmentation;
 
 /// The composition current at startup: `alpha [05.123] 🟠 ██████████░░░░░░  45% compiling`.
 /// The name comes first: the pty checks of `tools/` find the task rows by their name.
 pub const DEFAULT_COMPOSITION: &str = "N B2 B0 T2 B1 B2 S B2 I B2 P B2 L";
+
+/// Widest name column: a longer name is cut, with `…`.
+pub const MAX_NAME_COLUMN: usize = 20;
 
 /// Unit of the simulated download size shown by `V` (index in [`units`]).
 const MEGABYTES: usize = 2;
@@ -63,19 +69,65 @@ fn units() -> [Entry; 4] {
     ["B", "KB", "MB", "GB"].map(|text| Entry::styled(text, gray()))
 }
 
+/// `name` as shown: its control characters become spaces (the widget refuses them in its
+/// entries, and a name read from stdin may hold some).
+fn shown(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
+/// Width of `name` as shown, in columns.
+fn name_width(name: &str) -> usize {
+    shown(name).graphemes(true).map(grapheme_width).sum()
+}
+
+/// The name column shared by the tasks, so that what follows the names lines up: as wide as
+/// the longest of `names`, at most [`MAX_NAME_COLUMN`].
+pub fn name_column<'a>(names: impl IntoIterator<Item = &'a str>) -> usize {
+    names
+        .into_iter()
+        .map(name_width)
+        .max()
+        .unwrap_or(0)
+        .min(MAX_NAME_COLUMN)
+}
+
+/// `name` in exactly `column` columns: padded with spaces, or cut with `…` when longer.
+fn fit_name(name: &str, column: usize) -> String {
+    let name = shown(name);
+    let mut fitted = String::new();
+    let mut used = 0;
+    if name_width(&name) > column {
+        for grapheme in name.graphemes(true) {
+            let width = grapheme_width(grapheme);
+            // One column kept for `…`.
+            if used + width >= column {
+                break;
+            }
+            fitted.push_str(grapheme);
+            used += width;
+        }
+        if column > 0 {
+            fitted.push('…');
+            used += 1;
+        }
+    } else {
+        fitted = name;
+        used = name_width(&fitted);
+    }
+    fitted.extend(std::iter::repeat_n(' ', column.saturating_sub(used)));
+    fitted
+}
+
 /// The widget of task `name` drawn with `composition`; the name is entry 0 of `names`
-/// (`N` or `N0`).
+/// (`N` or `N0`), fitted in a name column of `column` columns (see [`name_column`]).
 ///
 /// # Errors
 ///
 /// The [`BuildError`] of an invalid composition.
-pub fn build(composition: &str, name: &str) -> Result<LineWidget, BuildError> {
-    // The widget refuses control characters in its entries: a name read from stdin may
-    // hold some.
-    let name: String = name
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
+pub fn build(composition: &str, name: &str, column: usize) -> Result<LineWidget, BuildError> {
+    let name = fit_name(name, column.max(1));
     LineWidget::builder(composition)
         .symbols(symbols())
         .barriers(barriers())
@@ -103,7 +155,7 @@ pub fn build(composition: &str, name: &str) -> Result<LineWidget, BuildError> {
 ///
 /// The [`BuildError`] of an invalid composition.
 pub fn check(composition: &str) -> Result<Vec<Warning>, BuildError> {
-    build(composition, "task").map(|widget| widget.warnings().to_vec())
+    build(composition, "task", 4).map(|widget| widget.warnings().to_vec())
 }
 
 /// Whether the `V` of `composition` has a unit (`U`) and a total (`/`): `set_value` must
@@ -166,12 +218,24 @@ mod tests {
 
     #[test]
     fn the_default_composition_shows_the_task() {
-        let mut widget = build(DEFAULT_COMPOSITION, "alpha").unwrap();
+        let mut widget = build(DEFAULT_COMPOSITION, "alpha", 5).unwrap();
         assert_eq!(widget.warnings(), []);
         update(&mut widget, DEFAULT_COMPOSITION, 0.45, "compiling", 10.0);
         let text = row(&widget, 60);
         assert!(text.starts_with("alpha [00.000] 🟠 █"), "{text}");
         assert!(text.ends_with("░  45% compiling"), "{text}");
+    }
+
+    #[test]
+    fn names_are_fitted_in_the_shared_column() {
+        assert_eq!(fit_name("ab", 5), "ab   ");
+        assert_eq!(fit_name("alpha", 5), "alpha");
+        assert_eq!(fit_name("alphabet", 5), "alph…");
+        assert_eq!(fit_name("日本語", 4), "日… ");
+        assert_eq!(fit_name("a\tb", 4), "a b ");
+        assert_eq!(name_column(["a", "gamma", "日本"]), 5);
+        assert_eq!(name_column(["x".repeat(30).as_str()]), MAX_NAME_COLUMN);
+        assert_eq!(name_column([]), 0);
     }
 
     #[test]
@@ -186,7 +250,7 @@ mod tests {
     fn a_composition_can_use_every_list() {
         let composition = "D0 B2 T3 B3 S B4 K B5 N B6 V5U/ B7 I10 P5 B9 L";
         assert!(check(composition).is_ok(), "{:?}", check(composition));
-        let mut widget = build(composition, "beta").unwrap();
+        let mut widget = build(composition, "beta", 4).unwrap();
         widget.set_time(now()).unwrap();
         update(&mut widget, composition, 1.0, "done", 50.0);
         let text = row(&widget, 120);
@@ -197,7 +261,7 @@ mod tests {
     #[test]
     fn values_follow_the_shape_of_v() {
         for composition in ["V5", "V5U", "V5/", "V5U/"] {
-            let mut widget = build(composition, "t").unwrap();
+            let mut widget = build(composition, "t", 1).unwrap();
             update(&mut widget, composition, 0.5, "", 20.0);
             assert!(
                 row(&widget, 20).trim_start().starts_with("10.0"),
@@ -208,7 +272,7 @@ mod tests {
 
     #[test]
     fn control_characters_of_a_name_become_spaces() {
-        let widget = build("N", "a\u{1b}b").unwrap();
+        let widget = build("N", "a\u{1b}b", 3).unwrap();
         assert_eq!(row(&widget, 10), "a b");
     }
 

@@ -71,7 +71,7 @@ mod tests {
         let mut app = App::new(tx);
         for i in 0..n {
             app.tasks
-                .push(Task::new(i as u64 + 1, format!("t{i}"), composition).unwrap());
+                .push(Task::new(i as u64 + 1, format!("t{i}"), composition, 2).unwrap());
         }
         app
     }
@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn each_task_gets_a_row_above_the_prompt_drawn_with_its_composition() {
         let mut app = app_with_tasks(2, "N B2 P");
-        app.tasks[1] = Task::new(9, "t1".into(), "P B2 N").unwrap();
+        app.tasks[1] = Task::new(9, "t1".into(), "P B2 N", 2).unwrap();
         app.handle_event(AppEvent::Progress {
             id: 1,
             ratio: 0.5,
@@ -123,6 +123,35 @@ mod tests {
         });
         let rows = render(&mut app, 30, 3);
         assert_eq!(rows, ["t0  50%", "  0% t1", ">"]);
+    }
+
+    #[tokio::test]
+    async fn the_bars_of_the_default_composition_line_up() {
+        let (tx, _rx) = mpsc::channel(64);
+        let mut app = App::new(tx);
+        app.submit("start a");
+        app.submit("start epsilon");
+        app.submit("start 日本");
+        let rows = render(&mut app, 80, 4);
+        // The time follows the name column: same column on every row.
+        // In columns, not bytes: `日本` is 4 columns wide.
+        let column = |row: &str| {
+            row.find('[').map(|at| {
+                row[..at]
+                    .chars()
+                    .map(|c| tilefab::grapheme_width(c.encode_utf8(&mut [0; 4])))
+                    .sum::<usize>()
+            })
+        };
+        let columns: Vec<Option<usize>> = rows[..3].iter().map(|row| column(row)).collect();
+        assert_eq!(columns, [Some(8), Some(8), Some(8)], "{rows:?}");
+        assert!(rows[0].starts_with("a       ["), "{rows:?}");
+        // The longest name ends: the column shrinks to the longest one left.
+        let id = app.tasks[1].id;
+        app.handle_event(AppEvent::TaskDone(id));
+        let rows = render(&mut app, 80, 3);
+        assert!(rows[0].starts_with("a    ["), "{rows:?}");
+        assert!(rows[1].starts_with("日本 ["), "{rows:?}");
     }
 
     #[test]
