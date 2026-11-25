@@ -12,7 +12,18 @@
 #![warn(missing_docs)]
 
 mod block;
+// The line widget, built phase by phase next to the old widgets.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the line widget, not wired yet")
+)]
+mod builder;
 mod clear;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the line widget, not wired yet")
+)]
+mod composition;
 mod list;
 mod paragraph;
 mod progress;
