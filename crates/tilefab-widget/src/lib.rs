@@ -13,23 +13,23 @@
 
 mod block;
 // The line widget, built phase by phase next to the old widgets.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the line widget, not wired yet")
-)]
 mod builder;
 mod clear;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the line widget, not wired yet")
-)]
 mod composition;
+mod entry;
 mod list;
 mod paragraph;
 mod progress;
+mod widget;
 
 pub use block::{Block, BorderType, Borders, Padding};
+pub use builder::{
+    BuildError, DEFAULT_TARGET_WIDTH, LineWidgetBuilder, ListName, MAX_ENTRIES, MAX_NAMES,
+    MAX_VALUE_DECIMALS, TokenProblem, Warning,
+};
 pub use clear::Clear;
+pub use entry::{Entry, EntryProblem};
 pub use list::{List, ListItem, ListState};
 pub use paragraph::{Paragraph, Wrap};
 pub use progress::{ProgressBar, ProgressLine};
+pub use widget::LineWidget;
