@@ -6,14 +6,15 @@ use std::path::{Path, PathBuf};
 use tilefab::crossterm::event::KeyEvent;
 use tilefab::{
     Candidate, Completer, Completions, EditorConfig, EditorEvent, History, Line, LineEditor,
+    LineWidget,
 };
 use tokio::sync::mpsc::Sender;
 use tracing::{Level, error, info, warn};
 
 use crate::MAX_TASKS;
+use crate::line;
 use crate::logging;
 use crate::tasks::{self, TaskId};
-use crate::view::{TaskView, ViewError};
 
 /// Everything that can wake the UI loop goes through this type over a single
 /// channel: the UI loop is the only code that writes to the terminal.
@@ -27,11 +28,15 @@ pub enum AppEvent {
     Resize,
     /// Complete log line produced by tracing (see `logging.rs`).
     Log(String),
-    /// Task progress, between 0.0 and 1.0.
-    Progress { id: TaskId, ratio: f64 },
+    /// Task progress, between 0.0 and 1.0, and the step it has reached.
+    Progress {
+        id: TaskId,
+        ratio: f64,
+        step: &'static str,
+    },
     /// A task has finished.
     TaskDone(TaskId),
-    /// Regular tick: forces a periodic redraw.
+    /// Regular tick: updates the time of the task lines and forces a periodic redraw.
     Tick,
     /// Headless mode (no TTY): line read from stdin.
     Line(String),
@@ -40,6 +45,9 @@ pub enum AppEvent {
     /// Termination signal received (`SIGTERM`, `SIGINT`, `SIGHUP`): quit through
     /// the normal path so the terminal is restored.
     Quit,
+    /// The keyboard could not be read any more (the error message): quit through the normal
+    /// path, instead of running on without input in raw mode.
+    InputFailed(String),
 }
 
 /// A command entered at the prompt.
@@ -47,27 +55,82 @@ pub enum AppEvent {
 pub enum Command {
     /// Empty line: nothing to do.
     Empty,
-    Start(String),
+    /// Start a task by its name, with its own composition or the current one.
+    Start {
+        name: String,
+        composition: Option<String>,
+    },
     List,
-    /// Choose the view of the tasks started next; `None`: show the current one.
-    Select(Option<TaskView>),
+    /// Set the composition of the tasks started next; `None`: show the current one.
+    Compose(Option<String>),
     Help,
     Quit,
     /// Hidden command for testing terminal restoration. Debug builds only
     /// in a release build, `panic` is an unknown command.
     #[cfg(debug_assertions)]
     Panic,
+    /// Hidden command for checking the scrollback (`count <n>`): write `n` numbered log
+    /// lines at once, to find again by scrolling up. Debug builds only, like `panic`.
+    #[cfg(debug_assertions)]
+    Count(u32),
 }
+
+/// Most lines `count` writes at once.
+#[cfg(debug_assertions)]
+pub const MAX_COUNT: u32 = 10_000;
 
 /// Command parsing error.
 #[derive(Debug, PartialEq, Eq)]
 pub enum CommandError {
     /// `start` without a task name.
     MissingName,
-    /// `select` arguments that name no view.
-    View(ViewError),
+    /// `compose` with a composition that is not between double quotes.
+    Quotes(QuoteError),
     /// Unrecognized first word.
     Unknown(String),
+}
+
+/// Why a quoted composition could not be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuoteError {
+    /// It does not start with `"`.
+    MissingOpening,
+    /// No `"` after the opening one.
+    MissingClosing,
+    /// Text after the closing `"`.
+    TextAfter,
+}
+
+impl std::fmt::Display for QuoteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::MissingOpening => "the composition goes between double quotes",
+            Self::MissingClosing => "missing closing double quote",
+            Self::TextAfter => "text after the closing double quote",
+        })
+    }
+}
+
+/// The text between the double quotes of `text` (`"B0 T2 L"` → `B0 T2 L`).
+fn quoted(text: &str) -> Result<&str, QuoteError> {
+    let inner = text.strip_prefix('"').ok_or(QuoteError::MissingOpening)?;
+    let (composition, after) = inner.split_once('"').ok_or(QuoteError::MissingClosing)?;
+    if after.trim().is_empty() {
+        Ok(composition)
+    } else {
+        Err(QuoteError::TextAfter)
+    }
+}
+
+/// The argument of `start`: a name, optionally followed by a composition between double
+/// quotes (`alpha "N B2 P"`), for this task only.
+fn start_arguments(rest: &str) -> (&str, Option<&str>) {
+    if let Some(without_last) = rest.strip_suffix('"')
+        && let Some(open) = without_last.rfind('"')
+    {
+        return (rest[..open].trim_end(), Some(&without_last[open + 1..]));
+    }
+    (rest, None)
 }
 
 /// What a command word does.
@@ -75,7 +138,7 @@ pub enum CommandError {
 enum Kind {
     Start,
     List,
-    Select,
+    Compose,
     Help,
     Quit,
 }
@@ -94,7 +157,7 @@ struct CommandSpec {
 const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "start",
-        usage: "start <name>",
+        usage: "start <name> [\"<composition>\"]",
         description: "start a task",
         kind: Kind::Start,
     },
@@ -105,10 +168,10 @@ const COMMANDS: &[CommandSpec] = &[
         kind: Kind::List,
     },
     CommandSpec {
-        name: "select",
-        usage: "select <widget> [variant] [bordered]",
+        name: "compose",
+        usage: "compose [\"<composition>\"]",
         description: "choose how new tasks are drawn",
-        kind: Kind::Select,
+        kind: Kind::Compose,
     },
     CommandSpec {
         name: "help",
@@ -143,24 +206,36 @@ impl Command {
         if word == "panic" {
             return Ok(Self::Panic);
         }
+        #[cfg(debug_assertions)]
+        if word == "count" {
+            return match rest.parse() {
+                Ok(n @ 1..=MAX_COUNT) => Ok(Self::Count(n)),
+                _ => Err(CommandError::Unknown(format!("count {rest}"))),
+            };
+        }
         let Some(spec) = COMMANDS.iter().find(|spec| spec.name == word) else {
             return Err(CommandError::Unknown(word.to_string()));
         };
         match spec.kind {
-            Kind::Start if rest.is_empty() => Err(CommandError::MissingName),
-            Kind::Start => Ok(Self::Start(rest.to_string())),
+            Kind::Start => match start_arguments(rest) {
+                ("", _) => Err(CommandError::MissingName),
+                (name, composition) => Ok(Self::Start {
+                    name: name.to_string(),
+                    composition: composition.map(str::to_string),
+                }),
+            },
             Kind::List => Ok(Self::List),
-            Kind::Select if rest.is_empty() => Ok(Self::Select(None)),
-            Kind::Select => TaskView::parse(rest)
-                .map(|view| Self::Select(Some(view)))
-                .map_err(CommandError::View),
+            Kind::Compose if rest.is_empty() => Ok(Self::Compose(None)),
+            Kind::Compose => quoted(rest)
+                .map(|composition| Self::Compose(Some(composition.to_string())))
+                .map_err(CommandError::Quotes),
             Kind::Help => Ok(Self::Help),
             Kind::Quit => Ok(Self::Quit),
         }
     }
 
     /// The `help` message, on several lines: the command names, the usage of the commands
-    /// that take arguments, the ways to quit, then the widgets and their variants.
+    /// that take arguments, the ways to quit, then the letters of a composition.
     fn help() -> String {
         let names: Vec<&str> = COMMANDS.iter().map(|spec| spec.name).collect();
         let mut lines = vec![format!("commands: {}", names.join(", "))];
@@ -179,18 +254,20 @@ impl Command {
             "  {} (or Ctrl+C, Ctrl+D to quit)",
             quits.join(", ")
         ));
-        lines.push("  widgets:".to_string());
-        lines.extend(TaskView::widgets().into_iter().map(|widget| {
-            let variants: Vec<&str> = TaskView::variants(widget).collect();
-            format!("    {widget} [{}]", variants.join("|"))
-        }));
+        lines.extend(COMPOSITION_HELP.iter().map(|line| format!("  {line}")));
         lines.join("\n")
     }
 }
 
-/// Completes the command name (the first word) and the widget, variant and border after
-/// `select`;
-/// nothing for the task name.
+/// The letters of a composition, for `help`.
+const COMPOSITION_HELP: &[&str] = &[
+    "composition: tokens separated by one space, for instance \"N B2 B0 T2 B1 B2 S B2 I B2 P B2 L\"",
+    "  S symbol of the state, B0-B9 [ ] space - : | ( ) / and two spaces,",
+    "  D0-D2 date, T0-T5 time, P[3-9] progress, K state keyword, N task name,",
+    "  L[size] log, V[size][U][/] downloaded size, I[size] progress bar",
+];
+
+/// Completes the command name (the first word); nothing for the arguments.
 pub struct CommandCompleter;
 
 impl Completer for CommandCompleter {
@@ -199,14 +276,14 @@ impl Completer for CommandCompleter {
         let start = before.len() - before.trim_start().len();
         let word = &before[start..];
         if word.contains(char::is_whitespace) {
-            return complete_view(word, start);
+            return Completions::default();
         }
         let candidates = COMMANDS
             .iter()
             .filter(|spec| spec.name.starts_with(word))
             .map(|spec| {
                 let candidate = Candidate::new(spec.name).description(spec.description);
-                if matches!(spec.kind, Kind::Start | Kind::Select) {
+                if matches!(spec.kind, Kind::Start | Kind::Compose) {
                     candidate.append_space()
                 } else {
                     candidate
@@ -214,35 +291,6 @@ impl Completer for CommandCompleter {
             })
             .collect();
         Completions { start, candidates }
-    }
-}
-
-/// After `select`, completes the word being typed: the widget, its variant, then
-/// `bordered`. `word` is the line from its first word to the cursor, which is `start` bytes
-/// into the line.
-fn complete_view(word: &str, start: usize) -> Completions {
-    let Some(("select", args)) = word.split_once(char::is_whitespace) else {
-        return Completions::default();
-    };
-    let (done, prefix) = args.rsplit_once(char::is_whitespace).unwrap_or(("", args));
-    let done: Vec<&str> = done.split_whitespace().collect();
-    let candidates = TaskView::next_words(&done)
-        .into_iter()
-        .filter(|candidate| candidate.starts_with(prefix))
-        .map(|name| {
-            // A space after the word when another one can follow it.
-            let mut words = done.clone();
-            words.push(name);
-            if TaskView::next_words(&words).is_empty() {
-                Candidate::new(name)
-            } else {
-                Candidate::new(name).append_space()
-            }
-        })
-        .collect();
-    Completions {
-        start: start + word.len() - prefix.len(),
-        candidates,
     }
 }
 
@@ -264,14 +312,56 @@ pub fn history_path(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
         .map(|home| PathBuf::from(home).join(".local/state/tilefab/history"))
 }
 
+/// Most lines kept in `App::output` while they cannot be shown.
+pub const MAX_KEPT_LINES: usize = 1000;
+/// Most bytes of text kept in `App::output` while it cannot be shown.
+pub const MAX_KEPT_BYTES: usize = 1024 * 1024;
+
 /// A running task, as seen by the UI.
 #[derive(Debug)]
 pub struct Task {
     pub id: TaskId,
     pub name: String,
     pub ratio: f64,
-    /// How the task is drawn: the view selected when it started.
-    pub view: TaskView,
+    /// The composition of its line: the current one when it started, or its own.
+    pub composition: String,
+    /// Its line in the viewport.
+    pub widget: LineWidget,
+    /// Simulated download size shown by `V`, in MB.
+    pub total_mb: f64,
+}
+
+impl Task {
+    /// A task drawn with `composition`.
+    ///
+    /// # Errors
+    ///
+    /// The error of an invalid composition.
+    pub fn new(id: TaskId, name: String, composition: &str) -> Result<Self, tilefab::BuildError> {
+        let mut widget = line::build(composition, &name)?;
+        // Without `D` and `T`, there is no time to show.
+        widget.set_time(line::now()).ok();
+        Ok(Self {
+            id,
+            name,
+            ratio: 0.0,
+            composition: composition.to_string(),
+            widget,
+            total_mb: f64::from(fastrand::u16(5..=500)),
+        })
+    }
+
+    /// Show the progress `ratio` and the current `step`.
+    fn progress(&mut self, ratio: f64, step: &str) {
+        self.ratio = ratio;
+        line::update(
+            &mut self.widget,
+            &self.composition,
+            ratio,
+            step,
+            self.total_mb,
+        );
+    }
 }
 
 pub struct App {
@@ -281,8 +371,10 @@ pub struct App {
     pub tasks: Vec<Task>,
     /// Lines to insert above the viewport on the next loop iteration.
     pub output: Vec<Line<'static>>,
-    /// View given to the tasks started next (`select`).
-    pub view: TaskView,
+    /// Lines dropped from `output` while they could not be shown (see [`App::limit_output`]).
+    pub dropped_output: usize,
+    /// Composition given to the tasks started next (`compose`).
+    pub composition: String,
     pub should_quit: bool,
     /// Sender given to tasks so they can report progress.
     tx: Sender<AppEvent>,
@@ -296,7 +388,8 @@ impl App {
                 .with_completer(CommandCompleter),
             tasks: Vec::new(),
             output: Vec::new(),
-            view: TaskView::default(),
+            dropped_output: 0,
+            composition: line::DEFAULT_COMPOSITION.to_string(),
             should_quit: false,
             tx,
             next_id: 1,
@@ -310,9 +403,16 @@ impl App {
                 let _ = self.editor.paste(&text);
             }
             AppEvent::Log(line) => self.output.push(Line::from(line)),
-            AppEvent::Progress { id, ratio } => {
+            AppEvent::Progress { id, ratio, step } => {
                 if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
-                    task.ratio = ratio;
+                    task.progress(ratio, step);
+                }
+            }
+            AppEvent::Tick => {
+                let now = line::now();
+                for task in &mut self.tasks {
+                    // Without `D` and `T`, there is no time to show.
+                    task.widget.set_time(now).ok();
                 }
             }
             AppEvent::TaskDone(id) => {
@@ -323,8 +423,12 @@ impl App {
             }
             AppEvent::Line(line) => self.submit(&line),
             AppEvent::Quit => self.should_quit = true,
+            AppEvent::InputFailed(error) => {
+                error!("keyboard input failed ({error}): quitting");
+                self.should_quit = true;
+            }
             // The headless loop handles the end of stdin.
-            AppEvent::Resize | AppEvent::Tick | AppEvent::InputClosed => {}
+            AppEvent::Resize | AppEvent::InputClosed => {}
         }
     }
 
@@ -347,6 +451,23 @@ impl App {
             warn!("cannot write the history file ({error}): history kept in memory only");
         }
         self.submit(line);
+    }
+
+    /// Keep only the newest lines of `output`, at most [`MAX_KEPT_LINES`] and
+    /// [`MAX_KEPT_BYTES`] (the newest line is always kept), while they cannot be shown (a
+    /// terminal with no columns); the others are counted in `dropped_output`.
+    pub fn limit_output(&mut self) {
+        let size = |line: &Line<'_>| line.spans.iter().map(|s| s.content.len()).sum::<usize>();
+        let mut bytes: usize = self.output.iter().map(size).sum();
+        let mut drop = 0;
+        while self.output.len() - drop > 1
+            && (self.output.len() - drop > MAX_KEPT_LINES || bytes > MAX_KEPT_BYTES)
+        {
+            bytes -= size(&self.output[drop]);
+            drop += 1;
+        }
+        self.output.drain(..drop);
+        self.dropped_output += drop;
     }
 
     /// Use the history file at `path` (loaded now, each submitted line appended). An error
@@ -378,24 +499,24 @@ impl App {
     pub fn submit(&mut self, line: &str) {
         match Command::parse(line) {
             Ok(Command::Empty) => {}
-            Ok(Command::Start(name)) => self.start_task(name),
+            Ok(Command::Start { name, composition }) => self.start_task(name, composition),
             Ok(Command::List) => self.list_tasks(),
-            Ok(Command::Select(None)) => info!(
-                "selected: {}; available: {}",
-                self.view.name(),
-                TaskView::summary()
-            ),
-            Ok(Command::Select(Some(view))) => {
-                self.view = view;
-                info!("new tasks will be drawn with {}", view.name());
-            }
+            Ok(Command::Compose(None)) => info!("composition: \"{}\"", self.composition),
+            Ok(Command::Compose(Some(composition))) => self.compose(composition),
             Ok(Command::Help) => info!("{}", Command::help()),
             Ok(Command::Quit) => self.should_quit = true,
             #[cfg(debug_assertions)]
             Ok(Command::Panic) => panic!("deliberate panic (`panic` command)"),
-            Err(CommandError::MissingName) => error!("usage: start <name>"),
-            Err(CommandError::View(error)) => {
-                warn!("{error} (available: {})", TaskView::summary());
+            #[cfg(debug_assertions)]
+            Ok(Command::Count(n)) => {
+                // Straight into the output, not through tracing: its channel could drop some.
+                for i in 1..=n {
+                    self.log_info(&format!("count {i:05}/{n:05}"));
+                }
+            }
+            Err(CommandError::MissingName) => error!("usage: start <name> [\"<composition>\"]"),
+            Err(CommandError::Quotes(error)) => {
+                error!("{error}: compose \"<composition>\"");
             }
             Err(CommandError::Unknown(word)) => {
                 warn!("unknown command: \"{word}\" (type help)");
@@ -403,24 +524,49 @@ impl App {
         }
     }
 
-    fn start_task(&mut self, name: String) {
+    /// Make `composition` the current one if it builds a widget; otherwise keep the current
+    /// one. Each warning is logged.
+    fn compose(&mut self, composition: String) {
+        match line::check(&composition) {
+            Ok(warnings) => {
+                for warning in warnings {
+                    warn!("{warning}");
+                }
+                info!("new tasks will be drawn with \"{composition}\"");
+                self.composition = composition;
+            }
+            Err(error) => error!("invalid composition: {error}"),
+        }
+    }
+
+    /// Start task `name`, drawn with `composition` (for this task only) or the current one.
+    fn start_task(&mut self, name: String, composition: Option<String>) {
         if self.tasks.len() >= MAX_TASKS {
             warn!("already {MAX_TASKS} tasks running: \"{name}\" refused");
             return;
         }
-        let id = self.next_id;
+        let own = composition.is_some();
+        let composition = composition.unwrap_or_else(|| self.composition.clone());
+        let task = match Task::new(self.next_id, name, &composition) {
+            Ok(task) => task,
+            Err(error) => {
+                error!("invalid composition: {error}");
+                return;
+            }
+        };
+        if own {
+            for warning in task.widget.warnings() {
+                warn!("{warning}");
+            }
+        }
         self.next_id += 1;
-        let duration = tasks::spawn(id, self.tx.clone());
+        let duration = tasks::spawn(task.id, self.tx.clone());
         self.log_info(&format!(
-            "task \"{name}\" started (duration {:.1} s)",
+            "task \"{}\" started (duration {:.1} s)",
+            task.name,
             duration.as_secs_f64()
         ));
-        self.tasks.push(Task {
-            id,
-            name,
-            ratio: 0.0,
-            view: self.view,
-        });
+        self.tasks.push(task);
     }
 
     fn list_tasks(&self) {
@@ -436,7 +582,6 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::view::Look;
     use tilefab::crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
     use tokio::sync::mpsc;
 
@@ -462,6 +607,26 @@ mod tests {
         assert_eq!(Command::parse("panic"), Ok(Command::Panic));
     }
 
+    #[cfg(debug_assertions)]
+    #[test]
+    fn count_writes_numbered_lines_in_debug_builds() {
+        assert_eq!(Command::parse("count 3"), Ok(Command::Count(3)));
+        assert!(Command::parse("count 0").is_err());
+        assert!(Command::parse("count 10001").is_err());
+        assert!(Command::parse("count x").is_err());
+        let mut app = new_app();
+        app.submit("count 3");
+        let lines: Vec<String> = app.output.iter().map(|l| text(l)).collect();
+        assert_eq!(
+            lines,
+            [
+                "[INFO] count 00001/00003",
+                "[INFO] count 00002/00003",
+                "[INFO] count 00003/00003"
+            ]
+        );
+    }
+
     #[cfg(not(debug_assertions))]
     #[test]
     fn panic_command_is_unknown_in_release_builds() {
@@ -478,7 +643,7 @@ mod tests {
         assert_eq!(Command::parse("  list  "), Ok(Command::List));
         assert_eq!(
             Command::parse("  start   alpha  "),
-            Ok(Command::Start("alpha".into()))
+            Ok(start("alpha", None))
         );
     }
 
@@ -486,40 +651,105 @@ mod tests {
     fn parse_start_takes_rest_of_line_as_name() {
         assert_eq!(
             Command::parse("start mon été 🚀"),
-            Ok(Command::Start("mon été 🚀".into()))
+            Ok(start("mon été 🚀", None))
         );
+        assert_eq!(Command::parse("start\talpha"), Ok(start("alpha", None)));
+    }
+
+    fn start(name: &str, composition: Option<&str>) -> Command {
+        Command::Start {
+            name: name.into(),
+            composition: composition.map(String::from),
+        }
+    }
+
+    #[test]
+    fn parse_start_with_its_own_composition() {
         assert_eq!(
-            Command::parse("start\talpha"),
-            Ok(Command::Start("alpha".into()))
+            Command::parse("start my task \"N B2 P\""),
+            Ok(start("my task", Some("N B2 P")))
+        );
+        assert_eq!(Command::parse("start a \"\""), Ok(start("a", Some(""))));
+        // Only a trailing quoted part is a composition.
+        assert_eq!(
+            Command::parse("start say \"hi\" twice"),
+            Ok(start("say \"hi\" twice", None))
+        );
+        assert_eq!(Command::parse("start x\""), Ok(start("x\"", None)));
+        assert_eq!(
+            Command::parse("start \"N P\""),
+            Err(CommandError::MissingName)
         );
     }
 
     #[test]
-    fn parse_select() {
-        assert_eq!(Command::parse("select"), Ok(Command::Select(None)));
+    fn parse_compose() {
+        assert_eq!(Command::parse("compose"), Ok(Command::Compose(None)));
         assert_eq!(
-            Command::parse("select progressline dots"),
-            Ok(Command::Select(Some(TaskView::new(Look::LineDots))))
+            Command::parse("compose \"B0 T2 B1 B2 S B2 L\""),
+            Ok(Command::Compose(Some("B0 T2 B1 B2 S B2 L".into())))
         );
+        // The spacing inside the quotes is kept: the widget checks it.
         assert_eq!(
-            Command::parse("select table"),
-            Err(CommandError::View(ViewError::UnknownWidget("table".into())))
+            Command::parse("compose \" L \"  "),
+            Ok(Command::Compose(Some(" L ".into())))
         );
+        let errors = [
+            ("compose L", QuoteError::MissingOpening),
+            ("compose \"L", QuoteError::MissingClosing),
+            ("compose \"L\" P", QuoteError::TextAfter),
+        ];
+        for (line, error) in errors {
+            assert_eq!(
+                Command::parse(line),
+                Err(CommandError::Quotes(error)),
+                "{line}"
+            );
+        }
     }
 
     #[tokio::test]
-    async fn each_task_keeps_the_view_selected_when_it_started() {
+    async fn each_task_keeps_the_composition_current_when_it_started() {
         let mut app = new_app();
         app.submit("start one");
-        app.submit("select progressline dots");
+        app.submit("compose \"N B2 P\"");
         app.submit("start two");
-        app.submit("select progressbar");
-        let views: Vec<TaskView> = app.tasks.iter().map(|task| task.view).collect();
-        assert_eq!(views, [TaskView::default(), TaskView::new(Look::LineDots)]);
-        assert_eq!(app.view, TaskView::new(Look::Bar));
-        // A rejected selection keeps the current one.
-        app.submit("select progressbar dots");
-        assert_eq!(app.view, TaskView::new(Look::Bar));
+        app.submit("start three \"P N\"");
+        app.submit("compose \"L\"");
+        let compositions: Vec<&str> = app.tasks.iter().map(|t| t.composition.as_str()).collect();
+        assert_eq!(compositions, [line::DEFAULT_COMPOSITION, "N B2 P", "P N"]);
+        assert_eq!(app.composition, "L");
+        // A rejected composition keeps the current one.
+        let logs = logging::capture(|| app.submit("compose \"L X\""));
+        assert_eq!(app.composition, "L");
+        assert_eq!(
+            logs,
+            ["[ERROR] invalid composition: token 2 (\"X\"): unknown component"]
+        );
+        // A task with an invalid composition is not started.
+        let logs = logging::capture(|| app.submit("start four \"Q\""));
+        assert_eq!(app.tasks.len(), 3);
+        assert_eq!(logs.len(), 1, "{logs:?}");
+    }
+
+    #[test]
+    fn compose_shows_the_current_composition_and_the_warnings() {
+        let mut app = new_app();
+        let logs = logging::capture(|| {
+            app.submit("compose");
+            app.submit("compose \"L100\"");
+            app.submit("compose \"L");
+        });
+        assert_eq!(
+            logs,
+            [
+                format!("[INFO] composition: \"{}\"", line::DEFAULT_COMPOSITION),
+                "[WARN] the widget is 100 columns wide, more than its target width of 80"
+                    .to_string(),
+                "[INFO] new tasks will be drawn with \"L100\"".to_string(),
+                "[ERROR] missing closing double quote: compose \"<composition>\"".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -547,7 +777,11 @@ mod tests {
         assert_eq!(app.tasks.len(), MAX_TASKS);
 
         let id = app.tasks[0].id;
-        app.handle_event(AppEvent::Progress { id, ratio: 0.5 });
+        app.handle_event(AppEvent::Progress {
+            id,
+            ratio: 0.5,
+            step: "step",
+        });
         assert!((app.tasks[0].ratio - 0.5).abs() < f64::EPSILON);
 
         app.handle_event(AppEvent::TaskDone(id));
@@ -620,7 +854,7 @@ mod tests {
     }
 
     #[test]
-    fn the_completer_completes_commands_widgets_and_variants() {
+    fn the_completer_completes_the_command_names() {
         let names = |line: &str| -> (usize, Vec<String>) {
             let completions = CommandCompleter.complete(line, line.len());
             let names = completions
@@ -634,7 +868,7 @@ mod tests {
             names(""),
             (
                 0,
-                vec!["start", "list", "select", "help", "quit", "exit"]
+                vec!["start", "list", "compose", "help", "quit", "exit"]
                     .into_iter()
                     .map(String::from)
                     .collect()
@@ -644,47 +878,8 @@ mod tests {
         assert_eq!(names("e"), (0, vec!["exit".to_string()]));
         // Nothing for the task name.
         assert_eq!(names("start a"), (0, vec![]));
-        // After `select`: the widget, then its variant, each from where it starts.
-        assert_eq!(
-            names(" select  progress"),
-            (
-                9,
-                vec!["progressline".to_string(), "progressbar".to_string()]
-            )
-        );
-        assert_eq!(
-            names("select progressline d"),
-            (20, vec!["dots".to_string()])
-        );
-        assert_eq!(
-            names("select progressbar "),
-            (19, vec!["plain".to_string(), "bordered".to_string()])
-        );
-        assert_eq!(
-            names("select progressline dots  b"),
-            (26, vec!["bordered".to_string()])
-        );
-        assert_eq!(names("select table "), (13, vec![]));
-        assert_eq!(names("select progressline dots x"), (25, vec![]));
-        assert_eq!(names("select progressline bordered "), (29, vec![]));
-        let append_space = |line: &str| -> Vec<bool> {
-            let completions = CommandCompleter.complete(line, line.len());
-            completions
-                .candidates
-                .iter()
-                .map(|c| c.append_space)
-                .collect()
-        };
-        assert_eq!(
-            append_space("select p"),
-            [true, true],
-            "a variant can follow"
-        );
-        assert_eq!(
-            append_space("select progressbar "),
-            [true, false],
-            "`bordered` can follow the variant, nothing follows `bordered`"
-        );
+        // Nothing for the arguments.
+        assert_eq!(names("compose \"B"), (0, vec![]));
         let start = &CommandCompleter.complete("st", 2).candidates[0];
         assert!(start.append_space);
         assert_eq!(start.description.as_deref(), Some("start a task"));
@@ -787,7 +982,11 @@ mod tests {
     #[test]
     fn events_for_unknown_tasks_are_ignored() {
         let mut app = new_app();
-        app.handle_event(AppEvent::Progress { id: 42, ratio: 0.5 });
+        app.handle_event(AppEvent::Progress {
+            id: 42,
+            ratio: 0.5,
+            step: "step",
+        });
         app.handle_event(AppEvent::TaskDone(42));
         assert!(app.tasks.is_empty());
         assert_eq!(app.output, []);
@@ -806,15 +1005,16 @@ mod tests {
         assert_eq!(
             logs,
             [
-                "[INFO] commands: start, list, select, help, quit, exit",
-                "  start <name>",
-                "  select <widget> [variant] [bordered]",
+                "[INFO] commands: start, list, compose, help, quit, exit",
+                "  start <name> [\"<composition>\"]",
+                "  compose [\"<composition>\"]",
                 "  quit, exit (or Ctrl+C, Ctrl+D to quit)",
-                "  widgets:",
-                "    progressline [blocks|thin|dots]",
-                "    progressbar [plain]",
+                "  composition: tokens separated by one space, for instance \"N B2 B0 T2 B1 B2 S B2 I B2 P B2 L\"",
+                "    S symbol of the state, B0-B9 [ ] space - : | ( ) / and two spaces,",
+                "    D0-D2 date, T0-T5 time, P[3-9] progress, K state keyword, N task name,",
+                "    L[size] log, V[size][U][/] downloaded size, I[size] progress bar",
                 "[INFO] no task running",
-                "[ERROR] usage: start <name>",
+                "[ERROR] usage: start <name> [\"<composition>\"]",
                 "[WARN] unknown command: \"foo\" (type help)",
             ]
         );
@@ -829,7 +1029,11 @@ mod tests {
                 app.submit(&format!("start t{i}"));
             }
             let id = app.tasks[0].id;
-            app.handle_event(AppEvent::Progress { id, ratio: 0.25 });
+            app.handle_event(AppEvent::Progress {
+                id,
+                ratio: 0.25,
+                step: "step",
+            });
             app.submit("list");
         });
         assert_eq!(

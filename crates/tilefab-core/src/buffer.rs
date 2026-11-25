@@ -37,6 +37,12 @@ pub fn grapheme_width(grapheme: &str) -> usize {
     }
 }
 
+/// `area` clipped like [`Rect::new`]: its right and bottom edges do not exceed `u16::MAX`,
+/// so that every cell has coordinates.
+fn clipped(area: Rect) -> Rect {
+    Rect::new(area.x, area.y, area.width, area.height)
+}
+
 /// Bytes a symbol holds without a heap allocation: enough for nearly every grapheme
 /// (accented letters, CJK, most emoji). Longer ones (some emoji sequences) use the heap.
 const INLINE_SYMBOL: usize = 22;
@@ -162,6 +168,10 @@ impl Default for Cell {
 impl Cell {
     /// An unstyled cell displaying the first grapheme of `symbol` (a space if it is not
     /// printable, see [`Cell`]). Never a continuation, even for `""`.
+    ///
+    /// A wide character (two columns) needs a continuation in the next cell: put such a cell
+    /// in a buffer with [`Buffer::write_grapheme`] or [`Buffer::filled`], which create it,
+    /// not through [`Buffer::content_mut`] or [`Buffer::get_mut`].
     #[must_use]
     pub fn new(symbol: &str) -> Self {
         Self {
@@ -178,6 +188,9 @@ impl Cell {
 
     /// Change the symbol without changing the style: the first grapheme of `symbol`, or a
     /// space if it is not printable (see [`Cell`]). Never a continuation, even for `""`.
+    ///
+    /// For a wide character in a buffer, use [`Buffer::write_grapheme`] instead: it also turns
+    /// the next cell into the continuation (see [`Cell::new`]).
     pub fn set_symbol(&mut self, symbol: &str) -> &mut Self {
         self.symbol = Symbol::printable(symbol);
         self
@@ -273,6 +286,11 @@ impl Buffer {
 
     /// Cells in row-major order, to change in place: a slice, so that their number (tied to
     /// the area) cannot change.
+    ///
+    /// The invariant of [`Cell`] is the caller's job here: a wide character written with
+    /// [`Cell::set_symbol`] must be followed by its continuation, which only
+    /// [`Buffer::write_grapheme`] creates; write wide characters with it (or
+    /// [`Buffer::set_string`]) instead.
     pub fn content_mut(&mut self) -> &mut [Cell] {
         &mut self.content
     }
@@ -285,20 +303,38 @@ impl Buffer {
 
     /// Make this an empty buffer covering `area` (all cells unstyled spaces), reusing its
     /// memory: no allocation once it has held that many cells. `Terminal` keeps its
-    /// buffers from one frame to the next this way.
+    /// buffers from one frame to the next this way. The area is clipped as in
+    /// [`Buffer::filled`].
     pub fn reset_to(&mut self, area: Rect) {
-        self.area = area;
+        self.area = clipped(area);
         self.content.clear();
-        self.content.resize(area.area() as usize, Cell::default());
+        self.content
+            .resize(self.area.area() as usize, Cell::default());
     }
 
     /// A buffer with all cells set to copies of `cell`.
+    ///
+    /// The area is first clipped like [`Rect::new`] does, so that no cell lies past
+    /// coordinate `u16::MAX` (a `Rect` written literally skips that check). A wide `cell`
+    /// (two columns) keeps the invariant of [`Cell`]: each copy is followed by its
+    /// continuation, and when the width is odd the last column of each row is a space.
     #[must_use]
     pub fn filled(area: Rect, cell: Cell) -> Self {
-        Self {
-            area,
-            content: vec![cell; area.area() as usize],
+        let area = clipped(area);
+        let mut content = vec![cell; area.area() as usize];
+        if content.first().is_some_and(|cell| cell.width() == 2) {
+            let width = area.width as usize;
+            for row in content.chunks_mut(width) {
+                for pair in row.chunks_mut(2) {
+                    match pair {
+                        [_, tail] => tail.symbol = Symbol::EMPTY,
+                        [last] => last.symbol = Symbol::SPACE,
+                        _ => {}
+                    }
+                }
+            }
         }
+        Self { area, content }
     }
 
     /// A buffer built from text lines: convenient for
@@ -440,7 +476,7 @@ impl Buffer {
 
     /// Write a grapheme at `(x, y)` and return the number of columns written (1 or 2,
     /// [`grapheme_width`] of `grapheme`); the caller has already checked the available
-    /// space (`Paragraph` uses it to write graphemes it has already measured). A wide
+    /// space (to write graphemes already measured). A wide
     /// grapheme also turns `(x + 1, y)` into its continuation.
     ///
     /// Unlike [`Buffer::set_stringn`], nothing is clipped. `grapheme` is normalized like
@@ -918,6 +954,45 @@ mod tests {
             diff_positions(&next, &prev),
             [(0, 0, " ".to_string()), (1, 0, "日".to_string())]
         );
+    }
+
+    #[test]
+    fn filled_with_a_wide_cell_writes_head_and_continuation_pairs() {
+        let buf = Buffer::filled(Rect::new(0, 0, 4, 1), Cell::new("界"));
+        let symbols: Vec<&str> = buf.content().iter().map(Cell::symbol).collect();
+        assert_eq!(symbols, ["界", "", "界", ""]);
+        assert!(buf.content()[1].is_continuation());
+        // Odd width: the last column cannot hold a wide character.
+        let odd = Buffer::filled(Rect::new(0, 0, 3, 2), Cell::new("界"));
+        assert_eq!(odd.lines(), ["界 ", "界 "]);
+        // The diff never writes a wide character in the last column.
+        let empty = Buffer::empty(odd.area());
+        for (x, _, cell) in odd.diff_iter(&empty) {
+            assert!(x + u16::try_from(cell.width()).unwrap() <= odd.area().right());
+        }
+    }
+
+    #[test]
+    fn a_literal_rect_past_the_coordinate_range_is_clipped() {
+        let area = Rect {
+            x: 65534,
+            y: 0,
+            width: 3,
+            height: 1,
+        };
+        let empty = Buffer::empty(area);
+        let filled = Buffer::filled(area, Cell::new("x"));
+        assert_eq!(empty.area(), Rect::new(65534, 0, 1, 1));
+        assert_eq!(filled.diff(&empty).len(), 1);
+        let mut reused = Buffer::empty(Rect::new(0, 0, 2, 2));
+        reused.reset_to(Rect {
+            x: 0,
+            y: 65535,
+            width: 2,
+            height: 4,
+        });
+        assert_eq!(reused.area(), Rect::new(0, 65535, 2, 0));
+        assert_eq!(reused.content().len(), 0);
     }
 
     #[test]

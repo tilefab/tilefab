@@ -5,6 +5,14 @@
 //! cursor visibility (`?25`), synchronized updates (`?2026`), and styles (`m`, ignored).
 //! It keeps scrollback and statistics for each synchronized block, checked
 //! by the flicker prevention tests.
+//!
+//! Two behaviors of the scrollback (lines leaving the top of the screen):
+//!
+//! - **strict** ([`Sim::new`], the default): only a line feed on the last row of a
+//!   full-screen region saves the top line. `CSI n S` and partial regions delete their lines.
+//!   This is what many terminals do (xterm.js in VS Code, iTerm2 by default…);
+//! - **xterm** ([`Sim::xterm`]): any scroll of a region whose top is row 0 saves its lines,
+//!   `CSI n S` included.
 
 use std::collections::BTreeSet;
 
@@ -35,6 +43,8 @@ pub struct Sim {
     pub cursor: (u16, u16),
     pub cursor_visible: bool,
     region: (u16, u16),
+    /// Strict scrollback (see the module header); `false` for xterm's behavior.
+    strict: bool,
     in_sync: bool,
     /// One block per completed synchronized update.
     pub blocks: Vec<BlockStats>,
@@ -53,8 +63,19 @@ fn blank_row(width: u16) -> Vec<String> {
 }
 
 impl Sim {
+    /// A terminal with the strict scrollback behavior (see the module header).
     pub fn new(width: u16, height: u16) -> Self {
+        Self::with_scrollback(width, height, true)
+    }
+
+    /// A terminal with xterm's scrollback behavior (see the module header).
+    pub fn xterm(width: u16, height: u16) -> Self {
+        Self::with_scrollback(width, height, false)
+    }
+
+    fn with_scrollback(width: u16, height: u16, strict: bool) -> Self {
         Self {
+            strict,
             width,
             height,
             screen: (0..height).map(|_| blank_row(width)).collect(),
@@ -198,17 +219,23 @@ impl Sim {
 
     fn line_feed(&mut self) {
         if self.cursor.1 == self.region.1 {
-            self.scroll_up(1);
+            self.scroll_up(1, true);
         } else if self.cursor.1 + 1 < self.height {
             self.cursor.1 += 1;
         }
     }
 
-    fn scroll_up(&mut self, n: u16) {
+    /// Scroll the region up by `n` rows, by line feeds (`line_feed`) or by `CSI n S`.
+    fn scroll_up(&mut self, n: u16, line_feed: bool) {
         let (top, bottom) = self.region;
+        let saved = if self.strict {
+            line_feed && (top, bottom) == (0, self.height - 1)
+        } else {
+            top == 0
+        };
         for _ in 0..n {
             let row = self.screen.remove(top as usize);
-            if top == 0 {
+            if saved {
                 self.scrollback.push(row.concat().trim_end().to_string());
             }
             self.screen.insert(bottom as usize, blank_row(self.width));
@@ -304,7 +331,7 @@ impl Sim {
                 if p(0, 1) > self.height {
                     self.note_out_of_range(seq);
                 }
-                self.scroll_up(p(0, 1).min(self.height));
+                self.scroll_up(p(0, 1).min(self.height), false);
             }
             (false, b'T') => {
                 self.note_outside(&seq.raw);
@@ -380,17 +407,35 @@ mod tests {
 
     #[test]
     fn scroll_region_only_moves_its_rows_and_keeps_history_only_from_the_top() {
-        let mut s = Sim::new(4, 4);
+        let mut s = Sim::xterm(4, 4);
         s.feed_str("0\r\n1\r\n2\r\n3");
         s.feed(b"\x1b[1;2r\x1b[1S\x1b[r");
         assert_eq!(s.screen_lines(), vec!["1", "", "2", "3"]);
         assert_eq!(s.scrollback, vec!["0"]);
 
-        let mut s = Sim::new(4, 4);
+        let mut s = Sim::xterm(4, 4);
         s.feed_str("0\r\n1\r\n2\r\n3");
         s.feed(b"\x1b[2;3r\x1b[1S\x1b[r");
         assert_eq!(s.screen_lines(), vec!["0", "2", "", "3"]);
         assert_eq!(s.scrollback, Vec::<String>::new());
+    }
+
+    #[test]
+    fn strict_scrollback_keeps_only_lines_fed_out_of_the_whole_screen() {
+        // `CSI S` and a partial region from the top: the lines are deleted.
+        let mut s = Sim::new(4, 4);
+        s.feed_str("0\r\n1\r\n2\r\n3");
+        s.feed(b"\x1b[1;2r\x1b[1S\x1b[r");
+        assert_eq!(s.screen_lines(), vec!["1", "", "2", "3"]);
+        assert_eq!(s.scrollback, Vec::<String>::new());
+        s.feed(b"\x1b[1S");
+        assert_eq!(s.scrollback, Vec::<String>::new());
+        // A line feed at the bottom of a partial region from the top: deleted too.
+        s.feed(b"\x1b[1;3r\x1b[3;1H\n\x1b[r");
+        assert_eq!(s.scrollback, Vec::<String>::new());
+        // A line feed on the last row of the whole screen: saved.
+        s.feed(b"\x1b[4;1H\n");
+        assert_eq!(s.scrollback.len(), 1);
     }
 
     #[test]

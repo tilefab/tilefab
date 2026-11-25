@@ -17,7 +17,7 @@ all-features = true
 
 [features]
 default = ["widget", "input"]
-# The widget library (`Block`, `Paragraph`, `ProgressBar`, `List`…).
+# The one-line composed widget (`LineWidget`).
 widget = ["dep:tilefab-widget"]
 # The prompt line editor (`LineEditor`).
 input = ["dep:tilefab-input"]
@@ -53,7 +53,7 @@ required-features = ["widget"]
 
 [[test]]
 name = "widget_alloc"
-required-features = ["widget"]
+required-features = ["widget", "input"]
 
 [lints]
 workspace = true

@@ -257,13 +257,14 @@ pub(crate) fn draw_menu(menu: &mut Menu, area: Rect, buf: &mut Buffer, styles: &
     let layout = layout(&menu.candidates, width);
     menu.rows = layout.rows;
     let visible = layout.rows.min(usize::from(area.height));
-    if visible == 0 || width == 0 {
+    // An area 0 columns wide only gets clipped writes: no need to stop for it.
+    if visible == 0 {
         return;
     }
     let selected_row = menu.selected % layout.rows;
-    if selected_row < menu.top {
-        menu.top = selected_row;
-    } else if selected_row >= menu.top + visible {
+    // Scroll so that the selected row is visible.
+    menu.top = menu.top.min(selected_row);
+    if selected_row >= menu.top + visible {
         menu.top = selected_row + 1 - visible;
     }
     menu.top = menu.top.min(layout.rows - visible);
@@ -281,7 +282,9 @@ pub(crate) fn draw_menu(menu: &mut Menu, area: Rect, buf: &mut Buffer, styles: &
             if x >= width {
                 break;
             }
-            let room = layout.label_width.min(width - x);
+            // The columns always fit (see `layout`): only a single column wider than the area
+            // is cut, at `x` = 0.
+            let room = layout.label_width.min(width);
             let style = if index == menu.selected {
                 styles.menu_selected
             } else {
@@ -293,16 +296,15 @@ pub(crate) fn draw_menu(menu: &mut Menu, area: Rect, buf: &mut Buffer, styles: &
             if layout.described
                 && let Some(description) = &candidate.description
             {
+                // `layout` describes only when `label_width + GAP < width`.
                 let x = layout.label_width + GAP;
-                if x < width {
-                    let _ = buf.set_stringn(
-                        area.x + to_u16(x),
-                        y,
-                        description,
-                        width - x,
-                        styles.menu_description,
-                    );
-                }
+                let _ = buf.set_stringn(
+                    area.x + to_u16(x),
+                    y,
+                    description,
+                    width - x,
+                    styles.menu_description,
+                );
             }
         }
     }
@@ -407,6 +409,88 @@ mod tests {
         assert_eq!(sanitize(bad(2), "ab", 1), None);
         assert_eq!(sanitize(bad(1), "e\u{301}", 3), None);
         assert_eq!(sanitize(Completions::default(), "", 0), None);
+    }
+
+    #[test]
+    fn the_menu_shows_the_display_text_of_a_candidate() {
+        let candidate = Candidate::new("x").display("shown");
+        assert_eq!(candidate.label(), "shown");
+        let mut m = menu(&[], 0);
+        m.candidates = vec![candidate, Candidate::new("plain")];
+        assert_eq!(draw(&mut m, 20, 2)[0], "shown  plain");
+    }
+
+    #[test]
+    fn a_completion_may_start_at_the_cursor() {
+        let completions = Completions {
+            start: 3,
+            candidates: candidates(&["x"]),
+        };
+        assert_eq!(
+            sanitize(completions, "ab ", 3),
+            Some((3, candidates(&["x"])))
+        );
+    }
+
+    #[test]
+    fn left_and_right_move_along_the_row_and_wrap_around() {
+        // 7 candidates in 3 rows: columns [0 1 2] [3 4 5] [6].
+        let step = |selected, forward| {
+            let mut m = menu(&["a", "b", "c", "d", "e", "f", "g"], selected);
+            m.rows = 3;
+            m.step_column(forward);
+            m.selected
+        };
+        let forward: Vec<usize> = (0..7).map(|i| step(i, true)).collect();
+        assert_eq!(forward, [3, 4, 5, 6, 1, 2, 0]);
+        let backward: Vec<usize> = (0..7).map(|i| step(i, false)).collect();
+        assert_eq!(backward, [6, 4, 5, 0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn descriptions_need_room_after_the_labels() {
+        let described = |width| {
+            let candidates = vec![
+                Candidate::new("abcd").description("first"),
+                Candidate::new("ab").description("second"),
+            ];
+            layout(&candidates, width).described
+        };
+        // Label width 4 + gap 2: a description needs at least 7 columns.
+        assert!(!described(6));
+        assert!(described(7));
+    }
+
+    #[test]
+    fn the_scroll_of_the_menu_stays_within_its_rows() {
+        // One column of 5 rows, 3 visible; a scroll left past the end is brought back.
+        let mut m = menu(&["alpha", "bravo", "charlie", "delta", "echo"], 4);
+        m.top = 4;
+        // Wide enough for one column only, and for the counter of the hidden rows after it.
+        let rows = draw(&mut m, 15, 3);
+        assert_eq!(&rows[..2], ["charlie", "delta"]);
+        assert!(rows[2].starts_with("echo"), "{rows:?}");
+        assert_eq!(m.top, 2);
+    }
+
+    #[test]
+    fn descriptions_stop_at_the_right_edge_of_the_area() {
+        let mut m = menu(&[], 0);
+        m.candidates = vec![Candidate::new("ab").description("a long description")];
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+        draw_menu(
+            &mut m,
+            Rect::new(0, 0, 10, 1),
+            &mut buf,
+            &EditorStyles::default(),
+        );
+        assert_eq!(buf.lines()[0], format!("{:<20}", "ab  a long"));
+    }
+
+    #[test]
+    fn a_menu_in_no_columns_draws_nothing_and_does_not_panic() {
+        let mut m = menu(&["alpha", "bravo"], 1);
+        assert_eq!(draw(&mut m, 0, 2), ["", ""]);
     }
 
     #[test]

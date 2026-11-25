@@ -39,16 +39,29 @@ pub enum Viewport {
     Inline(u16),
 }
 
-/// How to scroll the area above an inline viewport.
+/// How to make room above an inline viewport for the inserted lines.
+///
+/// Only a line that scrolls out of the **whole screen** through a line feed on its last row
+/// reaches the scrollback in every terminal: some (xterm.js in VS Code, iTerm2 by default…)
+/// delete the lines that leave a scroll region or that `CSI n S` scrolls, even from the top
+/// of the screen.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ScrollMode {
-    /// Scroll region (DECSTBM): only lines above the viewport move. The
-    /// viewport is untouched; only changed lines are rewritten.
+    /// Line feeds on the last row of the screen: the whole screen scrolls, the viewport with
+    /// it, and the lines leaving the top enter the scrollback in every terminal. The viewport
+    /// is not cleared first: one diff then rewrites only the cells that differ (the inserted
+    /// lines where the viewport was, the viewport at its new place), all of it in the same
+    /// synchronized update. When the viewport itself would leave the screen, it is cleared
+    /// first, as in [`ScrollMode::Fallback`].
     #[default]
+    Screen,
+    /// Scroll region (DECSTBM): only lines above the viewport move, the viewport is untouched,
+    /// only the inserted lines are written. **May lose the scrollback**: the terminals that
+    /// delete the lines leaving a scroll region (see above) never show them again.
     Region,
-    /// Fallback without regions, for terminals that handle them poorly: clear the viewport,
-    /// print the lines (the terminal scrolls automatically at the bottom), then redraw the entire
-    /// viewport. Simpler, but the entire viewport is rewritten on each commit.
+    /// Like [`ScrollMode::Screen`], but the viewport is cleared before scrolling, then redrawn
+    /// entirely: blank rows of the old viewport enter the scrollback below the lines, and the
+    /// whole viewport is rewritten on each commit. For terminals that handle the rest poorly.
     Fallback,
 }
 
@@ -71,7 +84,7 @@ pub struct TerminalOptions {
 /// ```
 /// use tilefab_term::{ScrollMode, TerminalOptions, Viewport};
 ///
-/// let options = TerminalOptions::default().viewport(Viewport::Inline(3)).scroll_mode(ScrollMode::Fallback);
+/// let options = TerminalOptions::default().viewport(Viewport::Inline(3)).scroll_mode(ScrollMode::Region);
 /// assert_eq!(options.viewport, Viewport::Inline(3));
 /// ```
 impl TerminalOptions {

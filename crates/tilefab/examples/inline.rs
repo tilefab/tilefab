@@ -4,7 +4,7 @@
 //!
 //! - every 300 ms, a log line is inserted above the viewport;
 //! - every 2 seconds, the viewport grows or shrinks (from 1 to 5 lines): it contains task
-//!   lines followed by a prompt, always last. As in `tilefab`, each height change
+//!   lines (`LineWidget`s: name, progress bar, percentage) followed by a prompt, always last. As in `tilefab`, each height change
 //!   comes with a log line in the **same** frame (task started or finished);
 //!   without it, shrinking would leave a blank line below the viewport (see the placement
 //!   rule in `tilefab::viewport`);
@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use tilefab::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use tilefab::{
-    Backend, Color, Constraint, Layout, Line, Paragraph, Span, Style, Stylize, Terminal,
+    Backend, Color, Constraint, Entry, Layout, Line, LineWidget, Style, Stylize, Terminal,
     TerminalGuard, TerminalOptions, Viewport, install_panic_hook,
 };
 
@@ -26,9 +26,29 @@ use tilefab::convert::saturating_u16;
 
 const LOG_EVERY: Duration = Duration::from_millis(300);
 const RESIZE_EVERY: Duration = Duration::from_secs(2);
+/// Time a task line takes to go from 0 to 100 %.
+const TASK_CYCLE: Duration = Duration::from_secs(6);
 
-fn main() -> io::Result<()> {
+/// The line of task `number`: `task 1 ██████░░░░  60%`, the bar taking the free columns.
+fn task_line(number: usize) -> Result<LineWidget, tilefab::BuildError> {
+    LineWidget::builder("N B0 I B0 P")
+        .names([Entry::styled(
+            format!("task {number}"),
+            Style::new().fg(Color::Cyan),
+        )])
+        .barriers([Entry::new(" ")])
+        .illustration(
+            Entry::new("█"),
+            Entry::styled("░", Style::new().fg(Color::DarkGray)),
+        )
+        .build()
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     install_panic_hook();
+    // The four possible task lines, built once: only their progress changes.
+    let mut tasks = (1..=4).map(task_line).collect::<Result<Vec<_>, _>>()?;
+    let start = Instant::now();
     // Raw mode only: stay on the normal screen; logs go into scrollback.
     let _guard = TerminalGuard::raw()?;
     let mut terminal = Terminal::with_options(
@@ -72,24 +92,28 @@ fn main() -> io::Result<()> {
             terminal.set_height(height);
         }
 
+        // Each task line moves at its own pace.
+        for (i, task) in tasks.iter_mut().enumerate() {
+            let cycle = TASK_CYCLE.as_secs_f64();
+            let offset = cycle * f64::from(u8::try_from(i).unwrap_or(0)) / 4.0;
+            let percent = ((start.elapsed().as_secs_f64() + offset) % cycle) / cycle * 100.0;
+            task.set_progress(percent)?;
+        }
+
         // The height change and logs are applied here, in a single synchronized block.
         terminal.draw(|frame| {
             let rows = Layout::vertical(vec![Constraint::Length(1); frame.area().height as usize])
                 .split(frame.area());
-            let (prompt, tasks) = rows.split_last().expect("at least one row");
-            for (i, row) in tasks.iter().enumerate() {
-                let line = Line::from(vec![
-                    Span::raw(format!("task {} ", i + 1)).fg(Color::Cyan),
-                    Span::raw("██████░░░░ 60%"),
-                ]);
-                frame.render_widget(Paragraph::new(line), *row);
+            let (prompt, task_rows) = rows.split_last().expect("at least one row");
+            for (row, task) in task_rows.iter().zip(&tasks) {
+                frame.render_widget(task, *row);
             }
             // The cursor is in the prompt, after the typed text. Its column is the
             // display width of the line (wide characters take 2 columns), measured
             // with the same rule as rendering, and kept inside the prompt row.
-            let prompt_line = Line::from(format!("> {input}"));
+            let prompt_line = Line::from(format!("> {input}")).bold();
             let x = saturating_u16(prompt_line.width()).min(prompt.width.saturating_sub(1));
-            frame.render_widget(Paragraph::new(prompt_line), *prompt);
+            frame.render_widget(prompt_line, *prompt);
             frame.set_cursor_position((prompt.x.saturating_add(x), prompt.y));
         })?;
 

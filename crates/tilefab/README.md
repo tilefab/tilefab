@@ -9,7 +9,9 @@ in the terminal history.
   synchronized update; the terminal never shows an intermediate state, and the last viewport line
   (typically a prompt) does not move when the height changes.
 - **Double buffering**: only the cells that changed are written.
-- **Widgets** (feature `widget`): `Block`, `Paragraph`, `ProgressBar`, `ProgressLine`, `List`, `Clear`.
+- **Line widget** (feature `widget`): `LineWidget`, one line composed from a short description
+  (`"B0 T2 B1 B2 S B2 L"`: barriers, time, symbol, log…) and laid out again at every draw, shrinking
+  then dropping components when the window is narrow.
 - **Line editor** (feature `input`): `LineEditor`, readline-style editing with history, hints,
   completion and horizontal scrolling.
 - No `unsafe` code.
@@ -18,7 +20,7 @@ Key events are crossterm's: use the re-exported `tilefab::crossterm` rather than
 `crossterm` dependency, so that both versions always match.
 
 Options and configuration types (`TerminalOptions`, `EditorConfig`, `EditorStyles`, `Candidate`)
-and the enums that will grow (`EditorCommand`, `EditorEvent`, `BorderType`, `ClearType`) are
+and the enums that will grow (`EditorCommand`, `EditorEvent`, `BuildError`, `UpdateError`, `ClearType`) are
 `#[non_exhaustive]`: build them from `default()` with the chained setters, and give a `match` a
 `_` arm, so that new options and variants can come in minor versions.
 
@@ -28,9 +30,11 @@ and the enums that will grow (`EditorCommand`, `EditorEvent`, `BorderType`, `Cle
 use std::io::{self, BufWriter};
 use std::{thread, time::Duration};
 
-use tilefab::{Backend, ProgressLine, Style, Terminal, TerminalGuard, TerminalOptions, Viewport};
+use tilefab::{
+    Backend, Entry, LineWidget, Style, Terminal, TerminalGuard, TerminalOptions, Viewport,
+};
 
-fn main() -> io::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     tilefab::install_panic_hook();
     // Raw mode only: no alternate screen, the log lines stay in the scrollback.
     let _guard = TerminalGuard::raw()?;
@@ -39,15 +43,19 @@ fn main() -> io::Result<()> {
         TerminalOptions::default().viewport(Viewport::Inline(1)),
     )?;
 
+    // "build" then the progress bar and the percentage: `B0 I20 B1 P`.
+    let mut widget = LineWidget::builder("B0 I20 B1 P")
+        .barriers([Entry::new("build "), Entry::new(" ")])
+        .illustration(Entry::new("█"), Entry::new("░"))
+        .build()?;
+
     for percent in (0..=100).step_by(10) {
         // Queued above the viewport, written by the next `draw` in the same frame.
         terminal.insert_before(1, |buf| {
             buf.set_string(0, 0, &format!("[INFO] step {percent}%"), Style::default());
         });
-        terminal.draw(|frame| {
-            let bar = ProgressLine::default().percent(percent).label("build");
-            frame.render_widget(bar, frame.area());
-        })?;
+        widget.set_progress(f64::from(percent))?;
+        terminal.draw(|frame| frame.render_widget(&widget, frame.area()))?;
         thread::sleep(Duration::from_millis(200));
     }
 
@@ -58,7 +66,7 @@ fn main() -> io::Result<()> {
 
 ## See it running
 
-- The demo application (tasks with progress bars above a prompt):
+- The demo application (tasks drawn with line widgets above a prompt):
   `cargo install widget-demo`, then run `widget-demo`.
 - The examples of the repository, after a `git clone`:
   `cargo run --example inline` (variable-height viewport) and `cargo run --example fullscreen`.
@@ -82,7 +90,7 @@ it needs them; their versions always move together.
 |---|---|
 | `tilefab-core` | cells, buffer, styles, geometry and layout, styled text, the `Widget` traits; module `convert` |
 | `tilefab-term` | `Backend`, `Terminal`, `Frame`, `TerminalGuard`, panic hooks; module `viewport` (placement rule of the inline viewport) |
-| `tilefab-widget` (feature `widget`) | `Block`, `Paragraph`, `ProgressBar`, `ProgressLine`, `List`, `Clear` |
+| `tilefab-widget` (feature `widget`) | `LineWidget`, its builder, `Entry`, `WallTime` and their errors |
 | `tilefab-input` (feature `input`) | `LineEditor` and its configuration; its `Command` is re-exported as `EditorCommand` |
 
 ## Minimum supported Rust version

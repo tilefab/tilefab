@@ -40,6 +40,9 @@ crossterm = { version = "0.29", default-features = false, features = ["bracketed
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 # Random task durations of the demo: no dependencies of its own.
 fastrand = "2.5.0"
+# Local date and time of the demo's line widgets (`tilefab-widget` has no clock): portable
+# time-zone support on macOS, Linux and Windows.
+jiff = "1.0.3"
 # Counting allocator for the allocation example and test (keeps `unsafe` out of this project).
 stats_alloc = "0.1.10"
 tokio = "1.54.1"
@@ -59,6 +62,10 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+# Every exception to a lint is an `#[expect(…, reason = "…")]`: it says why, and it warns once
+# the exception is no longer needed (an `#[allow]` would stay silently).
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
 
 # Release binary (`cargo build --release`): a single, fully optimized codegen unit with
 # thin LTO across crates; in exchange, a release build links in about 12 s instead of 1 s.

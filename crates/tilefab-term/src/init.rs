@@ -20,11 +20,14 @@
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crossterm::cursor::Show;
+use crossterm::cursor::{RestorePosition, SavePosition, Show};
 use crossterm::event::DisableBracketedPaste;
 use crossterm::execute;
+
+use crate::backend::ResetScrollRegion;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+    enable_raw_mode,
 };
 
 /// True while the alternate screen is active: the panic hook needs to know whether to leave it.
@@ -125,6 +128,18 @@ fn restore_to(out: &mut impl Write) -> io::Result<()> {
             first_error.get_or_insert(e);
         }
     };
+    // A frame interrupted by a panic may leave a scroll region set and a synchronized update
+    // open (the terminal would keep its display frozen): reset the region, the cursor saved
+    // around it since `ESC[r` moves it (`ESC 7` … `ESC 8`), then end the update (`ESC[?2026l`).
+    // Harmless when neither is active. Its result is ignored, like bracketed paste below:
+    // the legacy Windows console API knows none of these.
+    let _ = execute!(
+        out,
+        SavePosition,
+        ResetScrollRegion,
+        RestorePosition,
+        EndSynchronizedUpdate
+    );
     keep(execute!(out, Show));
     // `ESC[?2004l`: turn bracketed paste off, in case the application turned it on (a
     // shell left with it on would see pasted text wrapped in `ESC[200~ … ESC[201~`).
@@ -200,8 +215,9 @@ mod tests {
         let mut out = Vec::new();
         restore_to(&mut out).unwrap();
         assert_eq!(
-            out, b"\x1b[?25h\x1b[?2004l\x1b[?1049l",
-            "show the cursor, disable bracketed paste, leave the alternate screen"
+            out, b"\x1b7\x1b[r\x1b8\x1b[?2026l\x1b[?25h\x1b[?2004l\x1b[?1049l",
+            "reset the scroll region and end the synchronized update, show the cursor, \
+             disable bracketed paste, leave the alternate screen"
         );
         assert!(!ALTERNATE_SCREEN.load(Ordering::SeqCst));
 
@@ -209,7 +225,7 @@ mod tests {
         // bracketed paste disabled again.
         out.clear();
         restore_to(&mut out).unwrap();
-        assert_eq!(out, b"\x1b[?25h\x1b[?2004l");
+        assert_eq!(out, b"\x1b7\x1b[r\x1b8\x1b[?2026l\x1b[?25h\x1b[?2004l");
         assert!(!ALTERNATE_SCREEN.load(Ordering::SeqCst));
     }
 

@@ -15,8 +15,30 @@ pub type TaskId = u64;
 /// Progress reporting interval.
 const PROGRESS_PERIOD: Duration = Duration::from_millis(100);
 
+/// The simulated steps of a task, shown by the log of its line widget, in order.
+pub const STEPS: &[&str] = &[
+    "resolving dependencies",
+    "downloading crates",
+    "compiling",
+    "running the tests",
+    "packaging",
+];
+
+/// The step reached at `ratio` (0.0–1.0).
+pub fn step(ratio: f64) -> &'static str {
+    // `ratio` is in 0..=1: the index is below `STEPS.len()` once capped.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "a small index in 0..STEPS.len()"
+    )]
+    let index = (ratio.clamp(0.0, 1.0) * STEPS.len() as f64) as usize;
+    STEPS[index.min(STEPS.len() - 1)]
+}
+
 /// Launch a simulated task lasting a random 3 to 10 seconds, which sends
-/// `Progress` regularly, then `TaskDone`. Return the chosen duration.
+/// `Progress` regularly (with its current step), then `TaskDone`. Return the chosen duration.
 ///
 /// The channel is bounded: a `Progress` that finds it full is skipped (the next one
 /// supersedes it), while `TaskDone` waits for room, as it must never be lost.
@@ -28,7 +50,11 @@ pub fn spawn(id: TaskId, tx: Sender<AppEvent>) -> Duration {
         loop {
             ticker.tick().await;
             let ratio = (start.elapsed().as_secs_f64() / duration.as_secs_f64()).min(1.0);
-            match tx.try_send(AppEvent::Progress { id, ratio }) {
+            match tx.try_send(AppEvent::Progress {
+                id,
+                ratio,
+                step: step(ratio),
+            }) {
                 Ok(()) | Err(TrySendError::Full(_)) => {}
                 // The UI has stopped: stop the task.
                 Err(TrySendError::Closed(_)) => return,
@@ -60,8 +86,9 @@ mod tests {
         let mut last = 0.0;
         loop {
             match rx.recv().await.expect("the task ended without TaskDone") {
-                AppEvent::Progress { id, ratio } => {
+                AppEvent::Progress { id, ratio, step } => {
                     assert_eq!(id, 7);
+                    assert_eq!(step, super::step(ratio));
                     assert!(ratio >= last, "progress went back: {last} then {ratio}");
                     last = ratio;
                 }
@@ -78,6 +105,14 @@ mod tests {
         );
         // The task has ended and dropped its sender: the channel is closed.
         assert!(rx.recv().await.is_none());
+    }
+
+    #[test]
+    fn steps_follow_the_ratio() {
+        assert_eq!(step(0.0), STEPS[0]);
+        assert_eq!(step(0.5), STEPS[2]);
+        assert_eq!(step(0.999), STEPS[4]);
+        assert_eq!(step(1.0), STEPS[4]);
     }
 
     #[tokio::test(start_paused = true)]

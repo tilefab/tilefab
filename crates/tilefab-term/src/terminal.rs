@@ -52,6 +52,7 @@
 //! the first `draw` with rows again repositions the viewport and applies them.
 
 use std::io::{self, Write};
+use std::panic::{self, AssertUnwindSafe};
 
 use super::backend::{Backend, ClearType};
 use super::viewport::{ScrollMode, TerminalOptions, Viewport, plan_commit};
@@ -197,29 +198,25 @@ impl<W: Write> Terminal<W> {
             Viewport::Inline(height) => {
                 let cursor = backend.cursor_position()?;
                 let height = height.clamp(1, screen.height.max(1));
-                // Rows to move down so the viewport fits: one to leave the prompt line
-                // if not in column 0, then `height - 1` for the remaining rows.
-                let extra = u16::from(cursor.x > 0);
-                let append = extra + height - 1;
-                // At the screen bottom, each line feed scrolls: `scroll` rows beyond
-                // the available space below the cursor.
-                let scroll = cursor
-                    .y
-                    .saturating_add(append)
-                    .saturating_sub(screen.height.saturating_sub(1));
-                let top = cursor.y + extra - scroll;
+                let (append, top) = initial_placement(screen, cursor, height);
 
-                backend.begin_sync()?;
-                backend.append_lines(append)?;
-                // Reserved lines may contain anything: clear them one by one
-                // (never `ESC[J`, which would also clear below the viewport).
-                for y in top..top + height {
-                    backend.set_cursor_position(0, y)?;
-                    backend.clear(ClearType::CurrentLine)?;
+                let reserve = |backend: &mut Backend<W>| -> io::Result<()> {
+                    backend.begin_sync()?;
+                    backend.append_lines(append)?;
+                    // Reserved lines may contain anything: clear them one by one
+                    // (never `ESC[J`, which would also clear below the viewport).
+                    for y in top..top + height {
+                        backend.set_cursor_position(0, y)?;
+                        backend.clear(ClearType::CurrentLine)?;
+                    }
+                    backend.set_cursor_position(0, top)?;
+                    backend.end_sync()?;
+                    backend.flush()
+                };
+                if let Err(error) = reserve(&mut backend) {
+                    backend.abort_sync();
+                    return Err(error);
                 }
-                backend.set_cursor_position(0, top)?;
-                backend.end_sync()?;
-                backend.flush()?;
 
                 let area = Rect::new(0, top, screen.width, height);
                 Ok(Self {
@@ -314,10 +311,13 @@ impl<W: Write> Terminal<W> {
         }
         self.pending.extend_from_slice(self.insert.content());
         self.pending_width = width;
+        // The bound holds even when `draw` is not called for a long time.
+        self.limit_pending();
     }
 
-    /// Called by a `draw` that keeps the pending lines (no room to show them): keep only
-    /// the newest `MAX_PENDING_LINES`, so that the memory used stays bounded.
+    /// Called by `insert_before`, and by a `draw` that keeps the pending lines (no room to
+    /// show them): keep only the newest `MAX_PENDING_LINES`, so that the memory used stays
+    /// bounded.
     fn limit_pending(&mut self) {
         let lines = self.pending.len() / self.pending_width.max(1);
         if lines <= MAX_PENDING_LINES {
@@ -342,10 +342,25 @@ impl<W: Write> Terminal<W> {
     /// [`io::ErrorKind::InvalidInput`] error if `render` changed the frame buffer area
     /// (see [`Frame::buffer_mut`]): that frame is then drawn blank, and the terminal state
     /// stays consistent for the next one.
+    ///
+    /// A frame interrupted by a write error or a panic of `render` is closed on a best-effort
+    /// basis (scroll region reset, synchronized update ended: see [`Backend::abort_sync`]),
+    /// so that the terminal does not stay frozen; the panic then goes on.
     pub fn draw(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> io::Result<()> {
-        match self.viewport {
+        let result = panic::catch_unwind(AssertUnwindSafe(|| match self.viewport {
             Viewport::Fullscreen => self.draw_fullscreen(render),
             Viewport::Inline(_) => self.draw_inline(render),
+        }));
+        match result {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => {
+                self.backend.abort_sync();
+                Err(error)
+            }
+            Err(payload) => {
+                self.backend.abort_sync();
+                panic::resume_unwind(payload)
+            }
         }
     }
 
@@ -544,11 +559,21 @@ impl<W: Write> Terminal<W> {
         let mut moved = false;
         let mut erase = plan.erase.clone();
         let mut model_is_blank = false;
+        // The whole screen scrolled with the viewport (`ScrollMode::Screen`).
+        let mut shifted = false;
         if plan.scroll > 0 {
             moved = true;
             if self.scroll_mode == ScrollMode::Region && top >= 2 {
                 // Only the area above the viewport scrolls; the viewport stays put.
                 self.backend.scroll_region_up(0, top - 1, plan.scroll)?;
+            } else if self.scroll_mode == ScrollMode::Screen && plan.scroll <= top {
+                // Only rows above the viewport leave the screen, into the scrollback: line
+                // feeds on the last row scroll everything, the viewport moves up with the rest
+                // and the diff below rewrites what differs.
+                self.backend
+                    .set_cursor_position(0, screen.height.saturating_sub(1))?;
+                self.backend.append_lines(plan.scroll)?;
+                shifted = true;
             } else {
                 // Fallback (or region too small: terminals ignore single-line regions).
                 // Clear the old viewport, then scroll the whole screen by writing
@@ -570,7 +595,13 @@ impl<W: Write> Terminal<W> {
         let lo = top - plan.scroll;
         let span = Rect::new(0, lo, screen.width, lines + new_height);
         self.model.reset_to(span);
-        if !model_is_blank {
+        if shifted {
+            // The old viewport is now `plan.scroll` rows higher: from `lo`, the top of the
+            // model. The rows below it scrolled in blank.
+            let rows = usize::from(height).min(usize::from(span.height));
+            self.model.content_mut()[..rows * width]
+                .clone_from_slice(&self.previous.content()[..rows * width]);
+        } else if !model_is_blank {
             // The old viewport lines have not moved on screen: reuse them.
             for y in lo.max(top)..old_bottom.min(span.bottom()) {
                 let from = usize::from(y - top) * width;
@@ -678,13 +709,20 @@ impl<W: Write> Terminal<W> {
                 self.backend.clear(ClearType::All)?;
             }
             Viewport::Inline(_) => {
-                self.backend.begin_sync()?;
-                for y in self.area.top()..self.area.bottom() {
-                    self.backend.set_cursor_position(0, y)?;
-                    self.backend.clear(ClearType::CurrentLine)?;
+                let area = self.area;
+                let clear = |backend: &mut Backend<W>| -> io::Result<()> {
+                    backend.begin_sync()?;
+                    for y in area.top()..area.bottom() {
+                        backend.set_cursor_position(0, y)?;
+                        backend.clear(ClearType::CurrentLine)?;
+                    }
+                    backend.set_cursor_position(0, area.y)?;
+                    backend.end_sync()
+                };
+                if let Err(error) = clear(&mut self.backend) {
+                    self.backend.abort_sync();
+                    return Err(error);
                 }
-                self.backend.set_cursor_position(0, self.area.y)?;
-                self.backend.end_sync()?;
                 self.cursor_row = self.area.y;
             }
         }
@@ -692,6 +730,28 @@ impl<W: Write> Terminal<W> {
         self.previous.reset_to(self.area);
         self.backend.flush()
     }
+}
+
+/// Initial placement of an inline viewport of `height` rows (1 to the screen height) when the
+/// cursor is at `cursor`: the number of line feeds to write, and the top row of the viewport.
+///
+/// One line feed leaves the prompt line when the cursor is not in column 0, then
+/// `height - 1` reserve the remaining rows; at the bottom of the screen each line feed
+/// scrolls. Computed in `u32` (the sum overflows a `u16` at extreme sizes), with a cursor
+/// reported below the screen taken as being on its last row.
+fn initial_placement(screen: Size, cursor: Position, height: u16) -> (u16, u16) {
+    let last_row = u32::from(screen.height.saturating_sub(1));
+    let cursor_y = u32::from(cursor.y).min(last_row);
+    let extra = u32::from(cursor.x > 0);
+    let append = extra + u32::from(height) - 1;
+    let scroll = (cursor_y + append).saturating_sub(last_row);
+    let top = cursor_y + extra - scroll;
+    // `height` is at most the screen height: `top + height` stays on screen, and
+    // `append` below 65536.
+    (
+        u16::try_from(append).unwrap_or(u16::MAX),
+        u16::try_from(top).unwrap_or(0),
+    )
 }
 
 /// Run `render`, then check that it left the frame buffer covering the frame area. A buffer
@@ -1020,11 +1080,11 @@ mod tests {
     #[test]
     fn a_large_batch_is_applied_in_full_when_there_is_room() {
         let mut term = inline_terminal(5, 1);
-        insert_numbered(&mut term, 0, MAX_PENDING_LINES + 5);
+        insert_numbered(&mut term, 0, MAX_PENDING_LINES);
         term.draw(|_| {}).unwrap();
         let out = take(&mut term);
         assert!(
-            out.contains("#0") && out.contains("#1004"),
+            out.contains("#0") && out.contains("#999"),
             "batch truncated"
         );
         assert!(term.pending.is_empty(), "lines left pending");
@@ -1228,6 +1288,121 @@ mod tests {
         assert!(
             !out.contains("line"),
             "first line not cut to 6 columns: {out:?}"
+        );
+    }
+    #[test]
+    fn insert_before_alone_keeps_the_pending_lines_bounded() {
+        let mut term = inline_terminal(3, 3);
+        insert_numbered(&mut term, 0, 3 * MAX_PENDING_LINES);
+        assert_eq!(term.pending.len() / term.pending_width, MAX_PENDING_LINES);
+        assert!(term.pending_overflowed);
+    }
+
+    /// An inline terminal on a fixed screen, without the first draw.
+    fn placed(size: Size, cursor: Position, height: u16) -> Terminal<Vec<u8>> {
+        let backend = Backend::with_fixed(Vec::new(), size, cursor);
+        Terminal::with_options(
+            backend,
+            TerminalOptions::default().viewport(Viewport::Inline(height)),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn the_initial_placement_does_not_overflow_at_extreme_sizes() {
+        let cases = [
+            (Size::new(2, 65535), Position::new(1, 0), 65535),
+            (Size::new(2, 65535), Position::new(0, 65534), 3),
+            (Size::new(2, 65535), Position::new(1, 65534), 3),
+            (Size::new(2, 65535), Position::new(1, 65535), 65535),
+            // A cursor reported below the screen.
+            (Size::new(2, 10), Position::new(1, 400), 3),
+        ];
+        for (size, cursor, height) in cases {
+            let term = placed(size, cursor, height);
+            let area = term.area();
+            assert!(
+                area.bottom() <= size.height,
+                "{size:?} {cursor:?} {height}: {area:?}"
+            );
+            assert_eq!(area.height, height.min(size.height), "{size:?} {cursor:?}");
+        }
+    }
+
+    /// A writer that fails once, when its output would pass `fail_at` bytes, then works.
+    struct FailOnce {
+        bytes: Vec<u8>,
+        fail_at: Option<usize>,
+    }
+
+    impl Write for FailOnce {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if let Some(at) = self.fail_at
+                && self.bytes.len() + buf.len() > at
+            {
+                self.fail_at = None;
+                return Err(io::Error::other("injected failure"));
+            }
+            self.bytes.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// What closes an interrupted frame: the scroll region reset (the cursor saved around it,
+    /// since `ESC[r` moves it), then the end of the synchronized update.
+    const CLOSING: &[u8] = b"\x1b7\x1b[r\x1b8\x1b[?2026l";
+
+    fn failing_terminal() -> Terminal<FailOnce> {
+        let writer = FailOnce {
+            bytes: Vec::new(),
+            fail_at: None,
+        };
+        let backend = Backend::with_fixed(writer, Size::new(10, 6), Position::new(0, 5));
+        let mut term = Terminal::with_options(
+            backend,
+            TerminalOptions::default().viewport(Viewport::Inline(2)),
+        )
+        .unwrap();
+        term.draw(|_| {}).unwrap();
+        term
+    }
+
+    #[test]
+    fn a_write_error_in_a_frame_closes_the_synchronized_update() {
+        for offset in [1, 8, 20, 40] {
+            let mut term = failing_terminal();
+            term.insert_before(1, |b| "log line".render(b.area(), b));
+            let writer = term.backend_mut().writer_mut();
+            writer.fail_at = Some(writer.bytes.len() + offset);
+            let result = term.draw(|f| f.render_widget("hello", f.area()));
+            assert!(result.is_err(), "offset {offset}: no error");
+            let bytes = &term.backend().writer().bytes;
+            assert!(
+                bytes.ends_with(CLOSING),
+                "offset {offset}: {:?}",
+                String::from_utf8_lossy(bytes)
+            );
+            // The next frame works again.
+            term.draw(|f| f.render_widget("again", f.area())).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_panic_in_the_render_function_closes_the_synchronized_update() {
+        let mut term = failing_terminal();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = term.draw(|_| panic!("render failed"));
+        }));
+        assert!(result.is_err());
+        let bytes = &term.backend().writer().bytes;
+        assert!(
+            bytes.ends_with(CLOSING),
+            "{:?}",
+            String::from_utf8_lossy(bytes)
         );
     }
 }

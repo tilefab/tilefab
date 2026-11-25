@@ -25,8 +25,15 @@ struct Rig {
 impl Rig {
     /// An `H`-row screen prefilled with `prefill` text lines (`avant0`, `avant1`…), then
     /// an inline viewport of `height` rows created at the cursor position.
+    ///
+    /// `ScrollMode::Region` assumes xterm's scrollback (a region whose top is row 0 saves its
+    /// lines): it runs on [`Sim::xterm`]; the other modes on the strict simulator.
     fn new(prefill: usize, height: u16, mode: ScrollMode) -> Self {
-        let mut sim = Sim::new(W, H);
+        let mut sim = if mode == ScrollMode::Region {
+            Sim::xterm(W, H)
+        } else {
+            Sim::new(W, H)
+        };
         for i in 0..prefill {
             sim.feed_str(&format!("avant{i}\r\n"));
         }
@@ -423,8 +430,40 @@ fn height_cycle_from_the_top_of_the_screen_fallback_mode() {
 }
 
 #[test]
+fn height_cycle_with_logs_at_the_bottom_screen_mode() {
+    run_cycle(ScrollMode::Screen, 20);
+}
+
+#[test]
+fn height_cycle_from_the_top_of_the_screen_screen_mode() {
+    run_cycle(ScrollMode::Screen, 0);
+}
+
+#[test]
+fn screen_mode_keeps_every_line_of_a_commit_in_the_strict_scrollback() {
+    let mut rig = at_bottom(ScrollMode::Screen);
+    let stats = rig.commit(
+        &["log one", "log two"],
+        &["alpha 50%", "beta 20%", "gamma 5%", ">"],
+    );
+    // Two line feeds at the bottom, no scroll region, no erase.
+    assert_eq!(stats.scrolled, 2);
+    assert!(!sets_scroll_region(&rig.last));
+    assert!(!stats.erased_screen && stats.rows_erased.is_empty());
+    let screen = rig.screen();
+    assert_eq!(&screen[4..6], ["log one", "log two"]);
+    assert_bottom(&rig, &["alpha 50%", "beta 20%", "gamma 5%", ">"]);
+    // The two rows that left the screen are in the scrollback, the viewport is not.
+    assert_eq!(
+        rig.sim.scrollback[rig.sim.scrollback.len() - 2..],
+        ["avant9", "avant10"]
+    );
+    assert!(rig.sim.scrollback.iter().all(|l| !l.contains('%')));
+}
+
+#[test]
 fn many_lines_at_once_are_applied_in_chunks_without_loss() {
-    for mode in [ScrollMode::Region, ScrollMode::Fallback] {
+    for mode in [ScrollMode::Region, ScrollMode::Fallback, ScrollMode::Screen] {
         let mut rig = Rig::new(15, 3, mode);
         let logs: Vec<String> = (0..25).map(|i| format!("log {i:02}")).collect();
         let refs: Vec<&str> = logs.iter().map(String::as_str).collect();
@@ -451,7 +490,7 @@ fn fallback_mode_gives_the_same_screen_as_region_mode() {
         (&["quatre"], &[">"]),
     ];
     let mut screens = Vec::new();
-    for mode in [ScrollMode::Region, ScrollMode::Fallback] {
+    for mode in [ScrollMode::Region, ScrollMode::Fallback, ScrollMode::Screen] {
         let mut rig = Rig::new(14, 2, mode);
         for (logs, view) in steps {
             rig.commit(logs, view);
@@ -459,6 +498,7 @@ fn fallback_mode_gives_the_same_screen_as_region_mode() {
         screens.push(rig.sim.all_lines());
     }
     assert_eq!(screens[0], screens[1]);
+    assert_eq!(screens[0], screens[2]);
 }
 
 #[test]
@@ -719,11 +759,115 @@ fn run_session(
 proptest::proptest! {
     #[test]
     fn random_sessions_with_zero_sizes_keep_the_terminal_consistent(
-        region in proptest::bool::ANY,
+        mode in proptest::sample::select(vec![
+            ScrollMode::Screen,
+            ScrollMode::Region,
+            ScrollMode::Fallback,
+        ]),
         prefill in 0usize..12,
         ops in proptest::collection::vec(op(), 1..40),
     ) {
-        let mode = if region { ScrollMode::Region } else { ScrollMode::Fallback };
         run_session(mode, prefill, &ops)?;
+    }
+}
+
+// --- the scrollback ----------------------------------------------------------------------------
+
+/// A change without resizing (a terminal that reflows its lines on resize may lose some).
+fn scrollback_op() -> impl proptest::strategy::Strategy<Value = Op> {
+    use proptest::prelude::*;
+    prop_oneof![
+        2 => (1u8..=4).prop_map(Op::Insert),
+        1 => (1u16..=9).prop_map(Op::SetHeight),
+        3 => Just(Op::Draw),
+    ]
+}
+
+/// Run `ops` on a 14x9 inline terminal in `mode`, replayed on `sim`, then shrink the viewport
+/// to one row and draw. Every inserted line must then be found exactly once and in order in
+/// the scrollback and the screen, and no viewport row (drawn as `~`) may ever enter the
+/// scrollback.
+fn run_scrollback(
+    mut sim: Sim,
+    mode: ScrollMode,
+    prefill: usize,
+    ops: &[Op],
+) -> Result<(), proptest::test_runner::TestCaseError> {
+    use proptest::{prop_assert, prop_assert_eq};
+
+    for i in 0..prefill {
+        sim.feed_str(&format!("avant{i}\r\n"));
+    }
+    let (x, y) = sim.cursor;
+    let backend = Backend::with_fixed(Vec::new(), Size::new(14, 9), Position::new(x, y));
+    let mut term = Terminal::with_options(
+        backend,
+        TerminalOptions::default()
+            .viewport(Viewport::Inline(2))
+            .scroll_mode(mode),
+    )
+    .unwrap();
+    sim.feed(&std::mem::take(term.backend_mut().writer_mut()));
+    let mut labels = Vec::new();
+    let final_ops = [Op::SetHeight(1), Op::Draw, Op::Draw];
+    for op in ops.iter().chain(&final_ops) {
+        match *op {
+            Op::Insert(count) => {
+                for _ in 0..count {
+                    let label = format!("#{:03}", labels.len());
+                    term.insert_before(1, |buf| {
+                        buf.set_string(0, 0, &label, Style::new());
+                    });
+                    labels.push(label);
+                }
+            }
+            Op::SetHeight(h) => term.set_height(h),
+            Op::Draw => {
+                term.draw(|frame| {
+                    let area = frame.area();
+                    for y in area.top()..area.bottom() {
+                        frame.buffer_mut().set_string(area.x, y, "~", Style::new());
+                    }
+                })
+                .unwrap();
+                sim.feed(&std::mem::take(term.backend_mut().writer_mut()));
+                prop_assert!(
+                    !sim.scrollback.iter().any(|line| line.starts_with('~')),
+                    "a viewport row entered the scrollback: {:?}",
+                    sim.scrollback
+                );
+            }
+            Op::Resize { .. } => unreachable!("no resize here"),
+        }
+    }
+    let found: Vec<String> = sim
+        .all_lines()
+        .into_iter()
+        .filter(|line| line.starts_with('#'))
+        .collect();
+    prop_assert_eq!(found, labels, "scrollback: {:?}", sim.scrollback);
+    Ok(())
+}
+
+proptest::proptest! {
+    #[test]
+    fn every_inserted_line_reaches_the_scrollback_of_a_strict_terminal(
+        prefill in 0usize..12,
+        ops in proptest::collection::vec(scrollback_op(), 1..40),
+    ) {
+        run_scrollback(Sim::new(14, 9), ScrollMode::default(), prefill, &ops)?;
+    }
+
+    #[test]
+    fn every_inserted_line_reaches_the_scrollback_of_xterm_in_every_mode(
+        mode in proptest::sample::select(vec![
+            ScrollMode::default(),
+            ScrollMode::Region,
+            ScrollMode::Fallback,
+        ]),
+        prefill in 0usize..12,
+        ops in proptest::collection::vec(scrollback_op(), 1..40),
+    ) {
+        run_scrollback(Sim::xterm(14, 9), mode, prefill, &ops)?;
     }
 }

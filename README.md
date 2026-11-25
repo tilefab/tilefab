@@ -3,15 +3,15 @@
 Small demo CLI tool in Rust, built on a home-made mini TUI library (a Cargo workspace of small crates, written directly on [crossterm](https://crates.io/crates/crossterm)):
 
 - **log lines** scroll above a fixed area and stay in the terminal history;
-- the fixed area (an *inline viewport*, no alternate screen) shows the **progress bars** of running tasks; its height is **dynamic**: one line per task, plus the prompt (1 line when idle);
+- the fixed area (an *inline viewport*, no alternate screen) shows one **line widget** per running task (name, time, state, progress bar, current step…, composed by a short description string); its height is **dynamic**: one line per task, plus the prompt (1 line when idle);
 - the last line is an **input prompt** (`> command`) that stays intact while logs and bars are updated.
 
 ```
 > start beta
 [INFO] task "alpha" started (duration 6.3 s)
 [INFO] task "beta" started (duration 5.5 s)
-alpha      ████████████░░░░░░░░░░░░░░░░░░░░░  36%
-beta       ██████████████░░░░░░░░░░░░░░░░░░░  42%
+alpha [05.123] 🟠 ███████████████░░░░░░░░░░░░░░░░░░░░░░░░░░  36% compiling
+beta [05.123] 🟠 ██████████████████░░░░░░░░░░░░░░░░░░░░░░░  42% compiling
 
 > start gam█
 ```
@@ -43,14 +43,38 @@ Keys typed while it waits are echoed by the terminal but not read: stdin is the 
 
 | Command | Effect |
 |---|---|
-| `start <name>` | starts a simulated task (3 to 10 s); the name is the rest of the line |
+| `start <name>` | starts a simulated task (3 to 10 s), drawn with the current composition; the name is the rest of the line |
+| `start <name> "<composition>"` | the same, with a composition for this task only (the current one does not change) |
 | `list` | logs the running tasks and their progress |
-| `select <widget> [variant] [bordered]` | chooses how the tasks started next are drawn: `progressline` (`blocks`, the default, `thin`, `dots`) or `progressbar` (`plain`); without a variant, the widget's first one; `bordered` surrounds the task with a rounded border titled with its name (3 rows instead of 1); without arguments, shows the current choice. Each task keeps the view it started with. Tab completes the widget, the variant and `bordered` |
+| `compose "<composition>"` | sets the composition of the tasks started next, for instance `compose "N B2 P B2 L"`; the composition goes between double quotes. An invalid composition is an ERROR and the current one is kept; a composition wider than 80 columns gives a WARN. Without an argument, shows the current composition. Each task keeps the composition it started with |
 | `help` | logs the list of commands |
 | `quit`, `exit`, Ctrl+C, Ctrl+D (on an empty line) | clean exit |
 
-At most 5 simultaneous tasks (`MAX_TASKS`); beyond that, the command is refused with a WARN. An unknown command gives a WARN, `start` without a name an ERROR, an unknown widget or variant for `select` a WARN.
-The hidden `panic` command triggers a deliberate panic, to check that the terminal is properly restored. It exists in debug builds only (`cargo build`, used by `tools/check_app.py`); in a release build, `panic` is an unknown command.
+At most 5 simultaneous tasks (`MAX_TASKS`); beyond that, the command is refused with a WARN. An unknown command gives a WARN, `start` without a name an ERROR. A name that ends with a quoted part is read as a name and a composition: `start say "hi"` starts `say` with the composition `hi`, which is refused.
+
+## Task lines
+
+Each task is drawn on one row by a `LineWidget` of `tilefab-widget`, composed from a short string: one letter per component, separated by one space. The default composition is `N B2 B0 T2 B1 B2 S B2 I B2 P B2 L`:
+
+```
+alpha [05.123] 🟠 ████████████████░░░░░░░░░░░░░░  52% compiling
+```
+
+| Token | Component in the demo |
+|---|---|
+| `S`, `S0`–`S3` | state symbol: 🔴 waiting, 🟠 running, 🟡 almost done, 🟢 done (`S` follows the task, `S2` is always 🟡) |
+| `B0`–`B9` | barriers: `[`, `]`, space, ` - `, `: `, ` \| `, `(`, `)`, `/`, two spaces |
+| `D0`–`D2` | date: `YYYY-MM-DD`, `YY-MM-DD`, `MM-DD` (local time, from the `jiff` crate) |
+| `T0`–`T5` | time: `HH:MM:SS.SSS`, `MM:SS.SSS`, `SS.SSS`, `HH:MM:SS`, `HH:MM`, `MM:SS` |
+| `P`, `P3`–`P9` | progress, rounded down, with `n − 4` decimals from `P5` (`P5`: ` 99.9%`) |
+| `K`, `K0`–`K3` | state keyword: `waiting`, `running`, `finishing`, `done` |
+| `N` | the task name |
+| `L`, `L40` | the current step of the task (`compiling`…): elastic, or a fixed size |
+| `V`, `V5U/` | simulated download: size of each number, `U` for the unit (MB), `/` for the total (`12.5MB/40.0MB`) |
+| `I`, `I20` | progress bar: elastic (10 columns at least when there is room), or a fixed size |
+
+`D`, `T`, `P`, `K`, `L`, `V` and `I` appear at most once; `S`, `B` and `N` can be repeated. The line is laid out again at every frame, with the whole terminal width: the extra columns go to the elastic `L`, otherwise to the elastic `I`. When the window is too narrow, `L` and `I` shrink first (down to 2 columns, a cut text ends with `…`), then the names, then the last components are dropped; a barrier stays, which shows the line was cut. `help` lists the tokens.
+The hidden `panic` command triggers a deliberate panic, to check that the terminal is properly restored. It exists in debug builds only (`cargo build`, used by `tools/check_app.py`); in a release build, `panic` is an unknown command. The hidden `count <n>` command (debug builds too) writes `n` numbered log lines at once, to check that every line can be found again by scrolling up in the terminal window (scenario `tools/scenarios/scrollback.scn`).
 
 ## Line editing
 
@@ -107,7 +131,9 @@ A single UI loop owns the `Terminal`; nothing else writes to stdout.
 |---|---|
 | `apps/widget-demo/src/main.rs` | terminal init, keyboard thread, UI loop (one frame = lines + height + drawing) |
 | `apps/widget-demo/src/app.rs` | `AppEvent`, app state, command parsing and execution |
-| `apps/widget-demo/src/ui.rs` | viewport rendering (`ProgressLine` bars + prompt), wanted height |
+| `apps/widget-demo/src/ui.rs` | viewport rendering (one task line per row + prompt), wanted height |
+| `apps/widget-demo/src/line.rs` | the line widget of a task: lists of values, default composition, updates, local time |
+| `apps/widget-demo/src/wrap.rs` | wrapping of the long log lines inserted above the viewport |
 | `apps/widget-demo/src/logging.rs` | tracing `MakeWriter` that splits output into lines and sends them into the channel |
 | `apps/widget-demo/src/tasks.rs` | simulated tasks (`tokio::spawn` + `interval`) |
 | `apps/widget-demo/src/headless.rs` | degraded mode without a TTY |
@@ -121,7 +147,7 @@ A single UI loop owns the `Terminal`; nothing else writes to stdout.
 |---|---|---|
 | `crates/tilefab-core` | `Cell`, `Buffer` and diff between two buffers (wide characters included); `Color`, `Modifier`, `Style`; `Span`, `Line`, `Text`, `Alignment`, `Stylize`; `Rect`, `Position`, `Size`, `Margin`, `Constraint`, `Layout`; the `Widget` and `StatefulWidget` traits (text types are widgets) | — (no crossterm) |
 | `crates/tilefab-term` | `backend`: ANSI sequences on a `W: Write` (cells, cursor, erasing, scroll regions); `terminal`: `Terminal` and `Frame` (diff with the previous frame, cursor, viewport); `viewport`: `Viewport` (full screen or inline), `ScrollMode`, commit placement rule; `init`: `TerminalGuard` (raw mode, alternate screen), panic hook | `tilefab-core`, crossterm |
-| `crates/tilefab-widget` | `Block`, `Paragraph`, `ProgressBar`, `ProgressLine`, `List`, `Clear`, drawn in a `Buffer` without I/O | `tilefab-core` |
+| `crates/tilefab-widget` | `LineWidget`: a one-line widget composed from a description string and lists of values, laid out again at every draw; drawn in a `Buffer` without I/O | `tilefab-core` |
 | `crates/tilefab-input` | `LineEditor`: prompt line editor (keymap, kill ring, undo, horizontal scrolling), without terminal I/O | crossterm (events), `tilefab-core` |
 | `crates/tilefab` | façade: re-exports all of the above under `tilefab::…`; features `widget` and `input` (on by default) | the four crates above |
 | `apps/widget-demo` | the demo application (binary `widget-demo`) | `tilefab` |
@@ -135,7 +161,7 @@ Notable choices:
 - **A single crossterm version** (0.29) in the dependency tree, without its default `derive-more` feature (it would pull `syn` 2 next to the `syn` 3 of tokio's macros).
 - **Single frame commit**: `Terminal::insert_before` and `Terminal::set_height` write nothing, they accumulate. `draw` applies scrolling, inserted lines, the new height and the redraw in one synchronized block: the terminal never shows an intermediate state. The viewport is anchored at the bottom: its last line (the prompt) does not move on screen when the height changes. The placement rule is detailed in `crates/tilefab-term/src/viewport.rs`.
 - **Task start and end lines**: produced directly in `app.output` (same `[INFO] …` format as tracing), not through tracing, so that they arrive in the **same** frame as the height change. Otherwise the viewport would shrink one frame before the line replacing it arrived.
-- **Scroll regions**: crossterm has no DECSTBM command, `backend.rs` implements it (`SetScrollRegion`). Only the area above the viewport scrolls. `ScrollMode::Fallback` does the same without a region, for terminals that handle them poorly.
+- **Making room for log lines** (`ScrollMode`): by default (`Screen`), line feeds on the last row scroll the whole screen, the viewport with it, and a single diff then rewrites what changed, in the same synchronized update: a line leaving the top of the screen this way reaches the scrollback in every terminal. `Region` scrolls only the area above the viewport with a scroll region (crossterm has no DECSTBM command, `backend.rs` implements it: `SetScrollRegion`), and writes less, but many terminals (xterm.js in VS Code, iTerm2 by default…) delete the lines that leave a region instead of keeping them in the scrollback. `Fallback` clears the viewport before scrolling. The demo reads the mode from `TILEFAB_SCROLL_MODE` (`screen`, `region` or `fallback`).
 - **Cursor position**: a single `ESC[6n` query at startup, then internal tracking; a new query only after a resize. If the terminal does not answer at startup, the demo falls back to the degraded mode (commands read line by line), with a warning.
 - **Keyboard thread using `poll` + `read`** rather than a lone blocking `read()`: crossterm has only one global input reader, locked for the whole duration of a `read()` wait. But the cursor position query needs the same lock and gives up after 2 s. With `poll(50 ms)`, the lock is released regularly.
 - **Panic hook**: `install_panic_hook` restores the terminal (cursor visible, main screen, line mode) **before** calling the previous hook, color-eyre's, installed earlier. The panic then unwinds as usual (destructors run, `catch_unwind` can stop it). The demo uses `install_fatal_panic_hook` instead: every panic is fatal, after the report the hook ends the process with code 101, even for a panic in a tokio task or a secondary thread.
@@ -143,8 +169,7 @@ Notable choices:
 ### Scope and simplifications
 
 - **Layout**: no constraint solver, a simple four-step algorithm (see the header of `layout.rs`). No `Flex` other than `Start`; when space runs out, the last constraints are trimmed.
-- **Text wrapping**: greedy algorithm (see the header of `paragraph.rs`).
-- **Widgets**: only `Block`, `Paragraph`, `ProgressBar`, `ProgressLine`, `List` and `Clear`. No tables, tabs, charts, or mouse support.
+- **Widgets**: a single one, `LineWidget`, always one line. No blocks, paragraphs, lists, tables, charts, or mouse support. The library does not wrap text: the demo cuts its long log lines itself (`wrap.rs`).
 - **Viewport**: the height of an inline viewport can change from one frame to the next (`set_height`).
 
 ## Tests and checks
@@ -153,7 +178,7 @@ Notable choices:
 
 ```sh
 cargo fmt --check
-cargo test                      # library (buffer, text, layout, widgets, backend, viewport) and application
+cargo test                      # library (buffer, text, layout, line widget, backend, viewport) and application
 cargo clippy --all-targets --all-features -- -D warnings
 cargo clippy --release --all-targets --all-features -- -D warnings
 cargo test --profile ci       # release build with overflow checks: the debug-only `panic` command is absent
@@ -188,21 +213,23 @@ Mutation testing of the inline placement code (`cargo install --locked cargo-mut
 
 ```sh
 cargo mutants -p tilefab-term -f crates/tilefab-term/src/terminal.rs -f crates/tilefab-term/src/viewport.rs -j 3   # report in mutants.out/
-cargo mutants -p tilefab-widget -j 4   # widgets: about 3 minutes
+cargo mutants -p tilefab-widget -j 4   # the line widget
+cargo mutants -p tilefab-input -j 4    # the line editor and its history
 ```
 
-On the widgets, three mutants survive because they do not change the behavior (equivalent mutants); a comment marks each one in the code (`block.rs`, `progress.rs`, `paragraph.rs`). The timeouts are mutants that loop forever: the tests catch them too.
+On the line widget and the line editor, every mutant is caught by the tests (none is marked as equivalent). The timeouts are mutants that loop forever: the tests catch them too.
 
-Fuzzing with libFuzzer (`fuzz/`, a crate outside the workspace; once: `rustup toolchain install nightly --profile minimal && cargo install --locked cargo-fuzz`). Three targets, each checking invariants rather than only the absence of a panic:
+Fuzzing with libFuzzer (`fuzz/`, a crate outside the workspace; once: `rustup toolchain install nightly --profile minimal && cargo install --locked cargo-fuzz`). Four targets, each checking invariants rather than only the absence of a panic:
 
 - `buffer_set_string`: successive `Buffer::set_stringn` writes with tricky text (wide characters, combining marks, emoji sequences, control characters), at positions inside and outside the buffer; the buffer invariants hold after each write (one printable grapheme of width 1 or 2 per cell, a wide character always followed by its continuation);
-- `paragraph`: `Paragraph` with wrapping, trimming, scrolling, alignment and a block; nothing written outside its area, and `line_count` gives enough rows for the whole text;
+- `line_widget`: `LineWidget` with an arbitrary composition (grammar tokens and raw text), lists, setter calls and widths; `build`, the setters and the drawing never panic, the buffer invariants hold, and nothing is written outside the first row of the area;
 - `layout_split`: `Layout::split` with arbitrary constraints, margins and spacing; one rectangle per constraint, within the area, none overlapping.
+- `line_editor`: `LineEditor` with arbitrary commands, pastes, `set_value` calls and renders at any width; the line never exceeds `max_len` nor holds a control character, the cursor stays in the line, and the rendered buffer keeps its invariants.
 
 ```sh
 cd fuzz
-cargo +nightly fuzz run paragraph -- -max_total_time=60   # or buffer_set_string, layout_split
-cargo +nightly fuzz run paragraph artifacts/paragraph/crash-…   # replay a crash
+cargo +nightly fuzz run line_widget -- -max_total_time=60   # or buffer_set_string, layout_split, line_editor
+cargo +nightly fuzz run line_widget artifacts/line_widget/crash-…   # replay a crash
 ```
 
 The corpus and the crashes stay local (`fuzz/corpus/`, `fuzz/artifacts/`). `tools/ci.sh` only checks that the targets build and pass clippy.
@@ -221,7 +248,7 @@ The frame commit tests (`crates/tilefab-term/src/inline_tests.rs`) replay the em
 - **Long log lines**: they are wrapped to the width at that moment; widening the window afterwards does not "unwrap" them.
 - **Emoji width**: computed with `unicode-width`; some terminals display complex sequences differently (emoji with modifiers, flags), which can shift the cursor.
 - **After a panic**, the viewport content (bars, prompt) stays on screen above the error report; the terminal itself is restored.
-- **Degraded mode**: no progress bars; Ctrl+C there is the standard SIGINT signal (immediate stop).
+- **Degraded mode**: no task lines; Ctrl+C there is the standard SIGINT signal (immediate stop).
 - **Windows**: untested (`Release` events and rendering in Windows Terminal to be checked).
 
 ## License

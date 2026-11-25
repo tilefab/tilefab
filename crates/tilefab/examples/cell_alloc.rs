@@ -2,36 +2,48 @@
 //!
 //! Run: `cargo run --release --example cell_alloc`.
 //!
-//! A counting global allocator (`stats_alloc`) wraps the system one. Two scenarios render real widgets
-//! into an in-memory backend (no terminal needed):
+//! A counting global allocator (`stats_alloc`) wraps the system one. The scenarios render real
+//! widgets into an in-memory backend (no terminal needed):
 //!
-//! - **inline**: like `tilefab`, a 6-row viewport on a 100-column screen (5 task progress lines
-//!   and a prompt), one log line inserted above it per frame;
-//! - **fullscreen**: a 200 × 50 screen with a bordered block of wrapped text and a progress bar;
-//! - **paragraph**: a log viewer, the `Paragraph` widget alone: 200 lines of about 150
-//!   columns, wrapped in a 120 × 40 buffer and scrolled to the middle (most lines are not
-//!   visible);
+//! - **inline**: like `widget-demo`, a 6-row viewport on a 100-column screen (5 task lines drawn
+//!   by `LineWidget`s and a prompt), one log line inserted above it per frame;
+//! - **fullscreen**: a 200 × 50 screen with rows of text and three line widgets;
+//! - **line**: a `LineWidget` alone in a buffer whose width changes at every frame (0 to 119
+//!   columns), so that it is laid out again each time: nominal widths, shrinking, components
+//!   dropped;
 //! - **terminal**: the inline scenario's terminal work alone (one inserted line, a 6 × 100
 //!   viewport), with text written by `Buffer::set_string`, which does not allocate: what
 //!   remains is the cost of `Terminal` itself.
 //!
-//! Each frame changes a little (bar ratios, a counter), as in a real application.
+//! Each frame changes a little (progress, time, log text), as in a real application. The
+//! widgets are built before the measurement: a warm frame that draws them allocates nothing,
+//! so the scenarios show 0 allocations per frame. The rows are laid out with `Rect::rows`
+//! rather than `Layout`, whose computation allocates a few small lists.
 
 use std::alloc::System;
-use std::fmt::Write as _;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 use tilefab::{
-    Backend, Block, Constraint, Layout, Paragraph, Position, ProgressBar, ProgressLine, Size,
-    Style, Terminal, TerminalOptions, Viewport, Widget, Wrap,
+    Backend, Buffer, Entry, LineWidget, Position, Rect, Size, Style, Terminal, TerminalOptions,
+    Viewport, WallTime, Widget,
 };
 
 // The system allocator, counting allocations: `stats_alloc` holds the `unsafe` code,
 // which this project forbids in its own sources.
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
+
+/// The digits written by the scenarios, to change the text without formatting it.
+const DIGITS: [&str; 10] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+/// The log texts the task lines go through.
+const STEPS: [&str; 4] = [
+    "resolving",
+    "downloading crates",
+    "compiling",
+    "linking the binary",
+];
 
 /// Per-frame averages of one scenario.
 struct Report {
@@ -66,6 +78,37 @@ fn measure(frames: u32, mut frame: impl FnMut(u32)) -> Report {
     }
 }
 
+/// A task line of the demo: `[05.123] 🟠 task 3 ██████░░░░  60% compiling`.
+fn task_line(name: &str) -> LineWidget {
+    LineWidget::builder("B0 T2 B1 B2 S B2 N B2 I B2 P B2 L")
+        .barriers([Entry::new("["), Entry::new("]"), Entry::new(" ")])
+        .symbols([Entry::new("🔴"), Entry::new("🟠"), Entry::new("🟢")])
+        .names([Entry::new(name)])
+        .illustration(Entry::new("█"), Entry::new("░"))
+        .build()
+        .expect("valid task line")
+}
+
+/// Change a task line for frame `i`: time, progress, symbol and log text.
+fn animate(widget: &mut LineWidget, i: u32, offset: u32) {
+    let step = (i + offset) % 100;
+    let time = WallTime {
+        year: 2026,
+        month: 11,
+        day: 25,
+        hour: 12,
+        minute: u8::try_from(i / 60_000 % 60).unwrap_or(0),
+        second: u8::try_from(i / 1000 % 60).unwrap_or(0),
+        millis: u16::try_from(i % 1000).unwrap_or(0),
+    };
+    widget.set_time(time).expect("valid time");
+    widget.set_progress(f64::from(step)).expect("finite");
+    widget
+        .set_symbol(0, usize::try_from(step / 34).unwrap_or(0))
+        .expect("valid symbol");
+    widget.set_log(STEPS[usize::try_from(step / 25).unwrap_or(0)]);
+}
+
 fn inline() -> Report {
     let backend = Backend::with_fixed(Vec::new(), Size::new(100, 40), Position::new(0, 0));
     let mut terminal = Terminal::with_options(
@@ -73,81 +116,77 @@ fn inline() -> Report {
         TerminalOptions::default().viewport(Viewport::Inline(6)),
     )
     .expect("in-memory terminal");
+    let mut tasks: Vec<LineWidget> = (0..5).map(|n| task_line(DIGITS[n])).collect();
     measure(2_000, |i| {
+        let digit = DIGITS[(i % 10) as usize];
         terminal.insert_before(1, |buf| {
-            Paragraph::new(format!("[INFO] log line {i:06}")).render(buf.area(), buf);
+            buf.set_string(0, 0, "[INFO] log line ", Style::new());
+            buf.set_string(16, 0, digit, Style::new());
         });
+        for (offset, task) in (0..).step_by(17).zip(&mut tasks) {
+            animate(task, i, offset);
+        }
         terminal
             .draw(|frame| {
-                let rows = Layout::vertical([Constraint::Length(1); 6]).split(frame.area());
-                for (task, row) in rows[..5].iter().enumerate() {
-                    let ratio =
-                        f64::from((i + 17 * u32::try_from(task).unwrap_or(0)) % 100) / 100.0;
-                    frame.render_widget(
-                        ProgressLine::default()
-                            .ratio(ratio)
-                            .label(format!("task {task}")),
-                        *row,
-                    );
+                // `Rect::rows` rather than `Layout`, which allocates its intermediate lists.
+                let area = frame.area();
+                for (task, row) in tasks.iter().zip(area.rows()) {
+                    frame.render_widget(task, row);
                 }
-                frame.render_widget(Paragraph::new(format!("> start task {i}")), rows[5]);
+                let prompt = area.rows().last().unwrap_or(area);
+                frame
+                    .buffer_mut()
+                    .set_string(prompt.x, prompt.y, "> start task ", Style::new());
+                frame
+                    .buffer_mut()
+                    .set_string(prompt.x + 13, prompt.y, digit, Style::new());
             })
             .expect("draw");
-        // The written bytes are not the subject here: discard them.
-        black_box(std::mem::take(terminal.backend_mut().writer_mut()));
+        // The written bytes are not the subject here: discard them, but keep the memory of
+        // the output, as a real terminal writer would.
+        black_box(terminal.backend_mut().writer_mut()).clear();
     })
 }
 
 fn fullscreen() -> Report {
     let backend = Backend::with_fixed(Vec::new(), Size::new(200, 50), Position::new(0, 0));
     let mut terminal = Terminal::new(backend).expect("in-memory terminal");
-    let text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor \
-                incididunt ut labore et dolore magna aliqua. été 漢字 ";
-    let text = text.repeat(40);
+    let row = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor \
+               incididunt ut labore et dolore magna aliqua. été 漢字 ";
+    let mut widgets: Vec<LineWidget> = ["build", "download", "check"]
+        .into_iter()
+        .map(task_line)
+        .collect();
     measure(500, |i| {
+        for (offset, widget) in (0..).step_by(31).zip(&mut widgets) {
+            animate(widget, i, offset);
+        }
         terminal
             .draw(|frame| {
-                let [body, bar] = Layout::vertical([Constraint::Fill(1), Constraint::Length(3)])
-                    .areas(frame.area());
-                frame.render_widget(
-                    Paragraph::new(format!("frame {i}\n{text}"))
-                        .wrap(Wrap { trim: true })
-                        .block(Block::bordered().title("text")),
-                    body,
-                );
-                frame.render_widget(
-                    ProgressBar::default()
-                        .ratio(f64::from(i % 100) / 100.0)
-                        .block(Block::bordered())
-                        .style(Style::new()),
-                    bar,
-                );
+                // The text, then three rows for the widgets (without `Layout`, which allocates).
+                let area = frame.area();
+                let split = area.bottom().saturating_sub(3).max(area.y);
+                let body = Rect::new(area.x, area.y, area.width, split - area.y);
+                let lines = Rect::new(area.x, split, area.width, area.bottom() - split);
+                for y in body.top()..body.bottom() {
+                    frame.buffer_mut().set_string(body.x, y, row, Style::new());
+                }
+                for (widget, y) in widgets.iter().zip(lines.top()..) {
+                    frame.render_widget(widget, Rect::new(lines.x, y, lines.width, 1));
+                }
             })
             .expect("draw");
-        black_box(std::mem::take(terminal.backend_mut().writer_mut()));
+        black_box(terminal.backend_mut().writer_mut()).clear();
     })
 }
 
-fn paragraph() -> Report {
-    let mut log = String::new();
-    for i in 0..200 {
-        // Writing to a `String` cannot fail.
-        let _ = writeln!(
-            log,
-            "[INFO] {i:03} request served in {} ms by worker {} for user été-{} 日本 {}",
-            i * 7 % 300,
-            i % 8,
-            i * 31 % 1000,
-            "lorem ipsum dolor sit amet ".repeat(3)
-        );
-    }
-    let mut buf = tilefab::Buffer::empty(tilefab::Rect::new(0, 0, 120, 40));
-    measure(500, |i| {
-        buf.reset();
-        Paragraph::new(log.as_str())
-            .wrap(Wrap { trim: true })
-            .scroll((u16::try_from(150 + i % 10).unwrap_or(0), 0))
-            .render(buf.area(), &mut buf);
+fn line() -> Report {
+    let mut widget = task_line("a task with a long name");
+    let mut buf = Buffer::empty(Rect::new(0, 0, 120, 1));
+    measure(5_000, |i| {
+        animate(&mut widget, i, 0);
+        let width = u16::try_from(i % 120).unwrap_or(0);
+        (&widget).render(Rect::new(0, 0, width, 1), &mut buf);
         black_box(&buf);
     })
 }
@@ -159,9 +198,8 @@ fn terminal_only() -> Report {
         TerminalOptions::default().viewport(Viewport::Inline(6)),
     )
     .expect("in-memory terminal");
-    let digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
     measure(2_000, |i| {
-        let digit = digits[(i % 10) as usize];
+        let digit = DIGITS[(i % 10) as usize];
         terminal.insert_before(1, |buf| {
             buf.set_string(0, 0, "[INFO] log line ", Style::new());
             buf.set_string(16, 0, digit, Style::new());
@@ -188,7 +226,7 @@ fn main() {
     for (name, report) in [
         ("inline", inline()),
         ("fullscreen", fullscreen()),
-        ("paragraph", paragraph()),
+        ("line", line()),
         ("terminal", terminal_only()),
     ] {
         println!(

@@ -1,0 +1,17 @@
+# Scrollback check (lines lost in some terminals with scroll regions): two tasks make the
+# viewport taller, then numbered lines are written, far more than the screen shows. After
+# `quit`, scroll up in the terminal window: the three runs of `count 00001/00100` to
+# `count 00100/00100` must all be there, in order. `count` exists in debug builds only.
+# Run it with TILEFAB_SCROLL_MODE=region and =screen to compare.
+wait 1
+line start alpha
+line start beta
+wait 1
+line count 100
+wait 1
+line count 100
+wait 1
+line count 100
+wait 2
+line quit
+wait 1

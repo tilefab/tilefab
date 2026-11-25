@@ -1,12 +1,14 @@
 //! CLI demo: logs scroll above an inline viewport whose height follows the number of
-//! tasks (one line per task + the prompt), built on the small `tilefab` library.
+//! tasks (one line per task, drawn by a `LineWidget`, + the prompt), built on the small
+//! `tilefab` library.
 
 mod app;
 mod headless;
+mod line;
 mod logging;
 mod tasks;
 mod ui;
-mod view;
+mod wrap;
 
 use std::io::{BufWriter, IsTerminal, Stdout, Write, stdin, stdout};
 use std::path::PathBuf;
@@ -16,7 +18,8 @@ use color_eyre::Result;
 use tilefab::crossterm::event::{self, EnableBracketedPaste, Event};
 use tilefab::crossterm::execute;
 use tilefab::{
-    Backend, Line, Terminal, TerminalGuard, TerminalOptions, Viewport, install_fatal_panic_hook,
+    Backend, Line, ScrollMode, Terminal, TerminalGuard, TerminalOptions, Viewport,
+    install_fatal_panic_hook,
 };
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -61,9 +64,12 @@ async fn main() -> Result<()> {
     // text arrives as keys.
     let _ = execute!(stdout(), EnableBracketedPaste);
     // A single-line viewport when idle (the prompt); it grows with the tasks.
+    let (scroll_mode, scroll_warning) = scroll_mode(std::env::var_os("TILEFAB_SCROLL_MODE"));
     let started = Terminal::with_options(
         Backend::new(BufWriter::new(stdout())),
-        TerminalOptions::default().viewport(Viewport::Inline(1)),
+        TerminalOptions::default()
+            .viewport(Viewport::Inline(1))
+            .scroll_mode(scroll_mode),
     );
     let mut terminal: AppTerminal = match started {
         Ok(terminal) => terminal,
@@ -80,9 +86,11 @@ async fn main() -> Result<()> {
     let (tx, rx) = mpsc::channel(EVENT_QUEUE);
     spawn_keyboard_thread(tx.clone());
     spawn_ticker(tx.clone());
-    #[cfg(unix)]
     spawn_signal_listener(tx.clone())?;
     let dropped_logs = logging::init_channel(tx.clone());
+    if let Some(warning) = scroll_warning {
+        tracing::warn!("{warning}");
+    }
 
     let history = app::history_path(|name| std::env::var_os(name));
     let result = run(&mut terminal, tx, rx, &dropped_logs, history).await;
@@ -93,9 +101,30 @@ async fn main() -> Result<()> {
     result.and(cleanup)
 }
 
+/// The scroll mode named by `TILEFAB_SCROLL_MODE` (`screen`, the default, `region` or
+/// `fallback`; see `tilefab::ScrollMode`), and a warning for a value it does not know.
+fn scroll_mode(value: Option<std::ffi::OsString>) -> (ScrollMode, Option<String>) {
+    let Some(value) = value else {
+        return (ScrollMode::default(), None);
+    };
+    match value.to_str() {
+        Some("screen") => (ScrollMode::Screen, None),
+        Some("region") => (ScrollMode::Region, None),
+        Some("fallback") => (ScrollMode::Fallback, None),
+        _ => (
+            ScrollMode::default(),
+            Some(format!(
+                "TILEFAB_SCROLL_MODE={}: unknown mode (screen, region or fallback), using screen",
+                value.to_string_lossy().escape_debug()
+            )),
+        ),
+    }
+}
+
 /// Dedicated keyboard reader thread: reading blocks, so it should not run
 /// inside a tokio task. The thread stops when the channel closes
-/// (the UI loop ends) or reading fails.
+/// (the UI loop ends) or reading fails; a failure is sent as [`AppEvent::InputFailed`], so
+/// that the application quits instead of running on without a keyboard.
 ///
 /// Why `poll` + `read` instead of a blocking `read()`: crossterm
 /// has a single global input reader, protected by a lock that `read()`
@@ -108,26 +137,38 @@ async fn main() -> Result<()> {
 /// When the channel is full, the thread waits: keys stay in the terminal's buffer, none
 /// is lost.
 fn spawn_keyboard_thread(tx: Sender<AppEvent>) {
-    std::thread::spawn(move || {
-        loop {
-            match event::poll(KEYBOARD_POLL) {
-                Ok(true) => {}
-                Ok(false) if tx.is_closed() => break,
-                Ok(false) => continue,
-                Err(_) => break,
+    std::thread::spawn(move || read_keys(|| event::poll(KEYBOARD_POLL), event::read, &tx));
+}
+
+/// The loop of the keyboard thread, with `poll` and `read` given (crossterm's, or a test
+/// reader). Blocking: run it in a thread.
+fn read_keys(
+    mut poll: impl FnMut() -> std::io::Result<bool>,
+    mut read: impl FnMut() -> std::io::Result<Event>,
+    tx: &Sender<AppEvent>,
+) {
+    loop {
+        let event = match poll() {
+            Ok(true) => read(),
+            Ok(false) if tx.is_closed() => return,
+            Ok(false) => continue,
+            Err(error) => Err(error),
+        };
+        let app_event = match event {
+            Ok(Event::Key(key)) => AppEvent::Key(key),
+            Ok(Event::Resize(_, _)) => AppEvent::Resize,
+            Ok(Event::Paste(text)) => AppEvent::Paste(text),
+            Ok(_) => continue, // mouse, focus: ignored
+            Err(error) => {
+                // Waits for room if needed: the request to quit must not be lost.
+                let _ = tx.blocking_send(AppEvent::InputFailed(error.to_string()));
+                return;
             }
-            let app_event = match event::read() {
-                Ok(Event::Key(key)) => AppEvent::Key(key),
-                Ok(Event::Resize(_, _)) => AppEvent::Resize,
-                Ok(Event::Paste(text)) => AppEvent::Paste(text),
-                Ok(_) => continue, // mouse, focus: ignored
-                Err(_) => break,
-            };
-            if tx.blocking_send(app_event).is_err() {
-                break;
-            }
+        };
+        if tx.blocking_send(app_event).is_err() {
+            return;
         }
-    });
+    }
 }
 
 /// Periodic redraw. A tick that finds the channel full is skipped: the queued events
@@ -166,6 +207,39 @@ fn spawn_signal_listener(tx: Sender<AppEvent>) -> Result<()> {
         // Waits for room if needed: the request to quit must not be lost.
         let _ = tx.send(AppEvent::Quit).await;
     });
+    Ok(())
+}
+
+/// Windows variant of the signal listener: closing the console window, logging off and
+/// shutting down (`CTRL_CLOSE_EVENT`, `CTRL_LOGOFF_EVENT`, `CTRL_SHUTDOWN_EVENT`) quit through
+/// the normal cleanup. Ctrl+C arrives as a key in raw mode, as on Unix. Not built by the CI
+/// (no Windows job).
+#[cfg(windows)]
+fn spawn_signal_listener(tx: Sender<AppEvent>) -> Result<()> {
+    use tokio::signal::windows::{ctrl_close, ctrl_logoff, ctrl_shutdown};
+
+    let mut close = ctrl_close()?;
+    let mut logoff = ctrl_logoff()?;
+    let mut shutdown = ctrl_shutdown()?;
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = close.recv() => {}
+            _ = logoff.recv() => {}
+            _ = shutdown.recv() => {}
+        }
+        // Waits for room if needed: the request to quit must not be lost.
+        let _ = tx.send(AppEvent::Quit).await;
+    });
+    Ok(())
+}
+
+/// Elsewhere, no signal to listen to.
+#[cfg(not(any(unix, windows)))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the same signature as the Unix and Windows variants"
+)]
+fn spawn_signal_listener(_tx: Sender<AppEvent>) -> Result<()> {
     Ok(())
 }
 
@@ -221,19 +295,30 @@ fn report_dropped_logs(app: &mut App, dropped_logs: &DroppedLogs) {
 /// change, in the same synchronized update block.
 fn queue_output<W: Write>(terminal: &mut Terminal<W>, app: &mut App) {
     // A zero-width screen (a pty without a size) cannot take inserted lines: keep them
-    // in `app.output` until the screen has columns again.
-    if app.output.is_empty() || terminal.area().width == 0 {
+    // in `app.output` until the screen has columns again, the newest ones only.
+    if terminal.area().width == 0 {
+        app.limit_output();
+        return;
+    }
+    if app.dropped_output > 0 {
+        let message = format!(
+            "{} log line(s) dropped while the terminal had no columns",
+            app.dropped_output
+        );
+        app.output
+            .insert(0, Line::from(logging::format_line(Level::WARN, &message)));
+        app.dropped_output = 0;
+    }
+    if app.output.is_empty() {
         return;
     }
     // The width `insert_before` gives its buffer (the screen width known at the last
     // `draw`), not the current terminal width: after a resize they differ until the
-    // next `draw`, and wrapping at another width would truncate the paragraph.
+    // next `draw`, and wrapping at another width would truncate the lines.
     let width = terminal.area().width;
-    let (paragraph, height) = ui::wrapped_lines(std::mem::take(&mut app.output), width);
-    terminal.insert_before(height, |buf| {
-        use tilefab::Widget;
-        paragraph.render(buf.area(), buf);
-    });
+    let rows = wrap::wrap(std::mem::take(&mut app.output), width);
+    let height = u16::try_from(rows.len()).unwrap_or(u16::MAX);
+    terminal.insert_before(height, |buf| wrap::render(&rows, buf));
 }
 
 #[cfg(test)]
@@ -297,6 +382,118 @@ mod tests {
         let written =
             String::from_utf8(std::mem::take(terminal.backend_mut().writer_mut())).unwrap();
         assert!(written.contains("kept"), "line not written: {written:?}");
+    }
+
+    #[test]
+    fn the_scroll_mode_comes_from_the_environment() {
+        use std::ffi::OsString;
+        let mode = |value: Option<&str>| scroll_mode(value.map(OsString::from));
+        assert_eq!(mode(None), (ScrollMode::Screen, None));
+        assert_eq!(mode(Some("region")), (ScrollMode::Region, None));
+        assert_eq!(mode(Some("fallback")), (ScrollMode::Fallback, None));
+        assert_eq!(mode(Some("screen")), (ScrollMode::Screen, None));
+        let (fallback, warning) = mode(Some("Region\u{1b}"));
+        assert_eq!(fallback, ScrollMode::Screen);
+        assert_eq!(
+            warning.as_deref(),
+            Some(
+                "TILEFAB_SCROLL_MODE=Region\\u{1b}: unknown mode (screen, region or fallback), \
+                 using screen"
+            )
+        );
+    }
+
+    #[test]
+    fn a_keyboard_failure_is_sent_once_and_stops_the_reader() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let mut polls = 0;
+        read_keys(
+            || {
+                polls += 1;
+                if polls < 3 {
+                    Ok(true)
+                } else {
+                    Err(std::io::Error::other("tty gone"))
+                }
+            },
+            || Ok(Event::FocusGained),
+            &tx,
+        );
+        assert!(matches!(rx.try_recv(), Ok(AppEvent::InputFailed(error)) if error == "tty gone"));
+        assert!(rx.try_recv().is_err(), "nothing after the failure");
+        // A read error, too.
+        read_keys(
+            || Ok(true),
+            || Err(std::io::Error::other("read failed")),
+            &tx,
+        );
+        assert!(matches!(rx.try_recv(), Ok(AppEvent::InputFailed(_))));
+    }
+
+    #[test]
+    fn a_keyboard_failure_is_logged_and_quits() {
+        let backend = Backend::with_fixed(Vec::new(), Size::new(80, 10), Position::new(0, 0));
+        let mut terminal = Terminal::with_options(
+            backend,
+            TerminalOptions::default().viewport(Viewport::Inline(1)),
+        )
+        .unwrap();
+        let (tx, rx) = mpsc::channel(16);
+        tx.try_send(AppEvent::InputFailed("tty gone".into()))
+            .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        // On this thread, so that the log is captured; `run` returns: the application quits.
+        let logs = logging::capture(|| {
+            runtime
+                .block_on(run(&mut terminal, tx, rx, &DroppedLogs::default(), None))
+                .unwrap();
+        });
+        assert_eq!(logs, ["[ERROR] keyboard input failed (tty gone): quitting"]);
+    }
+
+    #[test]
+    fn output_kept_at_zero_width_is_bounded_and_the_loss_reported() {
+        let backend = Backend::with_fixed(Vec::new(), Size::new(0, 10), Position::new(0, 0));
+        let mut terminal = Terminal::with_options(
+            backend,
+            TerminalOptions::default().viewport(Viewport::Inline(1)),
+        )
+        .unwrap();
+        terminal.draw(|_| {}).unwrap();
+        let (tx, _rx) = mpsc::channel(16);
+        let mut app = App::new(tx);
+        for i in 0..app::MAX_KEPT_LINES + 30 {
+            app.output.push(Line::from(format!("[INFO] help {i}")));
+            queue_output(&mut terminal, &mut app);
+        }
+        assert_eq!(app.output.len(), app::MAX_KEPT_LINES);
+        assert_eq!(app.dropped_output, 30);
+        // Long lines: the byte bound applies too.
+        app.output.push(Line::from("x".repeat(app::MAX_KEPT_BYTES)));
+        queue_output(&mut terminal, &mut app);
+        assert_eq!(
+            app.output.len(),
+            1,
+            "only the newest line fits the byte bound"
+        );
+        let dropped = app.dropped_output;
+        assert_eq!(dropped, 30 + app::MAX_KEPT_LINES);
+        // A short line instead, so that the warning is not pushed out of the terminal's queue.
+        app.output = vec![Line::from("[INFO] last")];
+
+        terminal.backend_mut().set_fixed_size(Size::new(80, 10));
+        terminal.draw(|_| {}).unwrap();
+        queue_output(&mut terminal, &mut app);
+        terminal.draw(|_| {}).unwrap();
+        let written =
+            String::from_utf8(std::mem::take(terminal.backend_mut().writer_mut())).unwrap();
+        // The diff skips the blank cells: look for the words.
+        for word in ["[WARN]", &dropped.to_string(), "dropped", "columns"] {
+            assert!(written.contains(word), "{word} missing: {written:?}");
+        }
+        assert_eq!(app.dropped_output, 0);
     }
 
     #[tokio::test]

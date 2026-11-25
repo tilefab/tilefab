@@ -31,11 +31,9 @@
 use std::fmt;
 use std::io::{self, Write};
 
-use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::cursor::{Hide, MoveTo, RestorePosition, SavePosition, Show};
 use crossterm::queue;
-use crossterm::style::{
-    Attribute, Color as CtColor, Print, SetAttribute, SetBackgroundColor, SetForegroundColor,
-};
+use crossterm::style::{Color as CtColor, Print, SetBackgroundColor, SetForegroundColor};
 use crossterm::terminal::{
     BeginSynchronizedUpdate, Clear, ClearType as CtClearType, EndSynchronizedUpdate, ScrollDown,
     ScrollUp,
@@ -112,18 +110,42 @@ impl crossterm::Command for ResetScrollRegion {
     }
 }
 
-/// The modifiers in [`Modifier`] and the SGR attribute that enables each one.
-const ATTRIBUTES: [(Modifier, Attribute); 9] = [
-    (Modifier::BOLD, Attribute::Bold),
-    (Modifier::DIM, Attribute::Dim),
-    (Modifier::ITALIC, Attribute::Italic),
-    (Modifier::UNDERLINED, Attribute::Underlined),
-    (Modifier::SLOW_BLINK, Attribute::SlowBlink),
-    (Modifier::RAPID_BLINK, Attribute::RapidBlink),
-    (Modifier::REVERSED, Attribute::Reverse),
-    (Modifier::HIDDEN, Attribute::Hidden),
-    (Modifier::CROSSED_OUT, Attribute::CrossedOut),
+/// The modifiers in [`Modifier`] and the SGR code that enables each one.
+const ATTRIBUTES: [(Modifier, u8); 9] = [
+    (Modifier::BOLD, 1),
+    (Modifier::DIM, 2),
+    (Modifier::ITALIC, 3),
+    (Modifier::UNDERLINED, 4),
+    (Modifier::SLOW_BLINK, 5),
+    (Modifier::RAPID_BLINK, 6),
+    (Modifier::REVERSED, 7),
+    (Modifier::HIDDEN, 8),
+    (Modifier::CROSSED_OUT, 9),
 ];
+
+/// SGR code that resets every attribute and color.
+const SGR_RESET: u8 = 0;
+
+/// Select a graphic rendition: `ESC [ code m` (SGR), with one numeric code.
+///
+/// crossterm's `SetAttribute` writes the same sequence, but formats the code through a
+/// `String` (`Attribute::sgr`): a frame that changes a modifier would allocate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SetGraphicRendition(u8);
+
+impl crossterm::Command for SetGraphicRendition {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        // `ESC [` (CSI), the code, then `m`: “select graphic rendition”.
+        write!(f, "\x1b[{}m", self.0)
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> io::Result<()> {
+        Err(io::Error::other(
+            "SetGraphicRendition is only available through ANSI sequences",
+        ))
+    }
+}
 
 /// Convert a library color to a crossterm color.
 ///
@@ -192,6 +214,8 @@ enum Source {
 pub struct Backend<W: Write> {
     writer: W,
     source: Source,
+    /// A synchronized update was begun and not ended yet (see [`Backend::abort_sync`]).
+    in_sync: bool,
 }
 
 impl<W: Write> Backend<W> {
@@ -200,6 +224,7 @@ impl<W: Write> Backend<W> {
         Self {
             writer,
             source: Source::Terminal,
+            in_sync: false,
         }
     }
 
@@ -211,6 +236,7 @@ impl<W: Write> Backend<W> {
                 size,
                 cursor: Some(cursor),
             },
+            in_sync: false,
         }
     }
 
@@ -321,7 +347,7 @@ impl<W: Write> Backend<W> {
         }
 
         if pen != Pen::DEFAULT {
-            queue!(self.writer, SetAttribute(Attribute::Reset))?;
+            queue!(self.writer, SetGraphicRendition(SGR_RESET))?;
         }
         Ok(())
     }
@@ -331,13 +357,13 @@ impl<W: Write> Backend<W> {
         if cell.modifier != pen.modifier {
             // A modifier needs removing: reset fully, then start from the default style.
             if !(pen.modifier - cell.modifier).is_empty() {
-                queue!(self.writer, SetAttribute(Attribute::Reset))?;
+                queue!(self.writer, SetGraphicRendition(SGR_RESET))?;
                 *pen = Pen::DEFAULT;
             }
             // Only modifiers to add remain.
-            for (flag, attribute) in ATTRIBUTES {
+            for (flag, code) in ATTRIBUTES {
                 if cell.modifier.contains(flag) && !pen.modifier.contains(flag) {
-                    queue!(self.writer, SetAttribute(attribute))?;
+                    queue!(self.writer, SetGraphicRendition(code))?;
                 }
             }
             pen.modifier = cell.modifier;
@@ -359,6 +385,8 @@ impl<W: Write> Backend<W> {
     ///
     /// Returns an error if writing to the underlying stream fails.
     pub fn begin_sync(&mut self) -> io::Result<()> {
+        // Set first: even a partly written opening must be closed.
+        self.in_sync = true;
         queue!(self.writer, BeginSynchronizedUpdate)
     }
 
@@ -368,7 +396,27 @@ impl<W: Write> Backend<W> {
     ///
     /// Returns an error if writing to the underlying stream fails.
     pub fn end_sync(&mut self) -> io::Result<()> {
-        queue!(self.writer, EndSynchronizedUpdate)
+        queue!(self.writer, EndSynchronizedUpdate)?;
+        self.in_sync = false;
+        Ok(())
+    }
+
+    /// Close a frame interrupted by an error or a panic, on a best-effort basis (errors are
+    /// ignored): reset the scroll region, which an interrupted `scroll_region_up` may leave
+    /// set, then end the synchronized update, so that the terminal does not keep its display
+    /// frozen. `ESC[r` moves the cursor to the top-left corner: it is saved before (`ESC 7`)
+    /// and restored after (`ESC 8`). Nothing is written when no update is open.
+    pub fn abort_sync(&mut self) {
+        if std::mem::replace(&mut self.in_sync, false) {
+            let _ = queue!(
+                self.writer,
+                SavePosition,
+                ResetScrollRegion,
+                RestorePosition,
+                EndSynchronizedUpdate
+            );
+            let _ = self.writer.flush();
+        }
     }
 
     /// Hide the terminal cursor.
@@ -429,8 +477,10 @@ impl<W: Write> Backend<W> {
 
     /// Scroll the area `top..=bottom` upward by `n` rows (zero-based screen rows).
     ///
-    /// The first `n` rows enter scrollback **only if
-    /// `top` is 0**; otherwise they are lost. The last `n` rows of the region are
+    /// The first `n` rows enter scrollback **only in some terminals, and only if `top` is 0**
+    /// (xterm does it); many terminals (xterm.js in VS Code, iTerm2 by default…) delete them
+    /// in every case, as when `top` is not 0. To keep them, scroll the whole screen with line
+    /// feeds on its last row instead (`append_lines`). The last `n` rows of the region are
     /// cleared. Three sequences: set the region, `CSI n S`, restore the region. The cursor
     /// ends up at the top-left: reposition it.
     ///

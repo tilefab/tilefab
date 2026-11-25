@@ -210,7 +210,21 @@ pub struct LineEditor {
     completer: Option<Box<dyn Completer>>,
     /// `Esc` hid the hint; shown again after the next change of the line.
     hint_dismissed: bool,
+    /// The hint drawn by `render`, computed again only when the line or the history changed.
+    hint_cache: HintCache,
     mode: Mode,
+}
+
+/// The last hint computed for `render`: a frame that does not change the line asks nothing
+/// of the hinter, and allocates nothing.
+#[derive(Debug, Default)]
+struct HintCache {
+    /// The line the hint was computed for.
+    text: String,
+    /// The hint, if any.
+    hint: Option<String>,
+    /// False when the history or the hinter changed since.
+    valid: bool,
 }
 
 impl std::fmt::Debug for LineEditor {
@@ -243,6 +257,7 @@ impl LineEditor {
             hinter: Some(Box::new(HistoryHinter)),
             completer: None,
             hint_dismissed: false,
+            hint_cache: HintCache::default(),
             mode: Mode::Normal,
         }
     }
@@ -251,6 +266,7 @@ impl LineEditor {
     #[must_use]
     pub fn with_history(mut self, history: History) -> Self {
         self.history = history;
+        self.hint_cache.valid = false;
         self
     }
 
@@ -277,6 +293,7 @@ impl LineEditor {
     /// The history, to add entries or replace it (for instance with one loaded from a
     /// file, see [`History::with_file`]).
     pub fn history_mut(&mut self) -> &mut History {
+        self.hint_cache.valid = false;
         &mut self.history
     }
 
@@ -342,7 +359,13 @@ impl LineEditor {
 
     /// Replace the line with `value` (control characters removed, cut to the maximum
     /// length), cursor at the end. It is one undo step.
+    ///
+    /// It also ends what the previous keys had started: a search or the completion menu is
+    /// closed (the new value is kept, not the match nor the candidate), and a following
+    /// `YankPop` has no yank to replace.
     pub fn set_value(&mut self, value: &str) {
+        self.last = Last::Other;
+        self.mode = Mode::Normal;
         let before = self.snapshot();
         self.undo.close_group();
         self.buffer.set(value, usize::MAX);
@@ -381,7 +404,11 @@ impl LineEditor {
             return None;
         }
         let row = Rect::new(area.x, area.y, area.width, 1);
-        let hint = self.current_hint();
+        let hint = if self.refresh_hint() {
+            self.hint_cache.hint.as_deref()
+        } else {
+            None
+        };
         let (search_prompt, highlight) = match &self.mode {
             Mode::Search(search) => (
                 Some(Line::from(search.prompt())),
@@ -392,7 +419,7 @@ impl LineEditor {
         let view = LineView {
             text: self.buffer.value(),
             cursor: self.buffer.cursor(),
-            hint: hint.as_deref(),
+            hint,
             highlight,
         };
         let cursor = render::draw_line(
@@ -715,19 +742,39 @@ impl LineEditor {
         }
     }
 
+    /// Whether a hint may be shown now: hints enabled, cursor at the end of a non-empty line,
+    /// not dismissed with `Esc`, no search nor menu.
+    fn hint_allowed(&self) -> bool {
+        let text = self.buffer.value();
+        self.config.hints
+            && matches!(self.mode, Mode::Normal)
+            && !self.hint_dismissed
+            && !text.is_empty()
+            && self.buffer.cursor() == text.len()
+    }
+
+    /// Bring the hint cache up to date for `render`; false when no hint may be shown now.
+    fn refresh_hint(&mut self) -> bool {
+        if !self.hint_allowed() {
+            return false;
+        }
+        if !self.hint_cache.valid || self.hint_cache.text != self.buffer.value() {
+            self.hint_cache.hint = self.current_hint();
+            self.hint_cache.text.clear();
+            self.hint_cache.text.push_str(self.buffer.value());
+            self.hint_cache.valid = true;
+        }
+        true
+    }
+
     /// The hint to show after the line, if any: hints enabled, cursor at the end of a
     /// non-empty line, not dismissed with `Esc`. Sanitized and cut so that accepting it
     /// keeps the line within its maximum length.
     fn current_hint(&self) -> Option<String> {
-        let text = self.buffer.value();
-        if !self.config.hints
-            || !matches!(self.mode, Mode::Normal)
-            || self.hint_dismissed
-            || text.is_empty()
-            || self.buffer.cursor() != text.len()
-        {
+        if !self.hint_allowed() {
             return None;
         }
+        let text = self.buffer.value();
         let hint = self.hinter.as_ref()?.hint(text, &self.history)?;
         let hint = buffer::sanitize(&hint);
         let room = self.config.max_len.saturating_sub(text.len());
@@ -893,7 +940,7 @@ impl LineEditor {
         let start = range.start;
         let before = self.snapshot();
         self.buffer.replace(range, &text);
-        let index = index % self.kill_ring.len();
+        // No modulo here: `KillRing::get` wraps the index around the ring.
         self.last = Last::Yank {
             range: (start, self.buffer.cursor()),
             index,
@@ -966,6 +1013,7 @@ impl LineEditor {
         let line = self.buffer.value().to_string();
         if !(self.config.history_ignore_space && line.starts_with(' ')) {
             self.history.add(&line);
+            self.hint_cache.valid = false;
         }
         self.buffer.clear();
         self.undo.clear();
@@ -977,7 +1025,6 @@ impl LineEditor {
 
 #[cfg(test)]
 // The command tables of the tests read better without the `Command::` prefix.
-#[allow(clippy::enum_glob_use)]
 mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
@@ -1905,9 +1952,147 @@ mod tests {
     }
 
     #[test]
+    fn set_value_after_a_yank_forgets_the_yanked_range() {
+        let mut e = editor("|");
+        e.set_value("hello");
+        let _ = e.execute(Command::KillLine);
+        let _ = e.execute(Command::Yank);
+        e.set_value("x");
+        // The yank no longer applies to the line: nothing to replace.
+        assert_eq!(e.execute(Command::YankPop), EditorEvent::Ignored);
+        assert_eq!(shown(&e), "x|");
+    }
+
+    #[test]
+    fn set_value_closes_the_menu_and_keeps_the_new_value() {
+        let mut e = completing(&["status", "stop"], "st");
+        let _ = e.execute(Command::CompletePrevious);
+        assert!(menu_open(&e));
+        e.set_value("list");
+        assert!(!menu_open(&e));
+        let _ = e.execute(Command::Complete);
+        assert_eq!(e.value(), "list");
+    }
+
+    #[test]
+    fn set_value_leaves_the_search_and_keeps_the_new_value() {
+        let mut e = searching(&["start alpha", "list"], "", "st");
+        e.set_value("help");
+        assert_eq!(search_prompt(&e), None);
+        assert_eq!(shown(&e), "help|");
+        type_text(&mut e, "!");
+        assert_eq!(e.value(), "help!");
+    }
+
+    #[test]
     fn the_public_cursor_counts_graphemes() {
         let e = editor("🤦🏼\u{200d}♂\u{fe0f}e\u{301}|");
         assert_eq!(e.cursor(), 2);
+    }
+
+    #[test]
+    fn the_accessors_reach_the_editor_itself() {
+        let config = EditorConfig::default().max_len(12);
+        let mut e = LineEditor::new(config.clone());
+        assert_eq!(e.config().max_len, 12);
+        e.history_mut().add("from outside");
+        assert_eq!(e.history().get(0), Some("from outside"));
+        // A key bound through `keymap_mut` runs its command.
+        let key =
+            crate::KeyBinding::new(crossterm::event::KeyCode::F(2), KeyModifiers::NONE).unwrap();
+        e.keymap_mut().bind(key, Command::InsertChar('!'));
+        let _ = e.handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::F(2),
+            KeyModifiers::NONE,
+        ));
+        assert_eq!(e.value(), "!");
+        let debug = format!("{e:?}");
+        assert!(
+            debug.contains("LineEditor") && debug.contains("\"!\""),
+            "{debug}"
+        );
+    }
+
+    #[test]
+    fn a_history_write_error_is_reported_once_by_the_editor() {
+        let dir =
+            std::env::temp_dir().join(format!("tilefab-editor-history-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("history");
+        let (history, error) = History::with_file(&path, 10);
+        assert!(error.is_none());
+        // The file becomes a directory: the next append fails.
+        std::fs::create_dir_all(&path).unwrap();
+        let mut e = LineEditor::new(EditorConfig::default()).with_history(history);
+        type_text(&mut e, "ls");
+        let _ = e.execute(Command::Submit);
+        assert!(e.take_history_error().is_some());
+        assert!(e.take_history_error().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_search_query_refuses_control_characters_and_stays_within_max_len() {
+        let mut history = History::new(10);
+        history.add("abc");
+        let mut e = LineEditor::new(EditorConfig::default().max_len(3)).with_history(history);
+        let _ = e.execute(Command::ReverseSearch);
+        assert_eq!(
+            e.execute(Command::InsertChar('\u{7}')),
+            EditorEvent::Ignored
+        );
+        for c in ['a', 'b', 'c'] {
+            assert_ne!(e.execute(Command::InsertChar(c)), EditorEvent::Ignored);
+        }
+        // 3 bytes, the maximum: a fourth is refused.
+        assert_eq!(e.execute(Command::InsertChar('d')), EditorEvent::Ignored);
+        assert_eq!(search_prompt(&e).as_deref(), Some("(search) abc: "));
+    }
+
+    #[test]
+    fn next_and_previous_match_need_a_query() {
+        let mut e = searching(&["start alpha"], "", "");
+        assert_eq!(e.execute(Command::ReverseSearch), EditorEvent::Ignored);
+        assert_eq!(e.execute(Command::ForwardSearch), EditorEvent::Ignored);
+        assert_eq!(search_prompt(&e).as_deref(), Some("(search) : "));
+    }
+
+    #[test]
+    fn unfiltered_history_goes_back_down_to_newer_entries() {
+        let mut e = with_history(&["one", "two", "three"]);
+        let _ = e.execute(Command::HistoryPreviousAll);
+        let _ = e.execute(Command::HistoryPreviousAll);
+        assert_eq!(e.value(), "two");
+        let _ = e.execute(Command::HistoryNextAll);
+        assert_eq!(e.value(), "three");
+    }
+
+    #[test]
+    fn transpose_words_uses_the_word_after_the_cursor_when_there_is_one() {
+        assert_eq!(
+            run("one |two three", Command::TransposeWords).1,
+            "two one| three"
+        );
+    }
+
+    /// The hint drawn after the line, as `render` shows it.
+    fn drawn_hint(e: &mut LineEditor) -> String {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 30, 1));
+        let _ = e.render(buf.area(), &mut buf, &Line::from(""));
+        buf.lines()[0].trim_end()[e.value().len()..].to_string()
+    }
+
+    #[test]
+    fn the_drawn_hint_follows_the_line_and_the_history() {
+        let mut e = with_history(&["start alpha"]);
+        type_text(&mut e, "st");
+        assert_eq!(drawn_hint(&mut e), "art alpha");
+        // The same line, a new history entry: computed again.
+        e.history_mut().add("stop now");
+        assert_eq!(drawn_hint(&mut e), "op now");
+        // Another line: computed again.
+        type_text(&mut e, "a");
+        assert_eq!(drawn_hint(&mut e), "rt alpha");
     }
 
     /// Random text mixing ASCII, combining marks, wide characters, emoji and controls.
@@ -1966,6 +2151,22 @@ mod tests {
         ]
     }
 
+    /// A call on the editor: a command, or one of the methods that replace or insert text.
+    #[derive(Debug, Clone)]
+    enum Action {
+        Run(Command),
+        SetValue(String),
+        Paste(String),
+    }
+
+    fn action_strategy() -> impl Strategy<Value = Action> {
+        prop_oneof![
+            8 => command_strategy().prop_map(Action::Run),
+            1 => text_strategy().prop_map(Action::SetValue),
+            1 => text_strategy().prop_map(Action::Paste),
+        ]
+    }
+
     /// Check the invariants of the line.
     fn assert_invariants(e: &LineEditor, max_len: usize) {
         let text = e.value();
@@ -1995,6 +2196,28 @@ mod tests {
             assert_invariants(&e, max_len);
             for command in commands {
                 let _ = e.execute(command);
+                assert_invariants(&e, max_len);
+            }
+        }
+
+        #[test]
+        fn invariants_hold_after_set_value_and_paste_calls(
+            text in text_strategy(),
+            actions in prop::collection::vec(action_strategy(), 0..40),
+            max_len in 1usize..40,
+        ) {
+            let mut e = LineEditor::new(EditorConfig { max_len, ..EditorConfig::default() });
+            e.set_value(&text);
+            for action in actions {
+                match action {
+                    Action::Run(command) => {
+                        let _ = e.execute(command);
+                    }
+                    Action::SetValue(text) => e.set_value(&text),
+                    Action::Paste(text) => {
+                        let _ = e.paste(&text);
+                    }
+                }
                 assert_invariants(&e, max_len);
             }
         }
