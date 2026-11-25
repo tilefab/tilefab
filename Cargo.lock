@@ -547,6 +547,7 @@ name = "tilefab-widget"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "stats_alloc",
  "tilefab-core",
  "unicode-segmentation",
 ]

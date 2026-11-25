@@ -17,23 +17,13 @@ mod builder;
 mod clear;
 mod composition;
 mod entry;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the drawing, not written yet")
-)]
 mod format;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the drawing, not written yet")
-)]
 mod layout;
 mod list;
 mod paragraph;
 mod progress;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the drawing, not written yet")
-)]
+#[cfg(test)]
+mod tests;
 mod time;
 mod widget;
 
