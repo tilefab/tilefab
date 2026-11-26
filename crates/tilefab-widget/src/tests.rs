@@ -208,6 +208,18 @@ fn value_is_right_justified_as_a_whole() {
 }
 
 #[test]
+fn the_default_value_size_fits_hundreds_with_a_decimal() {
+    // `V/` alone: 5 columns per number, so `123.4` is not cut to `1…`.
+    let mut widget = LineWidget::builder("V/").build().unwrap();
+    widget.set_value(123.4, None, Some((500.0, None))).unwrap();
+    assert_row(&widget, 11, "123.4/500.0");
+    widget
+        .set_value(12_345.0, None, Some((99_999.0, None)))
+        .unwrap();
+    assert_row(&widget, 11, "12345/99999");
+}
+
+#[test]
 fn keyword_alignment() {
     let build = |alignment| {
         LineWidget::builder("K B0")

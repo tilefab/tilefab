@@ -753,7 +753,8 @@ mod tests {
         }
         assert_eq!(width("P"), 4);
         assert_eq!(width("P9"), 10);
-        assert_eq!(width("V"), 2);
+        assert_eq!(width("V"), 5);
+        assert_eq!(width("V/"), 11);
         assert_eq!(width("V5"), 5);
         assert_eq!(width("V5U"), 8);
         assert_eq!(width("V5/"), 11);

@@ -14,7 +14,7 @@
 //! | `K` | keyword index, 1 digit | 0–9 | dynamic |
 //! | `N` | name index, 1–2 digits | 0–99 | dynamic |
 //! | `L` | size, 1–3 digits | 2–999 | elastic |
-//! | `V` | size, 1–3 digits, then optional `U`, then optional `/` | 1–999 | size 2 |
+//! | `V` | size, 1–3 digits, then optional `U`, then optional `/` | 1–999 | size 5 |
 //! | `I` | size, 1–3 digits | 2–999 | elastic |
 //!
 //! `D`, `T`, `P`, `K`, `L`, `V` and `I` are unique; `S`, `B` and `N` can be repeated.
@@ -27,8 +27,8 @@ use crate::builder::BuildError;
 
 /// Default size of `P` (`P` alone is `P3`).
 pub(crate) const DEFAULT_PROGRESS_SIZE: u8 = 3;
-/// Default size of `V` (`V` alone is `V2`).
-pub(crate) const DEFAULT_VALUE_SIZE: u16 = 2;
+/// Default size of `V` (`V` alone is `V5`: `500.0`, or up to `99999` without decimals).
+pub(crate) const DEFAULT_VALUE_SIZE: u16 = 5;
 
 /// One component of a composition, with its parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -332,14 +332,14 @@ mod tests {
     fn the_eight_forms_of_v() {
         let value = |size, unit, total| Token::Value { size, unit, total };
         let cases = [
-            ("V", value(2, false, false)),
+            ("V", value(5, false, false)),
             ("V5", value(5, false, false)),
-            ("VU", value(2, true, false)),
+            ("VU", value(5, true, false)),
             ("V5U", value(5, true, false)),
             ("V5/", value(5, false, true)),
             ("V5U/", value(5, true, true)),
-            ("VU/", value(2, true, true)),
-            ("V/", value(2, false, true)),
+            ("VU/", value(5, true, true)),
+            ("V/", value(5, false, true)),
             ("V1", value(1, false, false)),
             ("V999", value(999, false, false)),
         ];
