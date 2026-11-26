@@ -21,6 +21,20 @@ break the API).
   `Paragraph`, `Wrap`, `ProgressBar` and `ProgressLine` are removed, from `tilefab-widget` and
   from the re-exports of `tilefab` (feature `widget`), which now re-exports the new types.
 
+### Added
+
+- `tilefab-widget`: the look of the illustration is chosen in the composition, with a letter
+  after its size: `B` bar `█`/`░`, `L` line `━`/`─`, `D` dots `●`/`·` (`IL`, `I20D`). A look
+  keeps the styles given to `.illustration(done, todo)` and replaces its characters; without a
+  look, `I` uses those characters, or else the bar (`.illustration` is no longer required).
+- `tilefab-widget`: any token of a composition may end with a *paint*, laid over the styles
+  given to the builder for that component only: `.`, then a foreground color, `:` and a
+  background color, `*` for bold, each optional (`B1.R`, `N.W+:B*`, `P.*`). Colors `K` `R` `G`
+  `Y` `B` `M` `C` `W`, followed by `+` for the bright version; `I` and `V` take a second part
+  after `/`, for their todo cells and their units (`I20L.G/K+`, `V5U/.W/K+`). It is resolved at
+  construction: drawing stays allocation-free. New `TokenProblem::BadPaint` and
+  `TokenProblem::SecondPart`.
+
 ### Changed
 
 - `ScrollMode::Screen`, the new default of the inline terminal: it makes room for the inserted
@@ -71,6 +85,9 @@ break the API).
   `LineWidget` (name, local time, state symbol, progress bar and percentage, current step).
 - The tasks share a name column, as wide as the longest running name (at most 20 columns, a
   longer name ends with `…`), so that their bars line up.
+- The compositions of `compose` and `start` take the look of the bar and the paints; `help`
+  lists them. The barriers `B0`–`B9` are space `[` `]` `-` `:` `|` `(` `)` `{` `}`, and the
+  default composition is `N B0 B1 T2 B2 B0 S B0 I B0 P B0 L`.
 - `TILEFAB_SCROLL_MODE=screen|region|fallback` chooses the scroll mode of the inline terminal.
 - On Windows, closing the console, logging off or shutting down quit through the clean-up.
 
