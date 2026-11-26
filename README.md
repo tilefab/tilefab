@@ -46,7 +46,7 @@ Keys typed while it waits are echoed by the terminal but not read: stdin is the 
 | `start <name>` | starts a simulated task (3 to 10 s), drawn with the current composition; the name is the rest of the line |
 | `start <name> "<composition>"` | the same, with a composition for this task only (the current one does not change) |
 | `list` | logs the running tasks and their progress |
-| `compose "<composition>"` | sets the composition of the tasks started next, for instance `compose "N B2 P B2 L"`; the composition goes between double quotes. An invalid composition is an ERROR and the current one is kept; a composition wider than 80 columns gives a WARN. Without an argument, shows the current composition. Each task keeps the composition it started with |
+| `compose "<composition>"` | sets the composition of the tasks started next, for instance `compose "N B0 P B0 L"`; the composition goes between double quotes. An invalid composition is an ERROR and the current one is kept; a composition wider than 80 columns gives a WARN. Without an argument, shows the current composition. Each task keeps the composition it started with |
 | `help` | logs the list of commands |
 | `quit`, `exit`, Ctrl+C, Ctrl+D (on an empty line) | clean exit |
 
@@ -54,7 +54,7 @@ At most 5 simultaneous tasks (`MAX_TASKS`); beyond that, the command is refused 
 
 ## Task lines
 
-Each task is drawn on one row by a `LineWidget` of `tilefab-widget`, composed from a short string: one letter per component, separated by one space. The default composition is `N B2 B0 T2 B1 B2 S B2 I B2 P B2 L`:
+Each task is drawn on one row by a `LineWidget` of `tilefab-widget`, composed from a short string: one letter per component, separated by one space. The default composition is `N B0 B1 T2 B2 B0 S B0 I B0 P B0 L`:
 
 ```
 alpha [05.123] 🟠 ████████████████░░░░░░░░░░░░░░  52% compiling
@@ -63,7 +63,7 @@ alpha [05.123] 🟠 ████████████████░░░░
 | Token | Component in the demo |
 |---|---|
 | `S`, `S0`–`S3` | state symbol: 🔴 waiting, 🟠 running, 🟡 almost done, 🟢 done (`S` follows the task, `S2` is always 🟡) |
-| `B0`–`B9` | barriers: `[`, `]`, space, ` - `, `: `, ` \| `, `(`, `)`, `/`, two spaces |
+| `B0`–`B9` | barriers: space, `[`, `]`, `-`, `:`, `\|`, `(`, `)`, `{`, `}` |
 | `D0`–`D2` | date: `YYYY-MM-DD`, `YY-MM-DD`, `MM-DD` (local time, from the `jiff` crate) |
 | `T0`–`T5` | time: `HH:MM:SS.SSS`, `MM:SS.SSS`, `SS.SSS`, `HH:MM:SS`, `HH:MM`, `MM:SS` |
 | `P`, `P3`–`P9` | progress, rounded down, with `n − 4` decimals from `P5` (`P5`: ` 99.9%`) |

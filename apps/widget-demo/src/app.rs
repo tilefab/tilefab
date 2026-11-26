@@ -111,7 +111,7 @@ impl std::fmt::Display for QuoteError {
     }
 }
 
-/// The text between the double quotes of `text` (`"B0 T2 L"` → `B0 T2 L`).
+/// The text between the double quotes of `text` (`"B1 T2 L"` → `B1 T2 L`).
 fn quoted(text: &str) -> Result<&str, QuoteError> {
     let inner = text.strip_prefix('"').ok_or(QuoteError::MissingOpening)?;
     let (composition, after) = inner.split_once('"').ok_or(QuoteError::MissingClosing)?;
@@ -123,7 +123,7 @@ fn quoted(text: &str) -> Result<&str, QuoteError> {
 }
 
 /// The argument of `start`: a name, optionally followed by a composition between double
-/// quotes (`alpha "N B2 P"`), for this task only.
+/// quotes (`alpha "N B0 P"`), for this task only.
 fn start_arguments(rest: &str) -> (&str, Option<&str>) {
     if let Some(without_last) = rest.strip_suffix('"')
         && let Some(open) = without_last.rfind('"')
@@ -261,8 +261,8 @@ impl Command {
 
 /// The letters of a composition, for `help`.
 const COMPOSITION_HELP: &[&str] = &[
-    "composition: tokens separated by one space, for instance \"N B2 B0 T2 B1 B2 S B2 I B2 P B2 L\"",
-    "  S symbol of the state, B0-B9 [ ] space - : | ( ) / and two spaces,",
+    "composition: tokens separated by one space, for instance \"N B0 B1 T2 B2 B0 S B0 I B0 P B0 L\"",
+    "  S symbol of the state, B0-B9 space [ ] - : | ( ) { },",
     "  D0-D2 date, T0-T5 time, P[3-9] progress, K state keyword, N task name,",
     "  L[size] log, V[size][U][/] downloaded size, I[size][B|L|D] progress bar,",
     "  B bar █░ (default), L line ━─, D dots ●·",
@@ -711,8 +711,8 @@ mod tests {
     #[test]
     fn parse_start_with_its_own_composition() {
         assert_eq!(
-            Command::parse("start my task \"N B2 P\""),
-            Ok(start("my task", Some("N B2 P")))
+            Command::parse("start my task \"N B0 P\""),
+            Ok(start("my task", Some("N B0 P")))
         );
         assert_eq!(Command::parse("start a \"\""), Ok(start("a", Some(""))));
         // Only a trailing quoted part is a composition.
@@ -731,8 +731,8 @@ mod tests {
     fn parse_compose() {
         assert_eq!(Command::parse("compose"), Ok(Command::Compose(None)));
         assert_eq!(
-            Command::parse("compose \"B0 T2 B1 B2 S B2 L\""),
-            Ok(Command::Compose(Some("B0 T2 B1 B2 S B2 L".into())))
+            Command::parse("compose \"B1 T2 B2 B0 S B0 L\""),
+            Ok(Command::Compose(Some("B1 T2 B2 B0 S B0 L".into())))
         );
         // The spacing inside the quotes is kept: the widget checks it.
         assert_eq!(
@@ -757,12 +757,12 @@ mod tests {
     async fn each_task_keeps_the_composition_current_when_it_started() {
         let mut app = new_app();
         app.submit("start one");
-        app.submit("compose \"N B2 P\"");
+        app.submit("compose \"N B0 P\"");
         app.submit("start two");
         app.submit("start three \"P N\"");
         app.submit("compose \"L\"");
         let compositions: Vec<&str> = app.tasks.iter().map(|t| t.composition.as_str()).collect();
-        assert_eq!(compositions, [line::DEFAULT_COMPOSITION, "N B2 P", "P N"]);
+        assert_eq!(compositions, [line::DEFAULT_COMPOSITION, "N B0 P", "P N"]);
         assert_eq!(app.composition, "L");
         // A rejected composition keeps the current one.
         let logs = logging::capture(|| app.submit("compose \"L X\""));
@@ -1054,8 +1054,8 @@ mod tests {
                 "  start <name> [\"<composition>\"]",
                 "  compose [\"<composition>\"]",
                 "  quit, exit (or Ctrl+C, Ctrl+D to quit)",
-                "  composition: tokens separated by one space, for instance \"N B2 B0 T2 B1 B2 S B2 I B2 P B2 L\"",
-                "    S symbol of the state, B0-B9 [ ] space - : | ( ) / and two spaces,",
+                "  composition: tokens separated by one space, for instance \"N B0 B1 T2 B2 B0 S B0 I B0 P B0 L\"",
+                "    S symbol of the state, B0-B9 space [ ] - : | ( ) { },",
                 "    D0-D2 date, T0-T5 time, P[3-9] progress, K state keyword, N task name,",
                 "    L[size] log, V[size][U][/] downloaded size, I[size][B|L|D] progress bar,",
                 "    B bar █░ (default), L line ━─, D dots ●·",
