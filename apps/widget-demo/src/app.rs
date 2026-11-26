@@ -111,7 +111,7 @@ impl std::fmt::Display for QuoteError {
     }
 }
 
-/// The text between the double quotes of `text` (`"B1 T2 L"` → `B1 T2 L`).
+/// The text between the double quotes of `text` (`"B4 T2 L"` → `B4 T2 L`).
 fn quoted(text: &str) -> Result<&str, QuoteError> {
     let inner = text.strip_prefix('"').ok_or(QuoteError::MissingOpening)?;
     let (composition, after) = inner.split_once('"').ok_or(QuoteError::MissingClosing)?;
@@ -261,12 +261,12 @@ impl Command {
 
 /// The letters of a composition, for `help`.
 const COMPOSITION_HELP: &[&str] = &[
-    "composition: tokens separated by one space, for instance \"N B0 B1 T2 B2 B0 S B0 I B0 P B0 L\"",
-    "  S symbol of the state, B0-B9 space [ ] - : | ( ) { },",
+    "composition: tokens separated by one space, for instance \"N B0 B4 T2 B5 B0 S B0 I B0 P B0 L\"",
+    "  S symbol of the state, B0-B9 space - : | [ ] ( ) { },",
     "  D0-D2 date, T0-T5 time, P[3-9] progress, K state keyword, N task name,",
     "  L[size] log, V[size][U][/] downloaded size, I[size][B|L|D] progress bar,",
     "  B bar █░ (default), L line ━─, D dots ●·",
-    "  paint after any token: .[color][:background][*bold], for instance B1.K+ or N.W+:B*,",
+    "  paint after any token: .[color][:background][*bold], for instance B4.K+ or N.W+:B*,",
     "  colors K R G Y B M C W (+ bright); I and V take a second part: I.G/K+, V5U/.W/K+",
 ];
 
@@ -733,8 +733,8 @@ mod tests {
     fn parse_compose() {
         assert_eq!(Command::parse("compose"), Ok(Command::Compose(None)));
         assert_eq!(
-            Command::parse("compose \"B1 T2 B2 B0 S B0 L\""),
-            Ok(Command::Compose(Some("B1 T2 B2 B0 S B0 L".into())))
+            Command::parse("compose \"B4 T2 B5 B0 S B0 L\""),
+            Ok(Command::Compose(Some("B4 T2 B5 B0 S B0 L".into())))
         );
         // The spacing inside the quotes is kept: the widget checks it.
         assert_eq!(
@@ -1056,12 +1056,12 @@ mod tests {
                 "  start <name> [\"<composition>\"]",
                 "  compose [\"<composition>\"]",
                 "  quit, exit (or Ctrl+C, Ctrl+D to quit)",
-                "  composition: tokens separated by one space, for instance \"N B0 B1 T2 B2 B0 S B0 I B0 P B0 L\"",
-                "    S symbol of the state, B0-B9 space [ ] - : | ( ) { },",
+                "  composition: tokens separated by one space, for instance \"N B0 B4 T2 B5 B0 S B0 I B0 P B0 L\"",
+                "    S symbol of the state, B0-B9 space - : | [ ] ( ) { },",
                 "    D0-D2 date, T0-T5 time, P[3-9] progress, K state keyword, N task name,",
                 "    L[size] log, V[size][U][/] downloaded size, I[size][B|L|D] progress bar,",
                 "    B bar █░ (default), L line ━─, D dots ●·",
-                "    paint after any token: .[color][:background][*bold], for instance B1.K+ or N.W+:B*,",
+                "    paint after any token: .[color][:background][*bold], for instance B4.K+ or N.W+:B*,",
                 "    colors K R G Y B M C W (+ bright); I and V take a second part: I.G/K+, V5U/.W/K+",
                 "[INFO] no task running",
                 "[ERROR] usage: start <name> [\"<composition>\"]",

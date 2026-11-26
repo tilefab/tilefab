@@ -8,7 +8,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 /// The composition current at startup: `alpha [05.123] 🟠 ██████████░░░░░░  45% compiling`.
 /// The name comes first: the pty checks of `tools/` find the task rows by their name.
-pub const DEFAULT_COMPOSITION: &str = "N B0 B1 T2 B2 B0 S B0 I B0 P B0 L";
+pub const DEFAULT_COMPOSITION: &str = "N B0 B4 T2 B5 B0 S B0 I B0 P B0 L";
 
 /// Widest name column: a longer name is cut, with `…`.
 pub const MAX_NAME_COLUMN: usize = 20;
@@ -61,7 +61,7 @@ fn keywords() -> [Entry; 4] {
 
 /// `B0` to `B9`.
 fn barriers() -> [Entry; 10] {
-    [" ", "[", "]", "-", ":", "|", "(", ")", "{", "}"].map(|text| Entry::styled(text, gray()))
+    [" ", "-", ":", "|", "[", "]", "(", ")", "{", "}"].map(|text| Entry::styled(text, gray()))
 }
 
 /// `U`: the units of `V`.
@@ -248,7 +248,7 @@ mod tests {
 
     #[test]
     fn a_composition_can_use_every_list() {
-        let composition = "B1 D0 B2 B0 T3 B3 S B4 B0 K B5 N B6 V5U/ B7 I10 P5 B8 B9 L";
+        let composition = "B4 D0 B5 B0 T3 B1 S B2 B0 K B3 N B6 V5U/ B7 I10 P5 B8 B9 L";
         assert!(check(composition).is_ok(), "{:?}", check(composition));
         let mut widget = build(composition, "beta", 4).unwrap();
         widget.set_time(now()).unwrap();
@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn a_paint_is_laid_over_the_styles_of_the_demo() {
         // The example of the README.
-        let composition = "N.W+:B* B0 B1.Y T2.Y B2.Y B0 IL.G/K+ B0 P.G* B0 L.C";
+        let composition = "N.W+:B* B0 B4.Y T2.Y B5.Y B0 IL.G/K+ B0 P.G* B0 L.C";
         assert_eq!(check(composition), Ok(Vec::new()));
         let mut widget = build(composition, "build", 5).unwrap();
         update(&mut widget, composition, 0.5, "linking", 10.0);
