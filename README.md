@@ -11,7 +11,7 @@ Small demo CLI tool in Rust, built on a home-made mini TUI library (a Cargo work
 [INFO] task "alpha" started (duration 6.3 s)
 [INFO] task "beta" started (duration 5.5 s)
 alpha [05.123] 🟠 ███████████████░░░░░░░░░░░░░░░░░░░░░░░░░░  36% compiling
-beta [05.123] 🟠 ██████████████████░░░░░░░░░░░░░░░░░░░░░░░  42% compiling
+beta  [05.123] 🟠 ██████████████████░░░░░░░░░░░░░░░░░░░░░░░  42% compiling
 
 > start gam█
 ```
@@ -73,7 +73,7 @@ alpha [05.123] 🟠 ████████████████░░░░
 | `V`, `V5U/` | simulated download: size of each number, `U` for the unit (MB), `/` for the total (`12.5MB/40.0MB`) |
 | `I`, `I20`, `IL`, `I20D` | progress bar: elastic (10 columns at least when there is room), or a fixed size; then its look: `B` bar `█░` (default), `L` line `━─`, `D` dots `●·`, `S` squares `■□`, `O` circles `●○`, `R` diamonds `◆◇`, `G` segments `▰▱`, `H` shaded blocks `▓░`, `V` vertical bars `┃│`, `A` ASCII `#-`, `C` chevrons `>·` |
 
-Any token can end with a **paint**, which changes the style of that component only: `.`, then a text color, `:` and a background color, `*` for bold, each optional. Colors: `K` black, `R` red, `G` green, `Y` yellow, `B` blue, `M` magenta, `C` cyan, `W` white, followed by `+` for the bright version. `I` and `V` take a second part after `/`, for the rest of the bar and for the units. The paint is laid over the demo's own styles (gray barriers and time, cyan bar, bold name and percentage): what it does not set is kept. For instance:
+Any token can end with a **paint**, which changes the style of that component only: `.`, then at least one of, in this order: a text color, `:` and a background color, `*` for bold. Colors: `K` black, `R` red, `G` green, `Y` yellow, `B` blue, `M` magenta, `C` cyan, `W` white, followed by `+` for the bright version. `I` and `V` take a second part after `/`, for the rest of the bar and for the units. The paint is laid over the demo's own styles (gray barriers and time, cyan bar, bold name and percentage): what it does not set is kept. For instance:
 
 ```
 start build "N.W+:B* B0 B4.Y T2.Y B5.Y B0 IL.G/K+ B0 P.G* B0 L.C"

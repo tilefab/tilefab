@@ -15,15 +15,16 @@
 //! | `N` | name index, 1–2 digits | 0–99 | dynamic |
 //! | `L` | size, 1–3 digits | 2–999 | elastic |
 //! | `V` | size, 1–3 digits, then optional `U`, then optional `/` | 1–999 | size 5 |
-//! | `I` | size, 1–3 digits, then optional look `B`, `L` or `D` | 2–999 | elastic |
+//! | `I` | size, 1–3 digits, then optional look letter (see below) | 2–999 | elastic |
 //!
 //! `D`, `T`, `P`, `K`, `L`, `V` and `I` are unique; `S`, `B` and `N` can be repeated.
 //!
 //! A token may end with a *paint*, which changes the style of that component only: a `.`, then
-//! a foreground color, `:` and a background color, `*` for bold, each optional (`B1.R`,
-//! `N.W+:B*`, `P.*`). Colors: `K` black, `R` red, `G` green, `Y` yellow, `B` blue, `M` magenta,
-//! `C` cyan, `W` white, `+` for the bright version. `I` and `V` take a second part after `/`,
-//! for their todo cells and their units (`I.C/K+`).
+//! at least one of, in this order, a foreground color, `:` and a background color, `*` for
+//! bold (`B1.R`, `N.W+:B*`, `P.*`, `L.:B`; `S.` and `S.*R` are refused). Colors: `K` black,
+//! `R` red, `G` green, `Y` yellow, `B` blue, `M` magenta, `C` cyan, `W` white, `+` for the
+//! bright version. `I` and `V` take a second part after `/`, with the same rule, for their
+//! todo cells and their units (`I.C/K+`, `V5U/.W/K+`); other components take only one.
 //!
 //! The look of `I` picks its two characters: `B` (bar) `█`/`░`, `L` (line) `━`/`─`, `D` (dots)
 //! `●`/`·`, `S` (squares) `■`/`□`, `O` (circles) `●`/`○`, `R` (diamonds) `◆`/`◇`, `G`
@@ -308,8 +309,11 @@ fn write_part(f: &mut fmt::Formatter<'_>, style: Style) -> fmt::Result {
 ///
 /// # Errors
 ///
-/// A [`BuildError`] for an empty composition, bad spacing, an unknown token, a bad parameter
-/// (missing, out of range, too many digits, `P1` / `P2`) or a unique component repeated.
+/// A [`BuildError`] for an empty composition, bad spacing, an unknown token, a bad
+/// parameter (missing, out of range, too many digits, `P1` / `P2`, an unknown look as in
+/// `IX`), a bad paint ([`TokenProblem::BadPaint`]: empty part, unknown color, wrong order,
+/// more than two parts), a second part of paint on a component other than `I` and `V`
+/// ([`TokenProblem::SecondPart`]) or a unique component repeated.
 pub(crate) fn parse(composition: &str) -> Result<Vec<Painted>, BuildError> {
     if composition.is_empty() {
         return Err(BuildError::EmptyComposition);
