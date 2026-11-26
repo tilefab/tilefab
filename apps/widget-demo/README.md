@@ -8,20 +8,27 @@ line. The viewport grows and shrinks as tasks start and finish.
 > start beta
 [INFO] task "alpha" started (duration 6.3 s)
 [INFO] task "beta" started (duration 5.5 s)
-alpha      ████████████░░░░░░░░░░░░░░░░░░░░░  36%
-beta       ██████████████░░░░░░░░░░░░░░░░░░░  42%
+alpha [05.123] 🟠 ███████████████░░░░░░░░░░░░░░░░░░░░░░░░░░  36% compiling
+beta  [05.123] 🟠 ██████████████████░░░░░░░░░░░░░░░░░░░░░░░  42% compiling
 
 > start gam█
 ```
 
 ## Install and run
 
+Not on crates.io yet: install it from a clone of the repository.
+
 ```sh
-cargo install widget-demo
+git clone https://github.com/tilefab/tilefab
+cd tilefab
+cargo install --path apps/widget-demo
 widget-demo
 ```
 
-Type `help` at the prompt for the list of commands (`start <name>`, `list`, `select <widget> [variant] [bordered]`, `quit`…).
+Commands: `start <name> ["<composition>"]`, `list`, `compose ["<composition>"]`, `help`, `quit`
+(or `exit`, Ctrl+C, Ctrl+D). A composition describes the row of a task, for instance
+`"N B0 B4 T2 B5 B0 S B0 I B0 P B0 L"`; `help` lists its tokens, the looks of the bar and the
+paints.
 Outside a terminal (stdin or stdout redirected) it reads commands line by line from stdin:
 `printf 'start a\nstart b\n' | widget-demo`.
 

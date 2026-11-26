@@ -66,8 +66,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## See it running
 
-- The demo application (tasks drawn with line widgets above a prompt):
-  `cargo install widget-demo`, then run `widget-demo`.
+- The demo application (tasks drawn with line widgets above a prompt), not on crates.io yet:
+  `cargo install --path apps/widget-demo` from a `git clone`, then run `widget-demo`.
 - The examples of the repository, after a `git clone`:
   `cargo run --example inline` (variable-height viewport) and `cargo run --example fullscreen`.
 

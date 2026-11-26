@@ -104,9 +104,10 @@ break the API).
 - `TILEFAB_SCROLL_MODE=screen|region|fallback` chooses the scroll mode of the inline terminal.
 - On Windows, closing the console, logging off or shutting down quit through the clean-up.
 
-## [0.1.0]
+## 0.1.0 (not released yet)
 
-First release on crates.io.
+Planned first release on crates.io: nothing is published yet (`publish = false` in
+`Cargo.toml`), and there is no tag.
 
 - `tilefab`: façade crate, features `widget` and `input` (on by default); re-exports
   `crossterm`, a public dependency (key events).
@@ -118,7 +119,6 @@ First release on crates.io.
 - Widgets (`tilefab-widget`): `Block`, `Paragraph`, `ProgressBar`, `ProgressLine`, `List`, `Clear`.
 - Line editor (`tilefab-input`): `LineEditor` with keymap, kill ring, undo / redo, history,
   hints, completion and bracketed paste.
-- Demo application `widget-demo` (`cargo install widget-demo`).
+- Demo application `widget-demo` (`cargo install --path apps/widget-demo` until it is published).
 
-[Unreleased]: https://github.com/tilefab/tilefab/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/tilefab/tilefab/releases/tag/v0.1.0
+[Unreleased]: https://github.com/tilefab/tilefab/commits/main
