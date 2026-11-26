@@ -54,7 +54,7 @@ At most 5 simultaneous tasks (`MAX_TASKS`); beyond that, the command is refused 
 
 ## Task lines
 
-Each task is drawn on one row by a `LineWidget` of `tilefab-widget`, composed from a short string: one letter per component, separated by one space. The default composition is `N B0 B1 T2 B2 B0 S B0 I B0 P B0 L`:
+Each task is drawn on one row by a `LineWidget` of `tilefab-widget`, composed from a short string: one letter per component, separated by one space. The default composition is `N B0 B4 T2 B5 B0 S B0 I B0 P B0 L`:
 
 ```
 alpha [05.123] 🟠 ████████████████░░░░░░░░░░░░░░  52% compiling
@@ -63,7 +63,7 @@ alpha [05.123] 🟠 ████████████████░░░░
 | Token | Component in the demo |
 |---|---|
 | `S`, `S0`–`S3` | state symbol: 🔴 waiting, 🟠 running, 🟡 almost done, 🟢 done (`S` follows the task, `S2` is always 🟡) |
-| `B0`–`B9` | barriers: space, `[`, `]`, `-`, `:`, `\|`, `(`, `)`, `{`, `}` |
+| `B0`–`B9` | barriers: space, `-`, `:`, `\|`, `[`, `]`, `(`, `)`, `{`, `}` |
 | `D0`–`D2` | date: `YYYY-MM-DD`, `YY-MM-DD`, `MM-DD` (local time, from the `jiff` crate) |
 | `T0`–`T5` | time: `HH:MM:SS.SSS`, `MM:SS.SSS`, `SS.SSS`, `HH:MM:SS`, `HH:MM`, `MM:SS` |
 | `P`, `P3`–`P9` | progress, rounded down, with `n − 4` decimals from `P5` (`P5`: ` 99.9%`) |
@@ -76,7 +76,7 @@ alpha [05.123] 🟠 ████████████████░░░░
 Any token can end with a **paint**, which changes the style of that component only: `.`, then a text color, `:` and a background color, `*` for bold, each optional. Colors: `K` black, `R` red, `G` green, `Y` yellow, `B` blue, `M` magenta, `C` cyan, `W` white, followed by `+` for the bright version. `I` and `V` take a second part after `/`, for the rest of the bar and for the units. The paint is laid over the demo's own styles (gray barriers and time, cyan bar, bold name and percentage): what it does not set is kept. For instance:
 
 ```
-start build "N.W+:B* B0 B1.Y T2.Y B2.Y B0 IL.G/K+ B0 P.G* B0 L.C"
+start build "N.W+:B* B0 B4.Y T2.Y B5.Y B0 IL.G/K+ B0 P.G* B0 L.C"
 ```
 
 shows a bright white bold name on blue, a yellow time between yellow brackets, a green line on a gray track, a bold green percentage and a cyan step.

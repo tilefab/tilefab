@@ -86,8 +86,8 @@ break the API).
 - The tasks share a name column, as wide as the longest running name (at most 20 columns, a
   longer name ends with `…`), so that their bars line up.
 - The compositions of `compose` and `start` take the look of the bar and the paints; `help`
-  lists them. The barriers `B0`–`B9` are space `[` `]` `-` `:` `|` `(` `)` `{` `}`, and the
-  default composition is `N B0 B1 T2 B2 B0 S B0 I B0 P B0 L`.
+  lists them. The barriers `B0`–`B9` are space `-` `:` `|` `[` `]` `(` `)` `{` `}`, and the
+  default composition is `N B0 B4 T2 B5 B0 S B0 I B0 P B0 L`.
 - `TILEFAB_SCROLL_MODE=screen|region|fallback` chooses the scroll mode of the inline terminal.
 - On Windows, closing the console, logging off or shutting down quit through the clean-up.
 
