@@ -8,7 +8,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 /// The composition current at startup: `alpha [05.123] 🟠 ██████████░░░░░░  45% compiling`.
 /// The name comes first: the pty checks of `tools/` find the task rows by their name.
-pub const DEFAULT_COMPOSITION: &str = "N B2 B0 T2 B1 B2 S B2 I B2 P B2 L";
+pub const DEFAULT_COMPOSITION: &str = "N B0 B1 T2 B2 B0 S B0 I B0 P B0 L";
 
 /// Widest name column: a longer name is cut, with `…`.
 pub const MAX_NAME_COLUMN: usize = 20;
@@ -61,7 +61,7 @@ fn keywords() -> [Entry; 4] {
 
 /// `B0` to `B9`.
 fn barriers() -> [Entry; 10] {
-    ["[", "]", " ", " - ", ": ", " | ", "(", ")", "/", "  "].map(|text| Entry::styled(text, gray()))
+    [" ", "[", "]", "-", ":", "|", "(", ")", "{", "}"].map(|text| Entry::styled(text, gray()))
 }
 
 /// `U`: the units of `V`.
@@ -248,13 +248,17 @@ mod tests {
 
     #[test]
     fn a_composition_can_use_every_list() {
-        let composition = "D0 B2 T3 B3 S B4 K B5 N B6 V5U/ B7 I10 P5 B9 L";
+        let composition = "B1 D0 B2 B0 T3 B3 S B4 B0 K B5 N B6 V5U/ B7 I10 P5 B8 B9 L";
         assert!(check(composition).is_ok(), "{:?}", check(composition));
         let mut widget = build(composition, "beta", 4).unwrap();
         widget.set_time(now()).unwrap();
         update(&mut widget, composition, 1.0, "done", 50.0);
         let text = row(&widget, 120);
+        assert!(text.starts_with('['), "{text}");
         assert!(text.contains("🟢: done"), "{text}");
+        assert!(text.contains("|beta("), "{text}");
+        assert!(text.contains("50.0MB/50.0MB)"), "{text}");
+        assert!(text.contains("100.0%{}done"), "{text}");
         assert!(text.contains("50.0MB/50.0MB"), "{text}");
     }
 

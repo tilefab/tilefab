@@ -208,6 +208,18 @@ fn value_is_right_justified_as_a_whole() {
 }
 
 #[test]
+fn the_default_value_size_fits_hundreds_with_a_decimal() {
+    // `V/` alone: 5 columns per number, so `123.4` is not cut to `1…`.
+    let mut widget = LineWidget::builder("V/").build().unwrap();
+    widget.set_value(123.4, None, Some((500.0, None))).unwrap();
+    assert_row(&widget, 11, "123.4/500.0");
+    widget
+        .set_value(12_345.0, None, Some((99_999.0, None)))
+        .unwrap();
+    assert_row(&widget, 11, "12345/99999");
+}
+
+#[test]
 fn keyword_alignment() {
     let build = |alignment| {
         LineWidget::builder("K B0")
@@ -410,4 +422,46 @@ fn a_draw_is_the_same_after_an_invalid_setter_call() {
             .is_err()
     );
     assert_eq!(draw(&widget, 60), before);
+}
+
+#[test]
+fn the_look_of_the_illustration_picks_its_characters() {
+    let cases = [
+        ("I4", "██░░"),
+        ("I4B", "██░░"),
+        ("I4L", "━━──"),
+        ("I4D", "●●··"),
+    ];
+    for (composition, expected) in cases {
+        let mut widget = LineWidget::builder(composition).build().unwrap();
+        widget.set_progress(50.0).unwrap();
+        assert_row(&widget, 4, expected);
+    }
+    // Without a look, the characters given to the builder.
+    let mut given = LineWidget::builder("I4")
+        .illustration(Entry::new("#"), Entry::new("."))
+        .build()
+        .unwrap();
+    given.set_progress(50.0).unwrap();
+    assert_row(&given, 4, "##..");
+}
+
+#[test]
+fn a_look_keeps_the_styles_given_to_the_builder() {
+    let red = Style::new().fg(Color::Red);
+    let green = Style::new().fg(Color::Green);
+    let mut widget = LineWidget::builder("I2D")
+        .illustration(Entry::styled("#", red), Entry::styled(".", green))
+        .build()
+        .unwrap();
+    widget.set_progress(50.0).unwrap();
+    let buf = draw(&widget, 2);
+    assert_eq!(
+        (buf.get(0, 0).symbol(), buf.get(0, 0).fg),
+        ("●", Color::Red)
+    );
+    assert_eq!(
+        (buf.get(1, 0).symbol(), buf.get(1, 0).fg),
+        ("·", Color::Green)
+    );
 }

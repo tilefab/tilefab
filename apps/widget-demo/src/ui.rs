@@ -114,8 +114,8 @@ mod tests {
 
     #[test]
     fn each_task_gets_a_row_above_the_prompt_drawn_with_its_composition() {
-        let mut app = app_with_tasks(2, "N B2 P");
-        app.tasks[1] = Task::new(9, "t1".into(), "P B2 N", 2).unwrap();
+        let mut app = app_with_tasks(2, "N B0 P");
+        app.tasks[1] = Task::new(9, "t1".into(), "P B0 N", 2).unwrap();
         app.handle_event(AppEvent::Progress {
             id: 1,
             ratio: 0.5,
@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn a_narrow_terminal_shrinks_then_drops_components() {
-        let mut app = app_with_tasks(1, "N B2 P B2 L");
+        let mut app = app_with_tasks(1, "N B0 P B0 L");
         app.handle_event(AppEvent::Progress {
             id: 1,
             ratio: 0.25,

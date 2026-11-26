@@ -5,7 +5,7 @@ use std::fmt;
 use tilefab_core::{Alignment, Style};
 
 pub use crate::composition::TokenProblem;
-use crate::composition::{self, Token};
+use crate::composition::{self, Look, Token};
 use crate::entry::{Entry, EntryProblem};
 use crate::widget::{Component, Description, LineWidget, Measured, Slot, Styles, ValueShape};
 
@@ -89,7 +89,10 @@ impl LineWidgetBuilder {
     }
 
     /// The two characters of `I`, each exactly 1 column wide: `done` fills the part of the
-    /// width reached by the progress, `todo` the rest.
+    /// width reached by the progress, `todo` the rest. Without them, `I` is a bar (`█`/`░`).
+    ///
+    /// When the composition gives a look to `I` (`IB`, `IL`, `ID`), the look picks the
+    /// characters and only the styles of `done` and `todo` are kept.
     pub fn illustration(mut self, done: Entry, todo: Entry) -> Self {
         self.illustration = Some((done, todo));
         self
@@ -199,8 +202,12 @@ impl LineWidgetBuilder {
             ..Description::default()
         };
         let components = resolve(&tokens, &mut description)?;
-        if uses(|t| matches!(t, Token::Illustration(_))) {
-            description.illustration = Some(checked_illustration(self.illustration)?);
+        let look = tokens.iter().find_map(|t| match t {
+            Token::Illustration { look, .. } => Some(*look),
+            _ => None,
+        });
+        if let Some(look) = look {
+            description.illustration = Some(checked_illustration(look, self.illustration)?);
         }
         if self.value_decimals > MAX_VALUE_DECIMALS {
             return Err(BuildError::DecimalsOutOfRange {
@@ -263,7 +270,7 @@ fn resolve(tokens: &[Token], description: &mut Description) -> Result<Vec<Compon
             Token::Time(format) => Component::Time(format),
             Token::Progress(size) => Component::Progress(size),
             Token::Log(size) => Component::Log(size),
-            Token::Illustration(size) => Component::Illustration(size),
+            Token::Illustration { size, .. } => Component::Illustration(size),
             Token::Value { size, unit, total } => {
                 description.value = Some(ValueShape { size, unit, total });
                 Component::Value
@@ -273,11 +280,25 @@ fn resolve(tokens: &[Token], description: &mut Description) -> Result<Vec<Compon
     Ok(components)
 }
 
-/// Check the two characters of `I`: present, each exactly 1 column wide.
+/// The two characters of `I`: those of its `look` with the styles of the builder's, else the
+/// builder's, else the bar; each exactly 1 column wide.
 fn checked_illustration(
+    look: Option<Look>,
     illustration: Option<(Entry, Entry)>,
 ) -> Result<(Entry, Entry), BuildError> {
-    let (done, todo) = illustration.ok_or(BuildError::MissingIllustration)?;
+    let (done, todo) = match (look, illustration) {
+        (None, Some(given)) => given,
+        (look, given) => {
+            let (done, todo) = look.unwrap_or(Look::Bar).characters();
+            let (done_style, todo_style) = given
+                .map(|(done, todo)| (done.style(), todo.style()))
+                .unwrap_or_default();
+            (
+                Entry::styled(done, done_style),
+                Entry::styled(todo, todo_style),
+            )
+        }
+    };
     for (index, entry) in [&done, &todo].into_iter().enumerate() {
         entry
             .check_one_column()
@@ -423,8 +444,6 @@ pub enum BuildError {
         /// What is wrong with it.
         problem: EntryProblem,
     },
-    /// The composition has an `I` but no [`LineWidgetBuilder::illustration`] was given.
-    MissingIllustration,
     /// [`LineWidgetBuilder::value_decimals`] above 9.
     DecimalsOutOfRange {
         /// The number of decimals given.
@@ -471,9 +490,6 @@ impl fmt::Display for BuildError {
                 index,
                 problem,
             } => write!(f, "entry {index} of the {list} list {problem}"),
-            Self::MissingIllustration => {
-                f.write_str("the composition has an I but no illustration characters were given")
-            }
             Self::DecimalsOutOfRange { decimals } => {
                 write!(f, "{decimals} value decimals: at most {MAX_VALUE_DECIMALS}")
             }
@@ -693,10 +709,6 @@ mod tests {
     #[test]
     fn illustration_characters() {
         assert_eq!(
-            error(LineWidget::builder("I")),
-            BuildError::MissingIllustration
-        );
-        assert_eq!(
             error(LineWidget::builder("I5").illustration(Entry::new("█"), Entry::new("界"))),
             BuildError::InvalidEntry {
                 list: ListName::Illustration,
@@ -753,7 +765,8 @@ mod tests {
         }
         assert_eq!(width("P"), 4);
         assert_eq!(width("P9"), 10);
-        assert_eq!(width("V"), 2);
+        assert_eq!(width("V"), 5);
+        assert_eq!(width("V/"), 11);
         assert_eq!(width("V5"), 5);
         assert_eq!(width("V5U"), 8);
         assert_eq!(width("V5/"), 11);

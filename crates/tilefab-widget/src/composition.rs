@@ -14,10 +14,13 @@
 //! | `K` | keyword index, 1 digit | 0–9 | dynamic |
 //! | `N` | name index, 1–2 digits | 0–99 | dynamic |
 //! | `L` | size, 1–3 digits | 2–999 | elastic |
-//! | `V` | size, 1–3 digits, then optional `U`, then optional `/` | 1–999 | size 2 |
-//! | `I` | size, 1–3 digits | 2–999 | elastic |
+//! | `V` | size, 1–3 digits, then optional `U`, then optional `/` | 1–999 | size 5 |
+//! | `I` | size, 1–3 digits, then optional look `B`, `L` or `D` | 2–999 | elastic |
 //!
 //! `D`, `T`, `P`, `K`, `L`, `V` and `I` are unique; `S`, `B` and `N` can be repeated.
+//!
+//! The look of `I` picks its two characters: `B` (bar) `█`/`░`, `L` (line) `━`/`─`, `D` (dot)
+//! `●`/`·`. Without a look, `I` uses the characters given to the builder, or else the bar.
 //!
 //! [`LineWidget`]: crate::LineWidget
 
@@ -27,8 +30,8 @@ use crate::builder::BuildError;
 
 /// Default size of `P` (`P` alone is `P3`).
 pub(crate) const DEFAULT_PROGRESS_SIZE: u8 = 3;
-/// Default size of `V` (`V` alone is `V2`).
-pub(crate) const DEFAULT_VALUE_SIZE: u16 = 2;
+/// Default size of `V` (`V` alone is `V5`: `500.0`, or up to `99999` without decimals).
+pub(crate) const DEFAULT_VALUE_SIZE: u16 = 5;
 
 /// One component of a composition, with its parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,8 +61,54 @@ pub(crate) enum Token {
         /// `/`: the value is followed by a total.
         total: bool,
     },
-    /// `I`: the illustration; `Some(size)` (2–999) for a fixed size, `None` when elastic.
-    Illustration(Option<u16>),
+    /// `I`: the illustration.
+    Illustration {
+        /// `Some(size)` (2–999) for a fixed size, `None` when elastic.
+        size: Option<u16>,
+        /// The look given after the size, if any.
+        look: Option<Look>,
+    },
+}
+
+/// The look of `I`, the letter after its size: a pair of characters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Look {
+    /// `B`: `█` / `░`.
+    Bar,
+    /// `L`: `━` / `─`.
+    Line,
+    /// `D`: `●` / `·`.
+    Dot,
+}
+
+impl Look {
+    /// The look written `letter` after the size of `I`.
+    fn from_letter(letter: char) -> Option<Self> {
+        match letter {
+            'B' => Some(Self::Bar),
+            'L' => Some(Self::Line),
+            'D' => Some(Self::Dot),
+            _ => None,
+        }
+    }
+
+    /// The letter of the look.
+    pub(crate) fn letter(self) -> char {
+        match self {
+            Self::Bar => 'B',
+            Self::Line => 'L',
+            Self::Dot => 'D',
+        }
+    }
+
+    /// The *done* and *todo* characters of the look, each 1 column wide.
+    pub(crate) fn characters(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Bar => ("█", "░"),
+            Self::Line => ("━", "─"),
+            Self::Dot => ("●", "·"),
+        }
+    }
 }
 
 impl Token {
@@ -75,7 +124,7 @@ impl Token {
             Self::Name(_) => 'N',
             Self::Log(_) => 'L',
             Self::Value { .. } => 'V',
-            Self::Illustration(_) => 'I',
+            Self::Illustration { .. } => 'I',
         }
     }
 
@@ -98,9 +147,17 @@ impl fmt::Display for Token {
             Self::Barrier(n) | Self::Date(n) | Self::Time(n) | Self::Progress(n) => {
                 write!(f, "{n}")?;
             }
-            Self::Log(size) | Self::Illustration(size) => {
+            Self::Log(size) => {
                 if let Some(size) = size {
                     write!(f, "{size}")?;
+                }
+            }
+            Self::Illustration { size, look } => {
+                if let Some(size) = size {
+                    write!(f, "{size}")?;
+                }
+                if let Some(look) = look {
+                    write!(f, "{}", look.letter())?;
                 }
             }
             Self::Value { size, unit, total } => {
@@ -207,7 +264,7 @@ fn parse_token(text: &str) -> Result<Token, TokenProblem> {
             Some(size) => Ok(Token::Progress(narrow(size))),
         },
         'L' => optional(rest, 3, 2, 999).map(Token::Log),
-        'I' => optional(rest, 3, 2, 999).map(Token::Illustration),
+        'I' => parse_illustration(rest),
         'V' => parse_value(rest),
         _ => Err(TokenProblem::UnknownComponent),
     }
@@ -251,6 +308,18 @@ fn number(digits: &str, max_digits: usize, min: u16, max: u16) -> Result<u16, To
     } else {
         Err(TokenProblem::OutOfRange)
     }
+}
+
+/// The parameter of `I`: optional size, then optional look.
+fn parse_illustration(rest: &str) -> Result<Token, TokenProblem> {
+    let look = rest.chars().next_back().and_then(Look::from_letter);
+    let rest = if look.is_some() {
+        &rest[..rest.len() - 1]
+    } else {
+        rest
+    };
+    let size = optional(rest, 3, 2, 999)?;
+    Ok(Token::Illustration { size, look })
 }
 
 /// The parameter of `V`: optional size, then optional `U`, then optional `/`.
@@ -297,6 +366,7 @@ mod tests {
 
     #[test]
     fn every_row_of_the_grammar() {
+        let illustration = |size, look| Token::Illustration { size, look };
         let cases = [
             ("S", Token::Symbol(None)),
             ("S0", Token::Symbol(Some(0))),
@@ -319,9 +389,15 @@ mod tests {
             ("L", Token::Log(None)),
             ("L2", Token::Log(Some(2))),
             ("L999", Token::Log(Some(999))),
-            ("I", Token::Illustration(None)),
-            ("I2", Token::Illustration(Some(2))),
-            ("I999", Token::Illustration(Some(999))),
+            ("I", illustration(None, None)),
+            ("I2", illustration(Some(2), None)),
+            ("I999", illustration(Some(999), None)),
+            ("IB", illustration(None, Some(Look::Bar))),
+            ("IL", illustration(None, Some(Look::Line))),
+            ("ID", illustration(None, Some(Look::Dot))),
+            ("I20B", illustration(Some(20), Some(Look::Bar))),
+            ("I2L", illustration(Some(2), Some(Look::Line))),
+            ("I999D", illustration(Some(999), Some(Look::Dot))),
         ];
         for (text, token) in cases {
             assert_eq!(parse(text).unwrap(), [token], "{text}");
@@ -332,14 +408,14 @@ mod tests {
     fn the_eight_forms_of_v() {
         let value = |size, unit, total| Token::Value { size, unit, total };
         let cases = [
-            ("V", value(2, false, false)),
+            ("V", value(5, false, false)),
             ("V5", value(5, false, false)),
-            ("VU", value(2, true, false)),
+            ("VU", value(5, true, false)),
             ("V5U", value(5, true, false)),
             ("V5/", value(5, false, true)),
             ("V5U/", value(5, true, true)),
-            ("VU/", value(2, true, true)),
-            ("V/", value(2, false, true)),
+            ("VU/", value(5, true, true)),
+            ("V/", value(5, false, true)),
             ("V1", value(1, false, false)),
             ("V999", value(999, false, false)),
         ];
@@ -387,7 +463,9 @@ mod tests {
 
     #[test]
     fn bad_parameters() {
-        for text in ["SX", "B-1", "L+5", "VU5", "V/U", "V5//", "VUU", "N1a", "P½"] {
+        for text in [
+            "SX", "B-1", "L+5", "VU5", "V/U", "V5//", "VUU", "N1a", "P½", "IX", "IBL", "IB2", "I2b",
+        ] {
             assert_eq!(bad(text), TokenProblem::BadParameter, "{text}");
         }
     }
@@ -403,7 +481,9 @@ mod tests {
 
     #[test]
     fn out_of_range() {
-        for text in ["D3", "T6", "P0", "L0", "L1", "I0", "I1", "V0", "V000U"] {
+        for text in [
+            "D3", "T6", "P0", "L0", "L1", "I0", "I1", "I1D", "V0", "V000U",
+        ] {
             assert_eq!(bad(text), TokenProblem::OutOfRange, "{text}");
         }
     }
@@ -456,7 +536,15 @@ mod tests {
             proptest::option::of(2..=999u16).prop_map(Token::Log),
             (1..=999u16, any::<bool>(), any::<bool>())
                 .prop_map(|(size, unit, total)| Token::Value { size, unit, total }),
-            proptest::option::of(2..=999u16).prop_map(Token::Illustration),
+            (
+                proptest::option::of(2..=999u16),
+                proptest::option::of(prop_oneof![
+                    Just(Look::Bar),
+                    Just(Look::Line),
+                    Just(Look::Dot)
+                ])
+            )
+                .prop_map(|(size, look)| Token::Illustration { size, look }),
         ]
     }
 
