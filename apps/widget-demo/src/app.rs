@@ -500,10 +500,17 @@ impl App {
         let capacity = self.editor.config().history_capacity;
         let (history, error) = History::with_file(path, capacity);
         if let Some(error) = error {
-            warn!(
-                "cannot use the history file {} ({error}): history kept in memory only",
-                path.display()
-            );
+            if history.file().is_some() {
+                warn!(
+                    "cannot rewrite the history file {} ({error}): lines are still appended to it",
+                    path.display()
+                );
+            } else {
+                warn!(
+                    "cannot use the history file {} ({error}): history kept in memory only",
+                    path.display()
+                );
+            }
         }
         *self.editor.history_mut() = history;
     }
