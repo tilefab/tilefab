@@ -71,7 +71,7 @@ alpha [05.123] 🟠 ████████████████░░░░
 | `N` | the task name |
 | `L`, `L40` | the current step of the task (`compiling`…): elastic, or a fixed size |
 | `V`, `V5U/` | simulated download: size of each number, `U` for the unit (MB), `/` for the total (`12.5MB/40.0MB`) |
-| `I`, `I20` | progress bar: elastic (10 columns at least when there is room), or a fixed size |
+| `I`, `I20`, `IL`, `I20D` | progress bar: elastic (10 columns at least when there is room), or a fixed size; then its look: `B` bar `█░` (default), `L` line `━─`, `D` dots `●·` |
 
 `D`, `T`, `P`, `K`, `L`, `V` and `I` appear at most once; `S`, `B` and `N` can be repeated. The line is laid out again at every frame, with the whole terminal width: the extra columns go to the elastic `L`, otherwise to the elastic `I`. When the window is too narrow, `L` and `I` shrink first (down to 2 columns, a cut text ends with `…`), then the names, then the last components are dropped; a barrier stays, which shows the line was cut. `help` lists the tokens.
 The hidden `panic` command triggers a deliberate panic, to check that the terminal is properly restored. It exists in debug builds only (`cargo build`, used by `tools/check_app.py`); in a release build, `panic` is an unknown command. The hidden `count <n>` command (debug builds too) writes `n` numbered log lines at once, to check that every line can be found again by scrolling up in the terminal window (scenario `tools/scenarios/scrollback.scn`).

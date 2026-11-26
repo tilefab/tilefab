@@ -264,7 +264,8 @@ const COMPOSITION_HELP: &[&str] = &[
     "composition: tokens separated by one space, for instance \"N B2 B0 T2 B1 B2 S B2 I B2 P B2 L\"",
     "  S symbol of the state, B0-B9 [ ] space - : | ( ) / and two spaces,",
     "  D0-D2 date, T0-T5 time, P[3-9] progress, K state keyword, N task name,",
-    "  L[size] log, V[size][U][/] downloaded size, I[size] progress bar",
+    "  L[size] log, V[size][U][/] downloaded size, I[size][B|L|D] progress bar,",
+    "  B bar █░ (default), L line ━─, D dots ●·",
 ];
 
 /// Completes the command name (the first word); nothing for the arguments.
@@ -1056,7 +1057,8 @@ mod tests {
                 "  composition: tokens separated by one space, for instance \"N B2 B0 T2 B1 B2 S B2 I B2 P B2 L\"",
                 "    S symbol of the state, B0-B9 [ ] space - : | ( ) / and two spaces,",
                 "    D0-D2 date, T0-T5 time, P[3-9] progress, K state keyword, N task name,",
-                "    L[size] log, V[size][U][/] downloaded size, I[size] progress bar",
+                "    L[size] log, V[size][U][/] downloaded size, I[size][B|L|D] progress bar,",
+                "    B bar █░ (default), L line ━─, D dots ●·",
                 "[INFO] no task running",
                 "[ERROR] usage: start <name> [\"<composition>\"]",
                 "[WARN] unknown command: \"foo\" (type help)",

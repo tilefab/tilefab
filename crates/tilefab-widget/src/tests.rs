@@ -423,3 +423,45 @@ fn a_draw_is_the_same_after_an_invalid_setter_call() {
     );
     assert_eq!(draw(&widget, 60), before);
 }
+
+#[test]
+fn the_look_of_the_illustration_picks_its_characters() {
+    let cases = [
+        ("I4", "██░░"),
+        ("I4B", "██░░"),
+        ("I4L", "━━──"),
+        ("I4D", "●●··"),
+    ];
+    for (composition, expected) in cases {
+        let mut widget = LineWidget::builder(composition).build().unwrap();
+        widget.set_progress(50.0).unwrap();
+        assert_row(&widget, 4, expected);
+    }
+    // Without a look, the characters given to the builder.
+    let mut given = LineWidget::builder("I4")
+        .illustration(Entry::new("#"), Entry::new("."))
+        .build()
+        .unwrap();
+    given.set_progress(50.0).unwrap();
+    assert_row(&given, 4, "##..");
+}
+
+#[test]
+fn a_look_keeps_the_styles_given_to_the_builder() {
+    let red = Style::new().fg(Color::Red);
+    let green = Style::new().fg(Color::Green);
+    let mut widget = LineWidget::builder("I2D")
+        .illustration(Entry::styled("#", red), Entry::styled(".", green))
+        .build()
+        .unwrap();
+    widget.set_progress(50.0).unwrap();
+    let buf = draw(&widget, 2);
+    assert_eq!(
+        (buf.get(0, 0).symbol(), buf.get(0, 0).fg),
+        ("●", Color::Red)
+    );
+    assert_eq!(
+        (buf.get(1, 0).symbol(), buf.get(1, 0).fg),
+        ("·", Color::Green)
+    );
+}
