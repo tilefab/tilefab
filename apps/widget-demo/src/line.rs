@@ -158,30 +158,23 @@ pub fn check(composition: &str) -> Result<Vec<Warning>, BuildError> {
     build(composition, "task", 4).map(|widget| widget.warnings().to_vec())
 }
 
-/// Whether the `V` of `composition` has a unit (`U`) and a total (`/`): `set_value` must
-/// match it exactly.
-fn value_shape(composition: &str) -> (bool, bool) {
-    composition
-        .split(' ')
-        .find(|token| token.starts_with('V'))
-        .map_or((false, false), |token| {
-            (token.contains('U'), token.contains('/'))
-        })
-}
-
 /// Show the progress of a task: `ratio` (0.0–1.0), its current `step`, and `done_mb` of
 /// `total_mb` downloaded.
-pub fn update(widget: &mut LineWidget, composition: &str, ratio: f64, step: &str, total_mb: f64) {
+pub fn update(widget: &mut LineWidget, ratio: f64, step: &str, total_mb: f64) {
     let state = State::at(ratio) as usize;
-    let (unit, total) = value_shape(composition);
-    let unit = unit.then_some(MEGABYTES);
-    let total = total.then_some((total_mb, unit));
     // Each setter fails only when the composition lacks its component (or has a fixed one):
     // nothing to show then.
     widget.set_progress(ratio * 100.0).ok();
     widget.set_symbol(0, state).ok();
     widget.set_keyword(state).ok();
-    widget.set_value(ratio * total_mb, unit, total).ok();
+    // The arguments follow the shape of `V` exactly (from the widget, not from the
+    // composition text, whose paint may contain `/`), so this cannot fail.
+    if let Some(shape) = widget.value_shape() {
+        let unit = shape.unit().then_some(MEGABYTES);
+        let total = shape.total().then_some((total_mb, unit));
+        let result = widget.set_value(ratio * total_mb, unit, total);
+        debug_assert!(result.is_ok(), "set_value refused its shape: {result:?}");
+    }
     widget.set_log(step);
 }
 
@@ -220,7 +213,7 @@ mod tests {
     fn the_default_composition_shows_the_task() {
         let mut widget = build(DEFAULT_COMPOSITION, "alpha", 5).unwrap();
         assert_eq!(widget.warnings(), []);
-        update(&mut widget, DEFAULT_COMPOSITION, 0.45, "compiling", 10.0);
+        update(&mut widget, 0.45, "compiling", 10.0);
         let text = row(&widget, 60);
         assert!(text.starts_with("alpha [00.000] 🟠 █"), "{text}");
         assert!(text.ends_with("░  45% compiling"), "{text}");
@@ -252,7 +245,7 @@ mod tests {
         assert!(check(composition).is_ok(), "{:?}", check(composition));
         let mut widget = build(composition, "beta", 4).unwrap();
         widget.set_time(now()).unwrap();
-        update(&mut widget, composition, 1.0, "done", 50.0);
+        update(&mut widget, 1.0, "done", 50.0);
         let text = row(&widget, 120);
         assert!(text.starts_with('['), "{text}");
         assert!(text.contains("🟢: done"), "{text}");
@@ -264,9 +257,10 @@ mod tests {
 
     #[test]
     fn values_follow_the_shape_of_v() {
-        for composition in ["V5", "V5U", "V5/", "V5U/"] {
+        // A paint may contain `/` too: it is not a total.
+        for composition in ["V5", "V5U", "V5/", "V5U/", "V5U.W/K+", "V.R/G", "V5/.G/K+"] {
             let mut widget = build(composition, "t", 1).unwrap();
-            update(&mut widget, composition, 0.5, "", 20.0);
+            update(&mut widget, 0.5, "", 20.0);
             assert!(
                 row(&widget, 20).trim_start().starts_with("10.0"),
                 "{composition}"
@@ -286,7 +280,7 @@ mod tests {
         let composition = "N.W+:B* B0 B4.Y T2.Y B5.Y B0 IL.G/K+ B0 P.G* B0 L.C";
         assert_eq!(check(composition), Ok(Vec::new()));
         let mut widget = build(composition, "build", 5).unwrap();
-        update(&mut widget, composition, 0.5, "linking", 10.0);
+        update(&mut widget, 0.5, "linking", 10.0);
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 1));
         widget.render(buf.area(), &mut buf);
         let name = buf.get(0, 0);

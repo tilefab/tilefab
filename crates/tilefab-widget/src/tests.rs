@@ -208,6 +208,27 @@ fn value_is_right_justified_as_a_whole() {
 }
 
 #[test]
+fn the_value_shape_ignores_the_paint() {
+    let shape = |composition: &str| {
+        let widget = LineWidget::builder(composition)
+            .barriers(entries(&["|"]))
+            .units(entries(&["MB"]))
+            .build()
+            .unwrap();
+        widget
+            .value_shape()
+            .map(|shape| (shape.size(), shape.unit(), shape.total()))
+    };
+    assert_eq!(shape("B0"), None);
+    assert_eq!(shape("V3"), Some((3, false, false)));
+    assert_eq!(shape("V5U/"), Some((5, true, true)));
+    // The `/` of a paint separates its two parts: it is not a total.
+    assert_eq!(shape("V5U.W/K+"), Some((5, true, false)));
+    assert_eq!(shape("V.R/G"), Some((5, false, false)));
+    assert_eq!(shape("V4/.G/K+"), Some((4, false, true)));
+}
+
+#[test]
 fn the_default_value_size_fits_hundreds_with_a_decimal() {
     // `V/` alone: 5 columns per number, so `123.4` is not cut to `1…`.
     let mut widget = LineWidget::builder("V/").build().unwrap();
