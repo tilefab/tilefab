@@ -68,24 +68,37 @@ impl History {
     /// directory gets mode `0o700`, and the file is private to the user: created with mode
     /// `0o600`, and an existing file readable by others is changed to `0o600`.
     ///
-    /// The second value is the load error, if any: the history then works in memory only.
+    /// The second value is the error, if any. After an error of the load, the history works
+    /// in memory only. After an error of the rewrite (the file was read, but the temporary
+    /// file could not be written or renamed: read-only directory, full disk…), the lines are
+    /// still appended to the file, which keeps its size until a later rewrite succeeds.
+    /// [`History::file`] tells the two apart.
     pub fn with_file(path: impl Into<PathBuf>, capacity: usize) -> (Self, Option<io::Error>) {
         let path = path.into();
         let mut history = Self::new(capacity);
         match load(&path, capacity, MAX_LOAD_BYTES) {
             Ok(loaded) => {
                 history.entries = loaded.entries.into();
+                let mut error = None;
                 if loaded.lines > capacity.saturating_mul(2) || loaded.truncated {
                     match rewrite(&path, history.iter(), loaded.len, capacity) {
                         Ok(entries) => history.entries = entries.into(),
-                        Err(error) => return (history, Some(error)),
+                        // Appending needs only the file, which was just read.
+                        Err(rewrite_error) => error = Some(rewrite_error),
                     }
                 }
                 history.file = Some(path);
-                (history, None)
+                (history, error)
             }
             Err(error) => (history, Some(error)),
         }
+    }
+
+    /// The file each recorded line is appended to, `None` when the history is in memory
+    /// only (no file, an error of the load or of an append).
+    #[must_use]
+    pub fn file(&self) -> Option<&Path> {
+        self.file.as_deref()
     }
 
     /// The last error writing the history file, once: after it, the history is kept in
@@ -672,5 +685,42 @@ mod tests {
         } else {
             assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_rewrite_keeps_appending_to_the_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new();
+        let locked = dir.0.join("locked");
+        fs::create_dir(&locked).unwrap();
+        let path = locked.join("history");
+        // 6 lines, capacity 2: more than twice, so rewritten; but no temporary file can be
+        // created in a read-only directory, while the file itself stays writable.
+        fs::write(&path, "a\nb\nc\nd\ne\nf\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).unwrap();
+        let (mut history, error) = History::with_file(&path, 2);
+        // As root, permissions stop nothing: the rewrite succeeds.
+        let root = error.is_none();
+        history.add("g");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(history.file(), Some(path.as_path()));
+        assert_eq!(history.iter().collect::<Vec<_>>(), ["f", "g"]);
+        let text = fs::read_to_string(&path).unwrap();
+        if root {
+            assert_eq!(text, "e\nf\ng\n");
+        } else {
+            assert_eq!(error.unwrap().kind(), io::ErrorKind::PermissionDenied);
+            assert_eq!(text, "a\nb\nc\nd\ne\nf\ng\n");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_load_leaves_no_file() {
+        let (history, error) = History::with_file("/dev/zero", 10);
+        assert!(error.is_some());
+        assert_eq!(history.file(), None);
     }
 }

@@ -104,8 +104,31 @@ where
         event: &Event<'_>,
     ) -> fmt::Result {
         write!(writer, "{}", level_prefix(*event.metadata().level()))?;
-        ctx.field_format().format_fields(writer.by_ref(), event)?;
+        // Through `Escaping`: `tracing-subscriber` escapes ESC, BEL, BS, FF, DEL and C1, but
+        // not `\r`, `\t` or the other C0 characters, which an unknown command read on stdin
+        // may hold (`x\r[INFO] …` would overwrite its own line on a terminal).
+        let mut escaping = Escaping(writer.by_ref());
+        ctx.field_format()
+            .format_fields(Writer::new(&mut escaping), event)?;
         writeln!(writer)
+    }
+}
+
+/// Writes through to its inner writer, with every control character but the line feed (a
+/// message may span several lines, such as `help`) escaped as `\xNN`, like
+/// [`format_line`].
+struct Escaping<W>(W);
+
+impl<W: fmt::Write> fmt::Write for Escaping<W> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let mut rest = s;
+        while let Some(at) = rest.find(|c: char| c.is_control() && c != '\n') {
+            self.0.write_str(&rest[..at])?;
+            let c = rest[at..].chars().next().unwrap_or_default();
+            write!(self.0, "\\x{:02x}", u32::from(c))?;
+            rest = &rest[at + c.len_utf8()..];
+        }
+        self.0.write_str(rest)
     }
 }
 
@@ -348,12 +371,12 @@ mod tests {
         assert_eq!(lines, ["[WARN] attention n=3"]);
     }
 
-    /// User input echoed in a log (unknown command) must not
-    /// reach stderr as raw escape sequences. `tracing-subscriber` escapes
-    /// control characters; this test catches a version that would stop doing so.
+    /// User input echoed in a log (unknown command) must not reach stderr as raw control
+    /// characters: neither escape sequences nor a carriage return that would overwrite the
+    /// line.
     #[test]
     fn subscriber_escapes_control_characters() {
-        let word = "x\x1b[31mRED\x07";
+        let word = "x\x1b[31mRED\x07\r\t\x0b\u{9b}2J\u{85}";
         let lines = capture(|| {
             tracing::warn!("unknown command: \"{word}\"");
             tracing::warn!(word, "field");
@@ -369,5 +392,15 @@ mod tests {
                 "input missing from log line: {line:?}"
             );
         }
+        assert_eq!(
+            lines[0],
+            r#"[WARN] unknown command: "x\x1b[31mRED\x07\x0d\x09\x0b\u{9b}2J\u{85}""#
+        );
+    }
+
+    #[test]
+    fn a_multi_line_message_keeps_its_line_feeds() {
+        let lines = capture(|| tracing::info!("one\ntwo\rthree"));
+        assert_eq!(lines, ["[INFO] one", r"two\x0dthree"]);
     }
 }
