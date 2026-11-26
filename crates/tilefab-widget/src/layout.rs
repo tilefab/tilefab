@@ -459,7 +459,10 @@ pub(crate) mod tests {
         }
     }
 
-    /// Reference sharing with a list of the members held, as the specification says.
+    /// Reference sharing, written as plainly as possible: share `budget` in proportion to the
+    /// nominal widths; a member whose share falls below its minimum is held at the minimum,
+    /// and the rest is shared again among the others until none falls below; then the
+    /// leftover columns go one by one to the first members not held.
     fn reference_share(nominals: &[usize], budget: usize) -> Vec<usize> {
         let mut held = vec![false; nominals.len()];
         loop {

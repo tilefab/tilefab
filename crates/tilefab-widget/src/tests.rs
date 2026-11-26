@@ -30,7 +30,7 @@ fn assert_row(widget: &LineWidget, width: u16, expected: &str) {
     assert_eq!(draw(widget, width), expected_buf, "width {width}");
 }
 
-/// The example of the specification: `[05.123] 🔴 Downloading crate`.
+/// The reference example, `B0 T2 B1 B2 S B2 L`: `[05.123] 🔴 Downloading crate`.
 fn example() -> LineWidget {
     let mut widget = LineWidget::builder("B0 T2 B1 B2 S B2 L")
         .symbols(entries(&["🔴", "🟠", "🟡", "🟢"]))
@@ -594,4 +594,67 @@ fn the_two_parts_of_the_illustration_and_the_value() {
     let white = (Color::Gray, Color::Reset, false);
     let unit = (Color::Reset, Color::Reset, true);
     assert_eq!(cells(&buf, 0, 5), [white, unit, white, white, unit]);
+}
+
+#[test]
+fn every_look_draws_its_two_characters() {
+    // Written out here rather than taken from `Look::characters`: a wrong character in the
+    // table of the library fails this test.
+    let looks = [
+        ('B', "██░░"),
+        ('L', "━━──"),
+        ('D', "●●··"),
+        ('S', "■■□□"),
+        ('O', "●●○○"),
+        ('R', "◆◆◇◇"),
+        ('G', "▰▰▱▱"),
+        ('H', "▓▓░░"),
+        ('V', "┃┃││"),
+        ('A', "##--"),
+        ('C', ">>··"),
+    ];
+    for (letter, expected) in looks {
+        let mut widget = LineWidget::builder(format!("I4{letter}")).build().unwrap();
+        widget.set_progress(50.0).unwrap();
+        assert_row(&widget, 4, expected);
+    }
+}
+
+#[test]
+fn a_paint_over_a_symbol_a_date_and_a_time() {
+    let symbols = || {
+        [
+            Entry::styled("a", Style::new().fg(Color::Green)),
+            Entry::styled("b", Style::new().fg(Color::Red).bg(Color::Blue)),
+        ]
+    };
+    // A dynamic symbol keeps the background of its entry: the paint sets the foreground.
+    let mut dynamic = LineWidget::builder("S.Y")
+        .symbols(symbols())
+        .build()
+        .unwrap();
+    dynamic.set_symbol(0, 1).unwrap();
+    assert_eq!(
+        cells(&draw(&dynamic, 1), 0, 1),
+        [(Color::Yellow, Color::Blue, false)]
+    );
+    // A fixed symbol, painted bold on black.
+    let fixed = LineWidget::builder("S0.:K*")
+        .symbols(symbols())
+        .build()
+        .unwrap();
+    assert_eq!(
+        cells(&draw(&fixed, 1), 0, 1),
+        [(Color::Green, Color::Black, true)]
+    );
+    // `0000-00-00 00:00`: the date cyan, the time over its own style.
+    let widget = LineWidget::builder("D0.C B0 T4.*")
+        .barriers(entries(&[" "]))
+        .time_style(Style::new().fg(Color::Red))
+        .build()
+        .unwrap();
+    let buf = draw(&widget, 16);
+    let cyan = (Color::Cyan, Color::Reset, false);
+    assert_eq!(cells(&buf, 0, 10), [cyan; 10]);
+    assert_eq!(cells(&buf, 11, 16), [(Color::Red, Color::Reset, true); 5]);
 }
