@@ -72,6 +72,13 @@ break the API).
   16 MiB.
 - `tilefab-input`: the rewrite of a history file lost the lines that another instance
   appended since the load.
+- `tilefab-input`: the history file was checked to be a regular file before being opened,
+  and then opened again at each line without a check: a file replaced by a FIFO after the
+  load blocked the next Enter. Every open is now checked on the open file itself, and, on
+  Unix, does not block nor follow a symbolic link put in its place.
+- `tilefab-input`: a history path that is a symbolic link was replaced by a regular file at
+  the first rewrite; the link is now resolved once, and the rewrite replaces the file it
+  points to. A link to a missing file is an error.
 - `tilefab-input`: when the rewrite of a large history file failed (read-only directory, full
   disk), the history switched to memory only, although the file could still be appended to;
   it now keeps appending, and `with_file` still returns the error.

@@ -64,9 +64,18 @@ impl History {
     /// again and kept; a line appended at that very instant can still be lost.
     ///
     /// A missing file is not an error; its directory is created if needed. A path that is
-    /// not a regular file (a directory, a FIFO, a device) is an error. On Unix, a new
-    /// directory gets mode `0o700`, and the file is private to the user: created with mode
-    /// `0o600`, and an existing file readable by others is changed to `0o600`.
+    /// not a regular file (a directory, a FIFO, a device) is an error, checked on the opened
+    /// file itself at each open (load, append, rewrite), so that a file replaced by a FIFO
+    /// meanwhile is refused instead of blocking; on Unix, the files are opened without
+    /// blocking and without following a symbolic link. On Unix, a new directory gets mode
+    /// `0o700`, and the file is private to the user: created with mode `0o600`, and an
+    /// existing file readable by others is changed to `0o600`.
+    ///
+    /// A path that is a symbolic link is resolved once, here: the file it points to is the
+    /// history (its mode is the one made private), and the rewrite replaces that file, so
+    /// the link stays. A link to a missing file is an error. The file is meant for the
+    /// history only: a file that holds anything else loses its content beyond the last
+    /// `capacity` distinct lines at the first rewrite.
     ///
     /// The second value is the error, if any. After an error of the load, the history works
     /// in memory only. After an error of the rewrite (the file was read, but the temporary
@@ -74,8 +83,11 @@ impl History {
     /// still appended to the file, which keeps its size until a later rewrite succeeds.
     /// [`History::file`] tells the two apart.
     pub fn with_file(path: impl Into<PathBuf>, capacity: usize) -> (Self, Option<io::Error>) {
-        let path = path.into();
         let mut history = Self::new(capacity);
+        let path = match resolve_link(path.into()) {
+            Ok(path) => path,
+            Err(error) => return (history, Some(error)),
+        };
         match load(&path, capacity, MAX_LOAD_BYTES) {
             Ok(loaded) => {
                 history.entries = loaded.entries.into();
@@ -171,12 +183,42 @@ struct Loaded {
     truncated: bool,
 }
 
+/// `path` itself, or the file it points to if it is a symbolic link (see
+/// [`History::with_file`]).
+fn resolve_link(path: PathBuf) -> io::Result<PathBuf> {
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => fs::canonicalize(&path),
+        _ => Ok(path),
+    }
+}
+
+/// Open `path` with `options`, and check that it is a regular file on the open file itself
+/// (no gap between the check and the use). On Unix, without blocking (opening a FIFO would
+/// wait for its other end) and without following a symbolic link (the path was resolved by
+/// [`resolve_link`]: a link there now was put in its place since).
+fn open_regular(options: &mut OpenOptions, path: &Path) -> io::Result<File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    let file = options.open(path)?;
+    if file.metadata()?.is_file() {
+        Ok(file)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ))
+    }
+}
+
 /// Read the history file: at most its last `max_bytes` bytes (the first, partial line of
 /// that part is dropped). A missing file is empty; its directory is created. Anything but a
-/// regular file is an error, found before opening it (opening a FIFO would block).
+/// regular file is an error (see [`open_regular`]).
 fn load(path: &Path, capacity: usize, max_bytes: u64) -> io::Result<Loaded> {
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
+    let mut file = match open_regular(OpenOptions::new().read(true), path) {
+        Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
                 create_dir(dir)?;
@@ -185,15 +227,9 @@ fn load(path: &Path, capacity: usize, max_bytes: u64) -> io::Result<Loaded> {
         }
         Err(error) => return Err(error),
     };
-    if !metadata.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "not a regular file",
-        ));
-    }
-    make_private(path, &metadata)?;
-    let mut file = File::open(path)?;
-    let len = file.metadata()?.len();
+    let metadata = file.metadata()?;
+    make_private(&file, &metadata)?;
+    let len = metadata.len();
     let start = len.saturating_sub(max_bytes);
     file.seek(SeekFrom::Start(start))?;
     let mut bytes = Vec::new();
@@ -239,23 +275,23 @@ fn newest_entries(text: &[u8], capacity: usize, older: Vec<String>) -> (Vec<Stri
 }
 
 /// On Unix, make an existing history file private to the user (mode `0o600`) if others can
-/// read or write it.
-fn make_private(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+/// read or write it. Through the open file: never another file put at its path.
+fn make_private(file: &File, metadata: &fs::Metadata) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         if metadata.permissions().mode() & 0o077 != 0 {
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
         }
     }
     #[cfg(not(unix))]
-    let _ = (path, metadata);
+    let _ = (file, metadata);
     Ok(())
 }
 
 /// Append one entry to the file, in a single write.
 fn append(path: &Path, line: &str) -> io::Result<()> {
-    let mut file = open_options().append(true).create(true).open(path)?;
+    let mut file = open_regular(open_options().append(true).create(true), path)?;
     file.write_all(format!("{line}\n").as_bytes())
 }
 
@@ -333,7 +369,7 @@ fn rewrite_with<'a>(
 /// appended since it was read. Empty if the file got shorter (rewritten meanwhile): reading
 /// from past its end gives nothing.
 fn read_after(path: &Path, offset: u64) -> io::Result<Vec<u8>> {
-    let mut file = File::open(path)?;
+    let mut file = open_regular(OpenOptions::new().read(true), path)?;
     let mut bytes = Vec::new();
     file.seek(SeekFrom::Start(offset))?;
     file.take(MAX_LOAD_BYTES).read_to_end(&mut bytes)?;
@@ -714,6 +750,123 @@ mod tests {
             assert_eq!(error.unwrap().kind(), io::ErrorKind::PermissionDenied);
             assert_eq!(text, "a\nb\nc\nd\ne\nf\ng\n");
         }
+    }
+
+    /// A FIFO at `path` (through `mkfifo`: the standard library cannot make one).
+    #[cfg(unix)]
+    fn make_fifo(path: &Path) {
+        let status = std::process::Command::new("mkfifo")
+            .arg(path)
+            .status()
+            .expect("cannot run mkfifo");
+        assert!(status.success(), "mkfifo failed");
+    }
+
+    /// Run `f` on another thread, and fail if it does not return within 5 seconds (a FIFO
+    /// opened in blocking mode would wait forever).
+    #[cfg(unix)]
+    fn without_blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("blocked on the history file")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_is_refused_at_once() {
+        let dir = TempDir::new();
+        let path = dir.0.join("history");
+        make_fifo(&path);
+        let (file, kind) = without_blocking(move || {
+            let (history, error) = History::with_file(&path, 10);
+            (history.file().map(Path::to_owned), error.map(|e| e.kind()))
+        });
+        assert_eq!(file, None);
+        assert_eq!(kind, Some(io::ErrorKind::InvalidInput));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_replaced_by_a_fifo_after_the_load_is_refused_at_once() {
+        let dir = TempDir::new();
+        let path = dir.0.join("history");
+        fs::write(&path, "a\n").unwrap();
+        let (mut history, error) = History::with_file(&path, 10);
+        assert!(error.is_none());
+        fs::remove_file(&path).unwrap();
+        make_fifo(&path);
+        let (history, recorded) = without_blocking(move || {
+            let recorded = history.add("b");
+            (history, recorded)
+        });
+        let mut history = history;
+        // Kept in memory; the file is given up, and the error reported once.
+        assert!(recorded);
+        assert_eq!(history.iter().collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(history.file(), None);
+        assert!(history.take_error().is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symbolic_link_is_resolved_and_kept_by_the_rewrite() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new();
+        let target = dir.0.join("target");
+        let link = dir.0.join("link");
+        // 6 lines, capacity 2: rewritten at the load.
+        fs::write(&target, "a\nb\nc\nd\ne\nf\n").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let (mut history, error) = History::with_file(&link, 2);
+        assert!(error.is_none(), "{error:?}");
+        history.add("g");
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_to_string(&link).unwrap(), "e\nf\ng\n");
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            history.file(),
+            Some(fs::canonicalize(&target).unwrap().as_path())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_missing_file_is_an_error() {
+        let dir = TempDir::new();
+        let link = dir.0.join("link");
+        std::os::unix::fs::symlink(dir.0.join("missing"), &link).unwrap();
+        let (history, error) = History::with_file(&link, 10);
+        assert_eq!(error.unwrap().kind(), io::ErrorKind::NotFound);
+        assert_eq!(history.file(), None);
+        assert!(!dir.0.join("missing").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_put_at_the_path_after_the_load_is_not_followed() {
+        let dir = TempDir::new();
+        let path = dir.0.join("history");
+        let other = dir.0.join("other");
+        fs::write(&path, "a\n").unwrap();
+        fs::write(&other, "untouched\n").unwrap();
+        let (mut history, _) = History::with_file(&path, 10);
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&other, &path).unwrap();
+        history.add("b");
+        assert_eq!(fs::read_to_string(&other).unwrap(), "untouched\n");
+        assert_eq!(history.file(), None);
     }
 
     #[cfg(unix)]
