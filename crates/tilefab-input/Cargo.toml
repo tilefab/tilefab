@@ -15,6 +15,10 @@ crossterm.workspace = true
 tilefab-core.workspace = true
 unicode-segmentation.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# `O_NONBLOCK` and `O_NOFOLLOW` when opening the history file.
+libc.workspace = true
+
 [dev-dependencies]
 proptest.workspace = true
 

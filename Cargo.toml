@@ -44,6 +44,9 @@ fastrand = "2.5.0"
 # Local date and time of the demo's line widgets (`tilefab-widget` has no clock): portable
 # time-zone support on macOS, Linux and Windows.
 jiff = "1.0.3"
+# Unix flags of the history file (`O_NONBLOCK`, `O_NOFOLLOW`): only constants are used, no
+# `unsafe`. Already in the dependency graph through crossterm.
+libc = "0.2.191"
 # Counting allocator for the allocation example and test (keeps `unsafe` out of this project).
 stats_alloc = "0.1.10"
 tokio = "1.54.1"

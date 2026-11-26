@@ -327,6 +327,7 @@ name = "tilefab-input"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "libc",
  "tilefab-core",
  "unicode-segmentation",
 ]

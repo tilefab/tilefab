@@ -613,6 +613,7 @@ name = "tilefab-input"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "libc",
  "proptest",
  "tilefab-core",
  "unicode-segmentation",
