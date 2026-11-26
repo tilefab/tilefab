@@ -21,3 +21,10 @@ pub use backend::{Backend, ClearType};
 pub use init::{TerminalGuard, install_fatal_panic_hook, install_panic_hook, restore};
 pub use terminal::{Frame, MAX_PENDING_LINES, Terminal};
 pub use viewport::{ScrollMode, TerminalOptions, Viewport};
+
+// The terminal can move to another thread or task with a `Send` writer.
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    assert_send::<Terminal<std::io::Stdout>>();
+    assert_send::<Terminal<Vec<u8>>>();
+};

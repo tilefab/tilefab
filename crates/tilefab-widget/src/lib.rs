@@ -106,3 +106,9 @@ pub use builder::{
 pub use entry::{Entry, EntryProblem};
 pub use time::{TimeField, WallTime};
 pub use widget::{LineWidget, UpdateError, ValueShape};
+
+// The widget can move to another thread or task, and be shared between threads.
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<LineWidget>();
+};

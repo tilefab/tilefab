@@ -11,7 +11,10 @@ use crate::render::EditorStyles;
 use crate::undo::Snapshot;
 
 /// Source of completions, called synchronously on Tab: it must be fast.
-pub trait Completer {
+///
+/// `Send`, so that a [`LineEditor`](crate::LineEditor) holding one can move to another
+/// thread or task (`tokio::spawn`).
+pub trait Completer: Send {
     /// Candidates for the text before `cursor` (a byte offset in `line`, on a grapheme
     /// boundary).
     fn complete(&self, line: &str, cursor: usize) -> Completions;

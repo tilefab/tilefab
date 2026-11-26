@@ -237,6 +237,7 @@ impl From<Size> for Rect {
 
 /// Constraint on an element's size along the split axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Constraint {
     /// Exactly `n` cells (fewer if space is scarce).
     Length(u16),
