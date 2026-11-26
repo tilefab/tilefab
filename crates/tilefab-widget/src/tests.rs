@@ -431,6 +431,14 @@ fn the_look_of_the_illustration_picks_its_characters() {
         ("I4B", "██░░"),
         ("I4L", "━━──"),
         ("I4D", "●●··"),
+        ("I4S", "■■□□"),
+        ("I4O", "●●○○"),
+        ("I4R", "◆◆◇◇"),
+        ("I4G", "▰▰▱▱"),
+        ("I4H", "▓▓░░"),
+        ("I4V", "┃┃││"),
+        ("I4A", "##--"),
+        ("I4C", ">>··"),
     ];
     for (composition, expected) in cases {
         let mut widget = LineWidget::builder(composition).build().unwrap();

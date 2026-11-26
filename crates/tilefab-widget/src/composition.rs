@@ -25,8 +25,11 @@
 //! `C` cyan, `W` white, `+` for the bright version. `I` and `V` take a second part after `/`,
 //! for their todo cells and their units (`I.C/K+`).
 //!
-//! The look of `I` picks its two characters: `B` (bar) `█`/`░`, `L` (line) `━`/`─`, `D` (dot)
-//! `●`/`·`. Without a look, `I` uses the characters given to the builder, or else the bar.
+//! The look of `I` picks its two characters: `B` (bar) `█`/`░`, `L` (line) `━`/`─`, `D` (dots)
+//! `●`/`·`, `S` (squares) `■`/`□`, `O` (circles) `●`/`○`, `R` (diamonds) `◆`/`◇`, `G`
+//! (segments) `▰`/`▱`, `H` (shaded blocks) `▓`/`░`, `V` (vertical bars) `┃`/`│`, `A` (ASCII)
+//! `#`/`-`, `C` (chevrons) `>`/`·`. Without a look, `I` uses the characters given to the
+//! builder, or else the bar.
 //!
 //! [`LineWidget`]: crate::LineWidget
 
@@ -81,23 +84,49 @@ pub(crate) enum Token {
 /// The look of `I`, the letter after its size: a pair of characters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Look {
-    /// `B`: `█` / `░`.
+    /// `B` (bar): `█` / `░`.
     Bar,
-    /// `L`: `━` / `─`.
+    /// `L` (line): `━` / `─`.
     Line,
-    /// `D`: `●` / `·`.
+    /// `D` (dots): `●` / `·`.
     Dot,
+    /// `S` (squares): `■` / `□`.
+    Square,
+    /// `O` (circles): `●` / `○`.
+    Circle,
+    /// `R` (diamonds): `◆` / `◇`.
+    Diamond,
+    /// `G` (segments): `▰` / `▱`.
+    Segment,
+    /// `H` (shaded blocks): `▓` / `░`.
+    Shade,
+    /// `V` (vertical bars): `┃` / `│`.
+    Vertical,
+    /// `A` (ASCII): `#` / `-`.
+    Ascii,
+    /// `C` (chevrons): `>` / `·`.
+    Chevron,
 }
 
 impl Look {
+    /// Every look.
+    pub(crate) const ALL: [Self; 11] = [
+        Self::Bar,
+        Self::Line,
+        Self::Dot,
+        Self::Square,
+        Self::Circle,
+        Self::Diamond,
+        Self::Segment,
+        Self::Shade,
+        Self::Vertical,
+        Self::Ascii,
+        Self::Chevron,
+    ];
+
     /// The look written `letter` after the size of `I`.
     fn from_letter(letter: char) -> Option<Self> {
-        match letter {
-            'B' => Some(Self::Bar),
-            'L' => Some(Self::Line),
-            'D' => Some(Self::Dot),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|look| look.letter() == letter)
     }
 
     /// The letter of the look.
@@ -106,6 +135,14 @@ impl Look {
             Self::Bar => 'B',
             Self::Line => 'L',
             Self::Dot => 'D',
+            Self::Square => 'S',
+            Self::Circle => 'O',
+            Self::Diamond => 'R',
+            Self::Segment => 'G',
+            Self::Shade => 'H',
+            Self::Vertical => 'V',
+            Self::Ascii => 'A',
+            Self::Chevron => 'C',
         }
     }
 
@@ -115,6 +152,14 @@ impl Look {
             Self::Bar => ("█", "░"),
             Self::Line => ("━", "─"),
             Self::Dot => ("●", "·"),
+            Self::Square => ("■", "□"),
+            Self::Circle => ("●", "○"),
+            Self::Diamond => ("◆", "◇"),
+            Self::Segment => ("▰", "▱"),
+            Self::Shade => ("▓", "░"),
+            Self::Vertical => ("┃", "│"),
+            Self::Ascii => ("#", "-"),
+            Self::Chevron => (">", "·"),
         }
     }
 }
@@ -651,6 +696,14 @@ mod tests {
             ("I20B", illustration(Some(20), Some(Look::Bar))),
             ("I2L", illustration(Some(2), Some(Look::Line))),
             ("I999D", illustration(Some(999), Some(Look::Dot))),
+            ("IS", illustration(None, Some(Look::Square))),
+            ("IO", illustration(None, Some(Look::Circle))),
+            ("IR", illustration(None, Some(Look::Diamond))),
+            ("IG", illustration(None, Some(Look::Segment))),
+            ("IH", illustration(None, Some(Look::Shade))),
+            ("IV", illustration(None, Some(Look::Vertical))),
+            ("IA", illustration(None, Some(Look::Ascii))),
+            ("I12C", illustration(Some(12), Some(Look::Chevron))),
         ];
         for (text, token) in cases {
             assert_eq!(parse(text).unwrap(), [token], "{text}");
@@ -791,11 +844,7 @@ mod tests {
                 .prop_map(|(size, unit, total)| Token::Value { size, unit, total }),
             (
                 proptest::option::of(2..=999u16),
-                proptest::option::of(prop_oneof![
-                    Just(Look::Bar),
-                    Just(Look::Line),
-                    Just(Look::Dot)
-                ])
+                proptest::option::of(proptest::sample::select(Look::ALL.to_vec()))
             )
                 .prop_map(|(size, look)| Token::Illustration { size, look }),
         ]

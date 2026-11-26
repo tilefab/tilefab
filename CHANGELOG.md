@@ -24,9 +24,11 @@ break the API).
 ### Added
 
 - `tilefab-widget`: the look of the illustration is chosen in the composition, with a letter
-  after its size: `B` bar `█`/`░`, `L` line `━`/`─`, `D` dots `●`/`·` (`IL`, `I20D`). A look
-  keeps the styles given to `.illustration(done, todo)` and replaces its characters; without a
-  look, `I` uses those characters, or else the bar (`.illustration` is no longer required).
+  after its size: `B` bar `█░`, `L` line `━─`, `D` dots `●·`, `S` squares `■□`, `O` circles
+  `●○`, `R` diamonds `◆◇`, `G` segments `▰▱`, `H` shaded blocks `▓░`, `V` vertical bars `┃│`,
+  `A` ASCII `#-`, `C` chevrons `>·` (`IL`, `I20D`). A look keeps the styles given to
+  `.illustration(done, todo)` and replaces its characters; without a look, `I` uses those
+  characters, or else the bar (`.illustration` is no longer required).
 - `tilefab-widget`: any token of a composition may end with a *paint*, laid over the styles
   given to the builder for that component only: `.`, then a foreground color, `:` and a
   background color, `*` for bold, each optional (`B1.R`, `N.W+:B*`, `P.*`). Colors `K` `R` `G`
