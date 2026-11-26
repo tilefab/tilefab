@@ -16,10 +16,18 @@
 //! | `K` | keyword of the `keywords` list, aligned in the width of the longest | `K3`: fixed; `K`: dynamic |
 //! | `N` | name of the `names` list, as wide as the entry shown | `N14`: fixed; `N`: dynamic |
 //! | `L` | log text | `L40`: fixed size; `L`: elastic |
-//! | `V` | value, with optional unit (`U`) and total (`/`): `V5U/` | size 1–999 (2 by default) |
+//! | `V` | value, with optional unit (`U`) and total (`/`): `V5U/` | size 1–999 (5 by default) |
 //! | `I` | illustration of the progress with two characters: bar `█`/`░`, line `━`/`─` or dots `●`/`·` | `I20`: fixed size; `I`: elastic; then `B`, `L` or `D` for the look (`I20L`), else the characters given to the builder or the bar |
 //!
 //! `D`, `T`, `P`, `K`, `L`, `V` and `I` appear at most once; `S`, `B` and `N` can be repeated.
+//!
+//! A token may end with a *paint*, laid over the styles given to the builder for that
+//! component only: `.`, then a foreground color, `:` and a background color, `*` for bold, each
+//! optional. Colors: `K` black, `R` red, `G` green, `Y` yellow, `B` blue, `M` magenta, `C`
+//! cyan, `W` white, followed by `+` for the bright version. `I` and `V` take a second part
+//! after `/`, for their todo cells and their units. For instance `B1.K+` (a gray barrier),
+//! `N.W+:B*` (a bright white bold name on blue), `I20L.G/K+` (a green line on a gray track).
+//! The library has no default colors: they come from the entries and the `*_style` methods.
 //! The dynamic components are changed by the setters (`set_symbol`, `set_keyword`,
 //! `set_name`, `set_progress`, `set_value`, `set_time`, `set_log`); the repeatable ones are
 //! addressed by their *rank* among the dynamic components of the same letter. `P` and `I`

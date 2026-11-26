@@ -73,6 +73,14 @@ alpha [05.123] 🟠 ████████████████░░░░
 | `V`, `V5U/` | simulated download: size of each number, `U` for the unit (MB), `/` for the total (`12.5MB/40.0MB`) |
 | `I`, `I20`, `IL`, `I20D` | progress bar: elastic (10 columns at least when there is room), or a fixed size; then its look: `B` bar `█░` (default), `L` line `━─`, `D` dots `●·` |
 
+Any token can end with a **paint**, which changes the style of that component only: `.`, then a text color, `:` and a background color, `*` for bold, each optional. Colors: `K` black, `R` red, `G` green, `Y` yellow, `B` blue, `M` magenta, `C` cyan, `W` white, followed by `+` for the bright version. `I` and `V` take a second part after `/`, for the rest of the bar and for the units. The paint is laid over the demo's own styles (gray barriers and time, cyan bar, bold name and percentage): what it does not set is kept. For instance:
+
+```
+start build "N.W+:B* B0 B1.Y T2.Y B2.Y B0 IL.G/K+ B0 P.G* B0 L.C"
+```
+
+shows a bright white bold name on blue, a yellow time between yellow brackets, a green line on a gray track, a bold green percentage and a cyan step.
+
 `D`, `T`, `P`, `K`, `L`, `V` and `I` appear at most once; `S`, `B` and `N` can be repeated. The line is laid out again at every frame, with the whole terminal width: the extra columns go to the elastic `L`, otherwise to the elastic `I`. When the window is too narrow, `L` and `I` shrink first (down to 2 columns, a cut text ends with `…`), then the names, then the last components are dropped; a barrier stays, which shows the line was cut. `help` lists the tokens.
 The hidden `panic` command triggers a deliberate panic, to check that the terminal is properly restored. It exists in debug builds only (`cargo build`, used by `tools/check_app.py`); in a release build, `panic` is an unknown command. The hidden `count <n>` command (debug builds too) writes `n` numbered log lines at once, to check that every line can be found again by scrolling up in the terminal window (scenario `tools/scenarios/scrollback.scn`).
 

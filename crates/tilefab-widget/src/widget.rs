@@ -4,6 +4,8 @@ use std::fmt;
 
 use tilefab_core::{Alignment, Buffer, Rect, Style, Widget};
 
+use crate::composition::Paint;
+
 use crate::builder::{ListName, Warning};
 use crate::entry::Entry;
 use crate::entry::text_width;
@@ -94,6 +96,8 @@ pub(crate) struct Description {
     pub(crate) units: Vec<Measured>,
     pub(crate) illustration: Option<(Entry, Entry)>,
     pub(crate) styles: Styles,
+    /// The paint of each component, in composition order.
+    pub(crate) paints: Vec<Paint>,
     pub(crate) keyword_alignment: Alignment,
     pub(crate) value_decimals: u8,
     pub(crate) value: Option<ValueShape>,
@@ -120,6 +124,8 @@ pub struct LineWidget {
     /// The `done` and `todo` characters of `I`.
     pub(crate) illustration: Option<(Entry, Entry)>,
     pub(crate) styles: Styles,
+    /// The paint of each component, laid over its styles (same order as `components`).
+    pub(crate) paints: Vec<Paint>,
     pub(crate) keyword_alignment: Alignment,
     pub(crate) value_decimals: u8,
     /// The shape of `V`, if the composition has one.
@@ -199,6 +205,7 @@ impl LineWidget {
             units: description.units,
             illustration: description.illustration,
             styles: description.styles,
+            paints: description.paints,
             keyword_alignment: description.keyword_alignment,
             value_decimals: description.value_decimals,
             value: description.value,
@@ -459,7 +466,7 @@ impl Widget for &LineWidget {
         let mut x = area.x;
         for (i, width) in plan.widths(item).enumerate() {
             let last = i + 1 == plan.kept;
-            self.draw(buf, x, area.y, width, self.components[i], last);
+            self.draw(buf, x, area.y, width, i, last);
             // The widths add up to at most `area.width`.
             x = x.saturating_add(u16::try_from(width).unwrap_or(u16::MAX));
         }
@@ -494,25 +501,24 @@ impl LineWidget {
         }
     }
 
-    /// Draw `component` at `(x, y)` in `width` columns; `last` when nothing follows it.
-    fn draw(
-        &self,
-        buf: &mut Buffer,
-        x: u16,
-        y: u16,
-        width: usize,
-        component: Component,
-        last: bool,
-    ) {
-        match component {
+    /// Draw component `i` at `(x, y)` in `width` columns, with its paint; `last` when nothing
+    /// follows it.
+    fn draw(&self, buf: &mut Buffer, x: u16, y: u16, width: usize, i: usize, last: bool) {
+        let paint = self.paints[i];
+        let first = |style: Style| style.patch(paint.first);
+        match self.components[i] {
             Component::Symbol(slot) => {
                 let index = match slot {
                     Slot::Fixed(i) => usize::from(i),
                     Slot::Dynamic(rank) => usize::from(self.state.symbols[rank]),
                 };
-                left(buf, x, y, width, &self.symbols[index]);
+                let symbol = &self.symbols[index];
+                left(buf, x, y, width, symbol, first(symbol.entry.style()));
             }
-            Component::Barrier(i) => left(buf, x, y, width, &self.barriers[usize::from(i)]),
+            Component::Barrier(index) => {
+                let barrier = &self.barriers[usize::from(index)];
+                left(buf, x, y, width, barrier, first(barrier.entry.style()));
+            }
             Component::Keyword(slot) => {
                 let index = match slot {
                     Slot::Fixed(i) => usize::from(i),
@@ -525,7 +531,7 @@ impl LineWidget {
                     Alignment::Center => free / 2,
                     Alignment::Right => free,
                 };
-                let style = keyword.entry.style();
+                let style = first(keyword.entry.style());
                 let x = pad(buf, x, y, before, style);
                 let x = put(buf, x, y, keyword.entry.text(), keyword.width, style);
                 pad(buf, x, y, free - before, style);
@@ -533,17 +539,17 @@ impl LineWidget {
             Component::Date(format) => {
                 let mut text = StackText::<16>::new();
                 let _ = write_date(&mut text, &self.state.time, format);
-                put(buf, x, y, text.as_str(), width, self.styles.date);
+                put(buf, x, y, text.as_str(), width, first(self.styles.date));
             }
             Component::Time(format) => {
                 let mut text = StackText::<16>::new();
                 let _ = write_time(&mut text, &self.state.time, format);
-                put(buf, x, y, text.as_str(), width, self.styles.time);
+                put(buf, x, y, text.as_str(), width, first(self.styles.time));
             }
             Component::Progress(size) => {
                 let mut text = StackText::<16>::new();
                 let _ = write_progress(&mut text, self.state.progress, size);
-                put(buf, x, y, text.as_str(), width, self.styles.progress);
+                put(buf, x, y, text.as_str(), width, first(self.styles.progress));
             }
             Component::Name(slot) => {
                 let name = &self.names[self.name_index(slot)];
@@ -554,7 +560,7 @@ impl LineWidget {
                     width,
                     name.entry.text(),
                     name.width,
-                    name.entry.style(),
+                    first(name.entry.style()),
                     true,
                 );
             }
@@ -568,21 +574,27 @@ impl LineWidget {
                         width,
                         &state.log,
                         state.log_width,
-                        self.styles.log,
+                        first(self.styles.log),
                         !last,
                     );
                 }
             }
-            Component::Value => self.draw_value(buf, x, y, width),
+            Component::Value => self.draw_value(buf, x, y, width, paint),
             Component::Illustration(_) => {
                 if let (Some((done, todo)), true) =
                     (&self.illustration, width >= MIN_FLEXIBLE_WIDTH)
                 {
                     let filled = done_cells(self.state.progress, width);
                     let mut x = x;
-                    for i in 0..width {
-                        let cell = if i < filled { done } else { todo };
-                        x = put(buf, x, y, cell.text(), 1, cell.style());
+                    let done_style = first(done.style());
+                    let todo_style = todo.style().patch(paint.second());
+                    for cell in 0..width {
+                        let (entry, style) = if cell < filled {
+                            (done, done_style)
+                        } else {
+                            (todo, todo_style)
+                        };
+                        x = put(buf, x, y, entry.text(), 1, style);
                     }
                 }
             }
@@ -590,9 +602,12 @@ impl LineWidget {
     }
 
     /// Draw the compact text of `V` (`99.3KB/109.6KB`) right-justified in `width` columns.
-    fn draw_value(&self, buf: &mut Buffer, x: u16, y: u16, width: usize) {
+    /// The first part of `paint` goes over the numbers and the `/`, the second over the units.
+    fn draw_value(&self, buf: &mut Buffer, x: u16, y: u16, width: usize, paint: Paint) {
         let text = &self.state.value;
-        let numbers = self.styles.value_numbers;
+        let numbers = self.styles.value_numbers.patch(paint.first);
+        let slash = self.styles.value_slash.patch(paint.first);
+        let unit_style = |unit: &Measured| unit.entry.style().patch(paint.second());
         let unit = |index: Option<usize>| index.map(|i| &self.units[i]);
         let unit_width = |index| unit(index).map_or(0, |u: &Measured| u.width);
         let mut compact = text_width(&text.number) + unit_width(text.unit);
@@ -603,13 +618,13 @@ impl LineWidget {
         let mut x = pad(buf, x, y, width.saturating_sub(compact), numbers);
         x = put(buf, x, y, &text.number, usize::MAX, numbers);
         if let Some(unit) = unit(text.unit) {
-            x = put(buf, x, y, unit.entry.text(), unit.width, unit.entry.style());
+            x = put(buf, x, y, unit.entry.text(), unit.width, unit_style(unit));
         }
         if has_total {
-            x = put(buf, x, y, "/", 1, self.styles.value_slash);
+            x = put(buf, x, y, "/", 1, slash);
             x = put(buf, x, y, &text.total, usize::MAX, numbers);
             if let Some(unit) = unit(text.total_unit) {
-                put(buf, x, y, unit.entry.text(), unit.width, unit.entry.style());
+                put(buf, x, y, unit.entry.text(), unit.width, unit_style(unit));
             }
         }
     }
@@ -629,9 +644,8 @@ fn pad(buf: &mut Buffer, x: u16, y: u16, count: usize, style: Style) -> u16 {
     x
 }
 
-/// Write an entry left-justified in `width` columns.
-fn left(buf: &mut Buffer, x: u16, y: u16, width: usize, measured: &Measured) {
-    let style = measured.entry.style();
+/// Write an entry left-justified in `width` columns, with `style` (its own, painted).
+fn left(buf: &mut Buffer, x: u16, y: u16, width: usize, measured: &Measured, style: Style) {
     let next = put(buf, x, y, measured.entry.text(), width, style);
     pad(buf, next, y, width.saturating_sub(measured.width), style);
 }

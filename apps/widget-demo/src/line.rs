@@ -281,6 +281,31 @@ mod tests {
     }
 
     #[test]
+    fn a_paint_is_laid_over_the_styles_of_the_demo() {
+        // The example of the README.
+        let composition = "N.W+:B* B0 B1.Y T2.Y B2.Y B0 IL.G/K+ B0 P.G* B0 L.C";
+        assert_eq!(check(composition), Ok(Vec::new()));
+        let mut widget = build(composition, "build", 5).unwrap();
+        update(&mut widget, composition, 0.5, "linking", 10.0);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 1));
+        widget.render(buf.area(), &mut buf);
+        let name = buf.get(0, 0);
+        assert_eq!((name.fg, name.bg), (Color::White, Color::Blue));
+        assert!(name.modifier.contains(Modifier::BOLD));
+        // The bracket keeps nothing of the demo's gray; the space barrier stays gray.
+        assert_eq!(buf.get(6, 0).fg, Color::Yellow);
+        assert_eq!(buf.get(5, 0).fg, Color::DarkGray);
+        // The line: green done cells on a gray track.
+        assert_eq!(buf.get(16, 0).symbol(), "━");
+        assert_eq!(buf.get(16, 0).fg, Color::Green);
+        let track = (17..40)
+            .map(|x| buf.get(x, 0))
+            .find(|c| c.symbol() == "─")
+            .unwrap();
+        assert_eq!(track.fg, Color::DarkGray);
+    }
+
+    #[test]
     fn invalid_compositions_and_warnings() {
         assert!(check("B0 X").is_err());
         assert!(check("L L").is_err());

@@ -19,12 +19,20 @@
 //!
 //! `D`, `T`, `P`, `K`, `L`, `V` and `I` are unique; `S`, `B` and `N` can be repeated.
 //!
+//! A token may end with a *paint*, which changes the style of that component only: a `.`, then
+//! a foreground color, `:` and a background color, `*` for bold, each optional (`B1.R`,
+//! `N.W+:B*`, `P.*`). Colors: `K` black, `R` red, `G` green, `Y` yellow, `B` blue, `M` magenta,
+//! `C` cyan, `W` white, `+` for the bright version. `I` and `V` take a second part after `/`,
+//! for their todo cells and their units (`I.C/K+`).
+//!
 //! The look of `I` picks its two characters: `B` (bar) `█`/`░`, `L` (line) `━`/`─`, `D` (dot)
 //! `●`/`·`. Without a look, `I` uses the characters given to the builder, or else the bar.
 //!
 //! [`LineWidget`]: crate::LineWidget
 
 use std::fmt;
+
+use tilefab_core::{Color, Modifier, Style};
 
 use crate::builder::BuildError;
 
@@ -174,13 +182,90 @@ impl fmt::Display for Token {
     }
 }
 
+/// The colors of a paint: letter, normal color, bright color (with `+`).
+const COLORS: [(char, Color, Color); 8] = [
+    ('K', Color::Black, Color::DarkGray),
+    ('R', Color::Red, Color::LightRed),
+    ('G', Color::Green, Color::LightGreen),
+    ('Y', Color::Yellow, Color::LightYellow),
+    ('B', Color::Blue, Color::LightBlue),
+    ('M', Color::Magenta, Color::LightMagenta),
+    ('C', Color::Cyan, Color::LightCyan),
+    ('W', Color::Gray, Color::White),
+];
+
+/// The paint of a token: the style laid over the styles given to the builder, for that
+/// component only. The default paint changes nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Paint {
+    /// The first part: the whole component, or the done cells of `I` and the numbers of `V`.
+    pub(crate) first: Style,
+    /// The second part (`I` and `V` only): the todo cells, the units.
+    pub(crate) second: Option<Style>,
+}
+
+impl Paint {
+    /// The style of the second part: the first one when the paint has a single part.
+    pub(crate) fn second(self) -> Style {
+        self.second.unwrap_or(self.first)
+    }
+}
+
+/// A token and its paint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Painted {
+    pub(crate) token: Token,
+    pub(crate) paint: Paint,
+}
+
+/// The canonical text of the token and its paint.
+impl fmt::Display for Painted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.token)?;
+        if self.paint == Paint::default() {
+            return Ok(());
+        }
+        f.write_str(".")?;
+        write_part(f, self.paint.first)?;
+        if let Some(second) = self.paint.second {
+            f.write_str("/")?;
+            write_part(f, second)?;
+        }
+        Ok(())
+    }
+}
+
+/// Write one part of a paint: color, `:` and background, `*`.
+fn write_part(f: &mut fmt::Formatter<'_>, style: Style) -> fmt::Result {
+    let color = |f: &mut fmt::Formatter<'_>, color: Option<Color>| -> fmt::Result {
+        for (letter, normal, bright) in COLORS {
+            if color == Some(normal) {
+                return write!(f, "{letter}");
+            }
+            if color == Some(bright) {
+                return write!(f, "{letter}+");
+            }
+        }
+        Ok(())
+    };
+    color(f, style.fg)?;
+    if style.bg.is_some() {
+        f.write_str(":")?;
+        color(f, style.bg)?;
+    }
+    if style.add_modifier.contains(Modifier::BOLD) {
+        f.write_str("*")?;
+    }
+    Ok(())
+}
+
 /// Parse a composition into its tokens, in display order.
 ///
 /// # Errors
 ///
 /// A [`BuildError`] for an empty composition, bad spacing, an unknown token, a bad parameter
 /// (missing, out of range, too many digits, `P1` / `P2`) or a unique component repeated.
-pub(crate) fn parse(composition: &str) -> Result<Vec<Token>, BuildError> {
+pub(crate) fn parse(composition: &str) -> Result<Vec<Painted>, BuildError> {
     if composition.is_empty() {
         return Err(BuildError::EmptyComposition);
     }
@@ -190,25 +275,26 @@ pub(crate) fn parse(composition: &str) -> Result<Vec<Token>, BuildError> {
     {
         return Err(BuildError::BadSpacing { offset });
     }
-    let mut tokens: Vec<Token> = Vec::new();
+    let mut tokens: Vec<Painted> = Vec::new();
     let mut offset = 0;
     for (index, text) in composition.split(' ').enumerate() {
         if text.is_empty() {
             // A leading, trailing or double space.
             return Err(BuildError::BadSpacing { offset });
         }
-        let token = parse_token(text).map_err(|problem| BuildError::BadToken {
+        let painted = parse_painted(text).map_err(|problem| BuildError::BadToken {
             position: index + 1,
             token: text.to_owned(),
             problem,
         })?;
-        if token.is_unique() && tokens.iter().any(|t| t.letter() == token.letter()) {
+        let token = painted.token;
+        if token.is_unique() && tokens.iter().any(|t| t.token.letter() == token.letter()) {
             return Err(BuildError::RepeatedComponent {
                 position: index + 1,
                 token: text.to_owned(),
             });
         }
-        tokens.push(token);
+        tokens.push(painted);
         offset += text.len() + 1;
     }
     Ok(tokens)
@@ -230,6 +316,10 @@ pub enum TokenProblem {
     OutOfRange,
     /// `P1` and `P2` cannot show `100`.
     ProgressTooSmall,
+    /// The paint after `.` does not follow its grammar (`S.`, `S.X`, `S.*R`).
+    BadPaint,
+    /// A second part of paint (`/`) on a component other than `I` and `V`.
+    SecondPart,
 }
 
 impl fmt::Display for TokenProblem {
@@ -241,8 +331,76 @@ impl fmt::Display for TokenProblem {
             Self::TooManyDigits => "too many digits",
             Self::OutOfRange => "parameter out of range",
             Self::ProgressTooSmall => "P needs at least 3 columns to show 100",
+            Self::BadPaint => "bad paint (.[color][:color][*], colors K R G Y B M C W, + bright)",
+            Self::SecondPart => "only I and V take a second part of paint after /",
         })
     }
+}
+
+/// Parse one token and its paint, after the first `.` (never empty).
+fn parse_painted(text: &str) -> Result<Painted, TokenProblem> {
+    let (head, paint) = match text.split_once('.') {
+        Some((head, paint)) => (head, Some(paint)),
+        None => (text, None),
+    };
+    let token = parse_token(head)?;
+    let paint = match paint {
+        None => Paint::default(),
+        Some(paint) => {
+            let mut parts = paint.split('/');
+            let first = parse_part(parts.next().unwrap_or(""))?;
+            let second = parts.next().map(parse_part).transpose()?;
+            if parts.next().is_some() {
+                return Err(TokenProblem::BadPaint);
+            }
+            if second.is_some()
+                && !matches!(token, Token::Illustration { .. } | Token::Value { .. })
+            {
+                return Err(TokenProblem::SecondPart);
+            }
+            Paint { first, second }
+        }
+    };
+    Ok(Painted { token, paint })
+}
+
+/// One part of a paint: `[color][:color][*]`, not empty.
+fn parse_part(text: &str) -> Result<Style, TokenProblem> {
+    if text.is_empty() {
+        return Err(TokenProblem::BadPaint);
+    }
+    let mut rest = text;
+    let mut style = Style::new();
+    if let Some((color, after)) = parse_color(rest) {
+        style = style.fg(color);
+        rest = after;
+    }
+    if let Some(after) = rest.strip_prefix(':') {
+        let (color, after) = parse_color(after).ok_or(TokenProblem::BadPaint)?;
+        style = style.bg(color);
+        rest = after;
+    }
+    if let Some(after) = rest.strip_prefix('*') {
+        style = style.add_modifier(Modifier::BOLD);
+        rest = after;
+    }
+    if rest.is_empty() {
+        Ok(style)
+    } else {
+        Err(TokenProblem::BadPaint)
+    }
+}
+
+/// A color letter and its optional `+` at the start of `text`, and what follows them.
+fn parse_color(text: &str) -> Option<(Color, &str)> {
+    let mut chars = text.chars();
+    let letter = chars.next()?;
+    let (_, normal, bright) = COLORS.into_iter().find(|&(l, _, _)| l == letter)?;
+    let rest = chars.as_str();
+    Some(match rest.strip_prefix('+') {
+        Some(rest) => (bright, rest),
+        None => (normal, rest),
+    })
 }
 
 /// Parse one token (never empty).
@@ -340,6 +498,101 @@ fn parse_value(rest: &str) -> Result<Token, TokenProblem> {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    /// The tokens of a composition, without their paints.
+    fn parse(composition: &str) -> Result<Vec<Token>, BuildError> {
+        super::parse(composition).map(|painted| painted.into_iter().map(|p| p.token).collect())
+    }
+
+    /// The paint of a composition of one token.
+    fn paint(text: &str) -> Result<Paint, BuildError> {
+        super::parse(text).map(|painted| painted[0].paint)
+    }
+
+    #[test]
+    fn paints() {
+        let fg = |color| Style::new().fg(color);
+        let bold = Style::new().add_modifier(Modifier::BOLD);
+        let cases = [
+            ("B1.R", fg(Color::Red), None),
+            ("B1.R+", fg(Color::LightRed), None),
+            ("S.K", fg(Color::Black), None),
+            ("S.K+", fg(Color::DarkGray), None),
+            ("S.W", fg(Color::Gray), None),
+            ("S.W+", fg(Color::White), None),
+            ("N.:B", Style::new().bg(Color::Blue), None),
+            ("P.*", bold, None),
+            (
+                "N.W+:B+*",
+                fg(Color::White)
+                    .bg(Color::LightBlue)
+                    .add_modifier(Modifier::BOLD),
+                None,
+            ),
+            ("I20L.C/K+", fg(Color::Cyan), Some(fg(Color::DarkGray))),
+            (
+                "V5U/.W/:K*",
+                fg(Color::Gray),
+                Some(Style::new().bg(Color::Black).add_modifier(Modifier::BOLD)),
+            ),
+            ("V/.G", fg(Color::Green), None),
+        ];
+        for (text, first, second) in cases {
+            assert_eq!(paint(text), Ok(Paint { first, second }), "{text}");
+        }
+        assert_eq!(paint("I.R").unwrap().second(), fg(Color::Red));
+        assert_eq!(paint("I").unwrap(), Paint::default());
+        // The token before the `.` is checked as before.
+        assert_eq!(
+            parse("I20L.C/K+").unwrap(),
+            [Token::Illustration {
+                size: Some(20),
+                look: Some(Look::Line)
+            }]
+        );
+        assert_eq!(
+            parse("V5U/.W").unwrap(),
+            [Token::Value {
+                size: 5,
+                unit: true,
+                total: true
+            }]
+        );
+    }
+
+    fn bad_token(text: &str, problem: TokenProblem) -> BuildError {
+        BuildError::BadToken {
+            position: 1,
+            token: text.into(),
+            problem,
+        }
+    }
+
+    #[test]
+    fn bad_paints() {
+        for text in [
+            "S.", "S.X", "S.r", "S.+R", "S.R++", "S.R::B", "S.:", "S.*R", "S.**", "S.R*:B", "I./R",
+            "I.R/", "I.R/G/B", "V.R.G", "S..R", "P./R", ".R",
+        ] {
+            let expected = if text == ".R" {
+                TokenProblem::UnknownComponent
+            } else {
+                TokenProblem::BadPaint
+            };
+            assert_eq!(paint(text), Err(bad_token(text, expected)), "{text}");
+        }
+        for text in ["S.R/G", "B0.R/G", "N.:K/*", "T2.*/*"] {
+            assert_eq!(
+                paint(text),
+                Err(bad_token(text, TokenProblem::SecondPart)),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            super::parse("S.X").unwrap_err().to_string(),
+            "token 1 (\"S.X\"): bad paint (.[color][:color][*], colors K R G Y B M C W, + bright)"
+        );
+    }
 
     fn bad(composition: &str) -> TokenProblem {
         match parse(composition) {
@@ -548,6 +801,48 @@ mod tests {
         ]
     }
 
+    /// Any valid part of a paint.
+    fn part() -> impl Strategy<Value = Style> {
+        let color = (0..8usize, any::<bool>()).prop_map(|(i, bright)| {
+            let (_, normal, light) = COLORS[i];
+            if bright { light } else { normal }
+        });
+        (
+            proptest::option::of(color.clone()),
+            proptest::option::of(color),
+            any::<bool>(),
+        )
+            .prop_filter("not empty", |(fg, bg, bold)| {
+                fg.is_some() || bg.is_some() || *bold
+            })
+            .prop_map(|(fg, bg, bold)| {
+                let mut style = Style::new();
+                style.fg = fg;
+                style.bg = bg;
+                if bold {
+                    style = style.add_modifier(Modifier::BOLD);
+                }
+                style
+            })
+    }
+
+    /// Any valid token with any valid paint.
+    fn painted() -> impl Strategy<Value = Painted> {
+        (
+            token(),
+            proptest::option::of((part(), proptest::option::of(part()))),
+        )
+            .prop_map(|(token, paint)| {
+                let paint = paint.map_or(Paint::default(), |(first, second)| Paint {
+                    first,
+                    second: second.filter(|_| {
+                        matches!(token, Token::Illustration { .. } | Token::Value { .. })
+                    }),
+                });
+                Painted { token, paint }
+            })
+    }
+
     /// A valid list of tokens: the unique components are kept at their first occurrence.
     fn tokens() -> impl Strategy<Value = Vec<Token>> {
         proptest::collection::vec(token(), 1..20).prop_map(|tokens| {
@@ -576,6 +871,17 @@ mod tests {
         fn display_round_trips(tokens in tokens()) {
             let text = tokens.iter().map(ToString::to_string).collect::<Vec<_>>().join(" ");
             prop_assert_eq!(parse(&text).unwrap(), tokens);
+        }
+
+        #[test]
+        fn painted_display_round_trips(painted in painted()) {
+            let text = painted.to_string();
+            prop_assert_eq!(super::parse(&text).unwrap(), [painted]);
+        }
+
+        #[test]
+        fn parse_never_panics_on_paint_like_text(text in "[SBNIV0-9]{1,3}[.KRGYBMCW+:*/]{0,8}") {
+            let _ = super::parse(&text);
         }
     }
 }

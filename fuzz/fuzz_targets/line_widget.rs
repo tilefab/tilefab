@@ -17,7 +17,8 @@ use tilefab_widget::{Entry, LineWidget, WallTime};
 const TOKENS: &[&str] = &[
     "S", "S0", "S9", "B0", "B1", "B9", "D0", "D2", "T0", "T5", "P", "P5", "P9", "K", "K1", "N",
     "N0", "N14", "L", "L2", "L40", "V", "V5U/", "VU", "V/", "V999", "I", "I2", "I20", "X", "s",
-    "P1", "L1", "N100", "",
+    "P1", "L1", "N100", "", "IL", "I20D", "B0.R", "N.W+:B*", "P.*", "I.C/K+", "V/.W/:K*", "S.R/G",
+    "K.", "T2.X", "L.:",
 ];
 
 /// One part of the composition.
