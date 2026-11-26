@@ -465,3 +465,104 @@ fn a_look_keeps_the_styles_given_to_the_builder() {
         ("·", Color::Green)
     );
 }
+
+/// Foreground, background and bold of the cells of `buf`'s first row, from `from` to `to`.
+fn cells(buf: &Buffer, from: u16, to: u16) -> Vec<(Color, Color, bool)> {
+    (from..to)
+        .map(|x| {
+            let cell = buf.get(x, 0);
+            (cell.fg, cell.bg, cell.modifier.contains(Modifier::BOLD))
+        })
+        .collect()
+}
+
+#[test]
+fn a_paint_is_laid_over_the_style_of_its_component_only() {
+    let gray = Style::new().fg(Color::DarkGray);
+    // The same barrier twice: only the first one is painted.
+    let widget = LineWidget::builder("B0.R:B* B0 N.W+")
+        .barriers([Entry::styled("|", gray.add_modifier(Modifier::ITALIC))])
+        .names([Entry::styled("ab", Style::new().bg(Color::Green))])
+        .build()
+        .unwrap();
+    let buf = draw(&widget, 4);
+    assert_eq!(
+        cells(&buf, 0, 4),
+        [
+            (Color::Red, Color::Blue, true),
+            (Color::DarkGray, Color::Reset, false),
+            // The name keeps its background: the paint sets only the foreground.
+            (Color::White, Color::Green, false),
+            (Color::White, Color::Green, false),
+        ]
+    );
+    // What the paint does not set is kept: the italic of the first barrier.
+    assert!(buf.get(0, 0).modifier.contains(Modifier::ITALIC));
+}
+
+#[test]
+fn a_paint_over_the_styles_of_the_values() {
+    let mut widget = LineWidget::builder("T5.C P.* L.:M")
+        .time_style(Style::new().fg(Color::Red))
+        .build()
+        .unwrap();
+    widget.set_log("x");
+    let buf = draw(&widget, 11);
+    // `00:00` + `  0%` + `x`.
+    assert_eq!(cells(&buf, 0, 1), [(Color::Cyan, Color::Reset, false)]);
+    assert_eq!(cells(&buf, 7, 8), [(Color::Reset, Color::Reset, true)]);
+    assert_eq!(cells(&buf, 9, 10), [(Color::Reset, Color::Magenta, false)]);
+}
+
+#[test]
+fn a_dynamic_keyword_keeps_its_colors_unless_painted() {
+    let keywords = || {
+        [
+            Entry::styled("ok", Style::new().fg(Color::Green)),
+            Entry::styled("ko", Style::new().fg(Color::Red)),
+        ]
+    };
+    let mut plain = LineWidget::builder("K.*")
+        .keywords(keywords())
+        .build()
+        .unwrap();
+    plain.set_keyword(1).unwrap();
+    assert_eq!(
+        cells(&draw(&plain, 2), 0, 1),
+        [(Color::Red, Color::Reset, true)]
+    );
+    let mut painted = LineWidget::builder("K.Y")
+        .keywords(keywords())
+        .build()
+        .unwrap();
+    painted.set_keyword(1).unwrap();
+    assert_eq!(
+        cells(&draw(&painted, 2), 0, 1),
+        [(Color::Yellow, Color::Reset, false)]
+    );
+}
+
+#[test]
+fn the_two_parts_of_the_illustration_and_the_value() {
+    let mut bar = LineWidget::builder("I4L.G/K+").build().unwrap();
+    bar.set_progress(50.0).unwrap();
+    let green = (Color::Green, Color::Reset, false);
+    let gray = (Color::DarkGray, Color::Reset, false);
+    assert_eq!(cells(&draw(&bar, 4), 0, 4), [green, green, gray, gray]);
+    // One part: both.
+    let mut one = LineWidget::builder("I2.C").build().unwrap();
+    one.set_progress(50.0).unwrap();
+    let cyan = (Color::Cyan, Color::Reset, false);
+    assert_eq!(cells(&draw(&one, 2), 0, 2), [cyan, cyan]);
+
+    let mut value = LineWidget::builder("V1U/.W/*")
+        .units(entries(&["M"]))
+        .build()
+        .unwrap();
+    value.set_value(1.0, Some(0), Some((2.0, Some(0)))).unwrap();
+    // `1M/2M`: numbers and `/` white, units bold.
+    let buf = draw(&value, 5);
+    let white = (Color::Gray, Color::Reset, false);
+    let unit = (Color::Reset, Color::Reset, true);
+    assert_eq!(cells(&buf, 0, 5), [white, unit, white, white, unit]);
+}

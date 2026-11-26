@@ -266,6 +266,8 @@ const COMPOSITION_HELP: &[&str] = &[
     "  D0-D2 date, T0-T5 time, P[3-9] progress, K state keyword, N task name,",
     "  L[size] log, V[size][U][/] downloaded size, I[size][B|L|D] progress bar,",
     "  B bar █░ (default), L line ━─, D dots ●·",
+    "  paint after any token: .[color][:background][*bold], for instance B1.K+ or N.W+:B*,",
+    "  colors K R G Y B M C W (+ bright); I and V take a second part: I.G/K+, V5U/.W/K+",
 ];
 
 /// Completes the command name (the first word); nothing for the arguments.
@@ -1059,6 +1061,8 @@ mod tests {
                 "    D0-D2 date, T0-T5 time, P[3-9] progress, K state keyword, N task name,",
                 "    L[size] log, V[size][U][/] downloaded size, I[size][B|L|D] progress bar,",
                 "    B bar █░ (default), L line ━─, D dots ●·",
+                "    paint after any token: .[color][:background][*bold], for instance B1.K+ or N.W+:B*,",
+                "    colors K R G Y B M C W (+ bright); I and V take a second part: I.G/K+, V5U/.W/K+",
                 "[INFO] no task running",
                 "[ERROR] usage: start <name> [\"<composition>\"]",
                 "[WARN] unknown command: \"foo\" (type help)",

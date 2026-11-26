@@ -157,7 +157,8 @@ impl LineWidgetBuilder {
     /// The first [`BuildError`] found: in the composition, then in the lists, then in the
     /// fixed indices, then in the illustration and the number of decimals.
     pub fn build(self) -> Result<LineWidget, BuildError> {
-        let tokens = composition::parse(&self.composition)?;
+        let painted = composition::parse(&self.composition)?;
+        let tokens: Vec<Token> = painted.iter().map(|p| p.token).collect();
         let uses = |f: fn(&Token) -> bool| tokens.iter().any(f);
 
         let mut description = Description {
@@ -202,6 +203,7 @@ impl LineWidgetBuilder {
             ..Description::default()
         };
         let components = resolve(&tokens, &mut description)?;
+        description.paints = painted.iter().map(|p| p.paint).collect();
         let look = tokens.iter().find_map(|t| match t {
             Token::Illustration { look, .. } => Some(*look),
             _ => None,

@@ -24,18 +24,20 @@ const STEPS: [&str; 3] = ["resolving", "compiling a crate", "linking"];
 
 /// A task line with every kind of component.
 fn task(name: &str) -> LineWidget {
-    LineWidget::builder("B0 D1 B2 T0 B1 B2 S B2 K B2 N B2 I B2 P5 B2 V4U/ B2 L")
-        .barriers([Entry::new("["), Entry::new("]"), Entry::new(" ")])
-        .symbols([
-            Entry::styled("🔴", Style::new().fg(Color::Red)),
-            Entry::new("x"),
-        ])
-        .keywords([Entry::new("run"), Entry::new("done")])
-        .names([Entry::new(name), Entry::new("界界")])
-        .units([Entry::new("KB"), Entry::new("MB")])
-        .illustration(Entry::new("█"), Entry::new("░"))
-        .build()
-        .expect("valid task line")
+    LineWidget::builder(
+        "B0.K+ D1 B2 T0.C B1 B2 S B2 K.* B2 N.W+:B B2 IL.G/K+ B2 P5 B2 V4U/.W/K+ B2 L",
+    )
+    .barriers([Entry::new("["), Entry::new("]"), Entry::new(" ")])
+    .symbols([
+        Entry::styled("🔴", Style::new().fg(Color::Red)),
+        Entry::new("x"),
+    ])
+    .keywords([Entry::new("run"), Entry::new("done")])
+    .names([Entry::new(name), Entry::new("界界")])
+    .units([Entry::new("KB"), Entry::new("MB")])
+    .illustration(Entry::new("█"), Entry::new("░"))
+    .build()
+    .expect("valid task line")
 }
 
 #[test]

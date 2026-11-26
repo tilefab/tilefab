@@ -18,15 +18,17 @@ const DRAWS: u16 = 100;
 
 #[test]
 fn a_warm_draw_allocates_nothing() {
-    let mut widget = LineWidget::builder("N B0 D0 B1 T0 B0 S B1 K B1 P5 B1 V4U/ B1 I B1 L")
-        .names([Entry::new("alpha"), Entry::new("界界")])
-        .barriers([Entry::new("["), Entry::new(" ")])
-        .symbols([Entry::new("🔴"), Entry::new("x")])
-        .keywords([Entry::new("ok"), Entry::new("fail")])
-        .units([Entry::new("KB")])
-        .illustration(Entry::new("#"), Entry::new("."))
-        .build()
-        .unwrap();
+    let mut widget = LineWidget::builder(
+        "N.W+* B0 D0.C B1 T0 B0 S.:B B1 K.R B1 P5.* B1 V4U/.G/K+ B1 ID.C/K B1 L.:M",
+    )
+    .names([Entry::new("alpha"), Entry::new("界界")])
+    .barriers([Entry::new("["), Entry::new(" ")])
+    .symbols([Entry::new("🔴"), Entry::new("x")])
+    .keywords([Entry::new("ok"), Entry::new("fail")])
+    .units([Entry::new("KB")])
+    .illustration(Entry::new("#"), Entry::new("."))
+    .build()
+    .unwrap();
     widget
         .set_time(WallTime {
             year: 2026,
