@@ -651,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn example_of_the_specification() {
+    fn the_reference_example() {
         assert_eq!(
             parse("B0 T2 B1 B2 S B2 L").unwrap(),
             [
@@ -916,7 +916,9 @@ mod tests {
         }
 
         #[test]
-        fn parse_never_panics_on_grammar_like_text(text in "[SBDTPKNLVIU/0-9 ]{0,30}") {
+        fn parse_never_panics_on_grammar_like_text(
+            text in "[SBDTPKNLVIUORGHACYMW/.:*+0-9 ]{0,30}"
+        ) {
             let _ = parse(&text);
         }
 
@@ -933,7 +935,9 @@ mod tests {
         }
 
         #[test]
-        fn parse_never_panics_on_paint_like_text(text in "[SBNIV0-9]{1,3}[.KRGYBMCW+:*/]{0,8}") {
+        fn parse_never_panics_on_paint_like_text(
+            text in "[SBDTPKNLVI0-9][0-9BLDSORGHVAC]{0,3}[.KRGYBMCW+:*/]{0,8}"
+        ) {
             let _ = super::parse(&text);
         }
     }

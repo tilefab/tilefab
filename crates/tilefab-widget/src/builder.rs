@@ -542,7 +542,7 @@ mod tests {
         builder.build().expect_err("the build should fail")
     }
 
-    /// The example of the specification.
+    /// The reference example: `B0 T2 B1 B2 S B2 L`, the four state symbols and four barriers.
     fn example() -> LineWidgetBuilder {
         LineWidget::builder("B0 T2 B1 B2 S B2 L")
             .symbols(entries(&["🔴", "🟠", "🟡", "🟢"]))
