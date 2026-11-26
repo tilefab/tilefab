@@ -105,4 +105,4 @@ pub use builder::{
 };
 pub use entry::{Entry, EntryProblem};
 pub use time::{TimeField, WallTime};
-pub use widget::{LineWidget, UpdateError};
+pub use widget::{LineWidget, UpdateError, ValueShape};

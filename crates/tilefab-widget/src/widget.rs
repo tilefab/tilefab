@@ -75,15 +75,40 @@ pub(crate) struct Styles {
     pub(crate) value_slash: Style,
 }
 
-/// The parameters of `V`.
+/// The shape of `V` in a composition: whether its value has a unit and a total. The arguments
+/// of [`LineWidget::set_value`] must match it exactly.
+///
+/// Read it with [`LineWidget::value_shape`] rather than parsing the composition again: the
+/// paint of `V` may contain `/` too (`V5U.W/K+` has a unit and no total).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ValueShape {
+pub struct ValueShape {
     /// Most columns of each number.
     pub(crate) size: u16,
     /// Followed by a unit.
     pub(crate) unit: bool,
     /// Followed by a total.
     pub(crate) total: bool,
+}
+
+impl ValueShape {
+    /// Most columns of each number (the digits after `V`, or the default size).
+    #[must_use]
+    pub fn size(self) -> u16 {
+        self.size
+    }
+
+    /// Whether the value is followed by a unit (`U`): `set_value` then takes `Some(unit)`.
+    #[must_use]
+    pub fn unit(self) -> bool {
+        self.unit
+    }
+
+    /// Whether the value is followed by a total (`/`): `set_value` then takes `Some(total)`,
+    /// with a unit exactly when [`ValueShape::unit`] is true.
+    #[must_use]
+    pub fn total(self) -> bool {
+        self.total
+    }
 }
 
 /// Everything the builder resolved, handed to [`LineWidget::new`].
@@ -229,6 +254,13 @@ impl LineWidget {
     #[must_use]
     pub fn warnings(&self) -> &[Warning] {
         &self.warnings
+    }
+
+    /// The shape of `V`, `None` when the composition has no `V`: the arguments that
+    /// [`LineWidget::set_value`] accepts.
+    #[must_use]
+    pub fn value_shape(&self) -> Option<ValueShape> {
+        self.value
     }
 
     /// Width of a component that never changes width, `None` for `L`, `I` and `N`.

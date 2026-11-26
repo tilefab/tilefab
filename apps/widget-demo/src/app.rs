@@ -370,13 +370,7 @@ impl Task {
     fn progress(&mut self, ratio: f64, step: &'static str) {
         self.ratio = ratio;
         self.step = step;
-        line::update(
-            &mut self.widget,
-            &self.composition,
-            ratio,
-            step,
-            self.total_mb,
-        );
+        line::update(&mut self.widget, ratio, step, self.total_mb);
     }
 
     /// Build the widget again with a name column `column` wide, showing the same values.

@@ -36,6 +36,9 @@ break the API).
   after `/`, for their todo cells and their units (`I20L.G/K+`, `V5U/.W/K+`). It is resolved at
   construction: drawing stays allocation-free. New `TokenProblem::BadPaint` and
   `TokenProblem::SecondPart`.
+- `tilefab-widget`: `LineWidget::value_shape` returns the shape of `V` (new type
+  `ValueShape`: `size`, `unit`, `total`), the arguments `set_value` accepts, without parsing
+  the composition again.
 
 ### Changed
 
@@ -79,6 +82,8 @@ break the API).
 - Demo: a stdin line had no length limit in headless mode; a line longer than the prompt
   (4096 bytes) is refused whole.
 - Demo: the lines waiting while the terminal had no columns were kept without bound.
+- Demo: the value of a `V` whose paint has a second part (`V5U.W/K+`) stayed at 0: the demo
+  took the `/` of the paint for a total. It now reads the shape from the widget.
 
 ### Demo
 
