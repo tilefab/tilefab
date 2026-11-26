@@ -30,3 +30,12 @@ pub use hint::{Hinter, HistoryHinter};
 pub use history::History;
 pub use keymap::{Command, KeyBinding, Keymap};
 pub use render::EditorStyles;
+
+// The editor can move to another thread or task: a compile error here means a field (or a
+// trait object without `Send`) broke that.
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    assert_send::<LineEditor>();
+    assert_send::<History>();
+    assert_send::<Keymap>();
+};

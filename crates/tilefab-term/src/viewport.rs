@@ -30,6 +30,7 @@
 
 /// Where the terminal draws.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Viewport {
     /// The entire screen (usually the alternate screen).
     #[default]
@@ -46,6 +47,7 @@ pub enum Viewport {
 /// delete the lines that leave a scroll region or that `CSI n S` scrolls, even from the top
 /// of the screen.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ScrollMode {
     /// Line feeds on the last row of the screen: the whole screen scrolls, the viewport with
     /// it, and the lines leaving the top enter the scrollback in every terminal. The viewport

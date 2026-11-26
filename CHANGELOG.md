@@ -20,6 +20,16 @@ break the API).
 - `Block`, `Borders`, `BorderType`, `Padding`, `Clear`, `List`, `ListItem`, `ListState`,
   `Paragraph`, `Wrap`, `ProgressBar` and `ProgressLine` are removed, from `tilefab-widget` and
   from the re-exports of `tilefab` (feature `widget`), which now re-exports the new types.
+- `tilefab-term`: new variant `ScrollMode::Screen`, the new default of the inline terminal
+  (it was `Region`): it makes room for the inserted lines by scrolling the whole screen with
+  line feeds, so that every log line reaches the scrollback in every terminal.
+  `ScrollMode::Region` stays, documented as able to lose the scrollback (xterm.js in VS Code,
+  iTerm2 by default…).
+- `tilefab-input`: `Hinter` and `Completer` require `Send`, so that a `LineEditor` holding
+  one is `Send` and can move to another thread or task (`tokio::spawn`). A hinter or a
+  completer holding an `Rc` or a `RefCell` must switch to `Arc` or `Mutex`.
+- `ScrollMode`, `Viewport` (`tilefab-term`) and `Constraint` (`tilefab-core`) are
+  `#[non_exhaustive]`, like the other enums that may grow: a `match` on them needs a `_` arm.
 
 ### Added
 
@@ -42,10 +52,6 @@ break the API).
 
 ### Changed
 
-- `ScrollMode::Screen`, the new default of the inline terminal: it makes room for the inserted
-  lines by scrolling the whole screen with line feeds, so that every log line reaches the
-  scrollback in every terminal. `ScrollMode::Region` stays, documented as able to lose the
-  scrollback (xterm.js in VS Code, iTerm2 by default…).
 - Workspace lints `allow_attributes` and `allow_attributes_without_reason`: every lint
   exception is an `#[expect(…, reason = …)]`.
 

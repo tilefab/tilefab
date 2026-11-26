@@ -3,7 +3,10 @@
 use crate::History;
 
 /// Source of hints.
-pub trait Hinter {
+///
+/// `Send`, so that a [`LineEditor`](crate::LineEditor) holding one can move to another
+/// thread or task (`tokio::spawn`).
+pub trait Hinter: Send {
     /// The text to show **after** `line` (the cursor is at its end), or `None`.
     fn hint(&self, line: &str, history: &History) -> Option<String>;
 }
