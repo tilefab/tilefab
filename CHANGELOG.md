@@ -49,6 +49,8 @@ break the API).
 - `tilefab-widget`: `LineWidget::value_shape` returns the shape of `V` (new type
   `ValueShape`: `size`, `unit`, `total`), the arguments `set_value` accepts, without parsing
   the composition again.
+- `tilefab-input`: `History::file` returns the file the history appends to, `None` when it is
+  in memory only.
 
 ### Changed
 
@@ -70,6 +72,9 @@ break the API).
   16 MiB.
 - `tilefab-input`: the rewrite of a history file lost the lines that another instance
   appended since the load.
+- `tilefab-input`: when the rewrite of a large history file failed (read-only directory, full
+  disk), the history switched to memory only, although the file could still be appended to;
+  it now keeps appending, and `with_file` still returns the error.
 - `tilefab-core`: `Buffer::filled` with a wide cell broke the invariant of wide characters
   (now head and continuation pairs); a `Rect` written literally past `u16::MAX` made
   `Buffer` overflow (the area is clipped like `Rect::new`).
@@ -90,6 +95,9 @@ break the API).
 - Demo: the lines waiting while the terminal had no columns were kept without bound.
 - Demo: the value of a `V` whose paint has a second part (`V5U.W/K+`) stayed at 0: the demo
   took the `/` of the paint for a total. It now reads the shape from the widget.
+- Demo: a carriage return, a tab or another C0 control character of a task name (read on
+  stdin) reached stderr raw through `list`, since `tracing-subscriber` does not escape them;
+  every control character of a log line but the line feed is now escaped as `\xNN`.
 
 ### Demo
 
