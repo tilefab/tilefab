@@ -612,6 +612,44 @@ fn clear_erases_only_the_viewport_and_leaves_the_cursor_at_its_top() {
     assert_eq!(rig.sim.outside_sync, b"");
 }
 
+#[test]
+fn clear_writes_the_lines_still_pending_before_quitting() {
+    let mut rig = Rig::new(0, 1, ScrollMode::Screen);
+    // A viewport as tall as the screen: the lines wait.
+    let view: Vec<&str> = vec!["x"; H as usize];
+    rig.commit(&["first", "second"], &view);
+    assert!(!rig.sim.all_lines().iter().any(|l| l == "first"));
+    rig.term.clear().unwrap();
+    rig.pump();
+    let lines = rig.sim.all_lines();
+    let first = lines
+        .iter()
+        .position(|l| l == "first")
+        .expect("first line lost");
+    assert_eq!(lines[first + 1], "second", "{lines:#?}");
+    // The one-row viewport is cleared, the cursor at its start, below the lines.
+    let screen = rig.screen();
+    let row = usize::from(rig.sim.cursor.1);
+    assert_eq!(screen[row], "", "{screen:#?}");
+    assert_eq!(screen[row - 1], "second", "{screen:#?}");
+    assert_eq!(rig.sim.cursor.0, 0);
+    assert_eq!(rig.sim.outside_sync, b"");
+    // The requested height is kept for the next frame.
+    rig.commit(&[], &view);
+    assert_eq!(rig.term.area().height, H);
+}
+
+#[test]
+fn clear_without_pending_lines_writes_no_frame() {
+    let mut rig = Rig::new(15, 3, ScrollMode::Screen);
+    rig.commit(&["log"], &["a", "b", ">"]);
+    let blocks = rig.sim.blocks.len();
+    rig.term.clear().unwrap();
+    rig.pump();
+    // Only the clearing block.
+    assert_eq!(rig.sim.blocks.len(), blocks + 1);
+}
+
 // --- random operation sequences ----------------------------------------------------------------
 
 /// One step of a random session on an inline terminal.

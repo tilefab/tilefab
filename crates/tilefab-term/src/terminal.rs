@@ -40,6 +40,8 @@
 //! [`MAX_PENDING_LINES`] lines wait from one `draw` to the next this way: beyond that, the
 //! oldest are dropped (with one warning until the lines can be shown again), so that the
 //! memory used stays bounded. The same limit applies on a screen with no rows or columns.
+//! [`Terminal::clear`], which an application calls before quitting, first writes the lines
+//! still pending above a viewport of one row, so that they are not lost.
 //!
 //! A screen with no columns (a pty whose size is not set reports a width of 0) cannot show
 //! inserted lines either, but this is transient: lines already queued stay pending and are
@@ -140,6 +142,10 @@ pub struct Terminal<W: Write> {
     /// warn once until the pending lines are applied (a warning per `draw` could feed
     /// itself, in an application that shows its logs with `insert_before`).
     pending_overflowed: bool,
+    /// True after a frame interrupted by a write error or a panic: what the terminal shows
+    /// no longer matches `previous`, so the next `draw` starts over as after a resize (clear,
+    /// then redraw everything).
+    damaged: bool,
     /// Buffers kept from one frame to the next, so that a frame allocates nothing once they
     /// have the right size (see `Buffer::reset_to`): `next` is the one the frame renders
     /// into (in fullscreen mode, swapped with `previous` afterwards); `model` and `target`
@@ -189,6 +195,7 @@ impl<W: Write> Terminal<W> {
                     pending: Vec::new(),
                     pending_width: 0,
                     pending_overflowed: false,
+                    damaged: false,
                     next: Buffer::empty(Rect::default()),
                     model: Buffer::empty(Rect::default()),
                     target: Buffer::empty(Rect::default()),
@@ -232,6 +239,7 @@ impl<W: Write> Terminal<W> {
                     pending: Vec::new(),
                     pending_width: 0,
                     pending_overflowed: false,
+                    damaged: false,
                     next: Buffer::empty(Rect::default()),
                     model: Buffer::empty(Rect::default()),
                     target: Buffer::empty(Rect::default()),
@@ -345,20 +353,26 @@ impl<W: Write> Terminal<W> {
     ///
     /// A frame interrupted by a write error or a panic of `render` is closed on a best-effort
     /// basis (scroll region reset, synchronized update ended: see [`Backend::abort_sync`]),
-    /// so that the terminal does not stay frozen; the panic then goes on.
+    /// so that the terminal does not stay frozen; the panic then goes on. The next `draw`
+    /// then starts over as after a resize (the viewport is cleared and redrawn entirely),
+    /// since the screen may show part of the interrupted frame. In inline mode, the inserted
+    /// lines of the interrupted frame that may not have been written are queued again: a
+    /// line can then appear twice, but none is lost.
     pub fn draw(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> io::Result<()> {
         let result = panic::catch_unwind(AssertUnwindSafe(|| match self.viewport {
             Viewport::Fullscreen => self.draw_fullscreen(render),
             Viewport::Inline(_) => self.draw_inline(render),
         }));
         match result {
-            Ok(Ok(())) => Ok(()),
+            Ok(Ok(replaced)) => replaced_frame_result(replaced),
             Ok(Err(error)) => {
                 self.backend.abort_sync();
+                self.damaged = true;
                 Err(error)
             }
             Err(payload) => {
                 self.backend.abort_sync();
+                self.damaged = true;
                 panic::resume_unwind(payload)
             }
         }
@@ -366,13 +380,16 @@ impl<W: Write> Terminal<W> {
 
     // --- fullscreen ---------------------------------------------------------------------
 
-    fn draw_fullscreen(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> io::Result<()> {
+    /// Return whether `render` replaced the frame buffer (see [`replaced_frame_result`]).
+    fn draw_fullscreen(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> io::Result<bool> {
         let size = self.backend.size()?;
         // Start the synchronized block: everything that follows will appear at once.
         self.backend.begin_sync()?;
-        if size != self.screen {
-            // The terminal may have reflowed or lost lines: start with an empty screen, and the
-            // previous (empty) buffer now matches what is displayed.
+        if size != self.screen || self.damaged {
+            // The terminal may have reflowed or lost lines, or shows part of an interrupted
+            // frame: start with an empty screen, and the previous (empty) buffer now matches
+            // what is displayed.
+            self.damaged = false;
             self.screen = size;
             self.area = Rect::new(0, 0, size.width, size.height);
             self.previous.reset_to(self.area);
@@ -403,12 +420,13 @@ impl<W: Write> Terminal<W> {
         // What was just drawn becomes “what the terminal displays”; the old buffer is
         // reused for the next frame (double buffering).
         std::mem::swap(&mut self.previous, &mut self.next);
-        replaced_frame_result(replaced)
+        Ok(replaced)
     }
 
     // --- inline --------------------------------------------------------------------------
 
-    fn draw_inline(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> io::Result<()> {
+    /// Return whether `render` replaced the frame buffer (see [`replaced_frame_result`]).
+    fn draw_inline(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> io::Result<bool> {
         // Query the terminal (size, cursor position) **before** opening the synchronized
         // block: the reply arrives on input, not in our output stream.
         let size = self.backend.size()?;
@@ -420,9 +438,10 @@ impl<W: Write> Terminal<W> {
         if size.height == 0 {
             self.screen = size;
             self.limit_pending();
-            return Ok(());
+            return Ok(false);
         }
-        let resized = if size == self.screen {
+        // After an interrupted frame, start over as after a resize (see `damaged`).
+        let resized = if size == self.screen && !self.damaged {
             None
         } else {
             Some((size, self.cursor_after_resize(size)))
@@ -431,6 +450,7 @@ impl<W: Write> Terminal<W> {
         self.backend.begin_sync()?;
         if let Some((size, cursor)) = resized {
             self.resize_inline(size, cursor)?;
+            self.damaged = false;
         }
 
         let screen_height = self.screen.height;
@@ -450,6 +470,47 @@ impl<W: Write> Terminal<W> {
             Vec::new()
         };
         let row_width = self.pending_width.max(1);
+        let mut replaced = false;
+        let checked = |frame: &mut Frame<'_>| render_checked(render, frame, &mut replaced);
+        let mut applied = 0;
+        let result = self.commit_rows(
+            &rows,
+            row_width,
+            per_chunk,
+            new_height,
+            checked,
+            &mut applied,
+        );
+        if taken {
+            if result.is_err() {
+                // The chunks not committed in full may not have reached the screen: queue
+                // them again for the next frame (the interrupted one may show twice).
+                rows.drain(..applied);
+            } else {
+                // Give the (now applied) lines' memory back for the next ones.
+                rows.clear();
+            }
+            self.pending = rows;
+        }
+        result?;
+
+        self.backend.end_sync()?;
+        self.backend.flush()?;
+        Ok(replaced)
+    }
+
+    /// Commit `rows` in chunks of at most `per_chunk` lines, the last one with the frame
+    /// drawn by `render`, then place the cursor. `applied` counts the cells of the chunks
+    /// committed in full, for the caller to queue the others again after an error.
+    fn commit_rows(
+        &mut self,
+        rows: &[Cell],
+        row_width: usize,
+        per_chunk: usize,
+        new_height: u16,
+        render: impl FnOnce(&mut Frame<'_>),
+        applied: &mut usize,
+    ) -> io::Result<()> {
         // The last chunk is applied with the frame; the earlier ones, in order, before it.
         let mut chunks = rows.chunks(per_chunk.max(1) * row_width);
         let last = chunks.next_back().unwrap_or(&[]);
@@ -462,21 +523,11 @@ impl<W: Write> Terminal<W> {
             moved |= self
                 .commit(chunk, row_width, new_height, None::<fn(&mut Frame<'_>)>)?
                 .1;
+            *applied += chunk.len();
         }
-        let mut replaced = false;
-        let checked = |frame: &mut Frame<'_>| render_checked(render, frame, &mut replaced);
-        let (wanted_cursor, last_moved) =
-            self.commit(last, row_width, new_height, Some(checked))?;
-        self.place_cursor(wanted_cursor, moved | last_moved)?;
-        if taken {
-            // Give the (now applied) lines' memory back for the next ones.
-            rows.clear();
-            self.pending = rows;
-        }
-
-        self.backend.end_sync()?;
-        self.backend.flush()?;
-        replaced_frame_result(replaced)
+        let (wanted_cursor, last_moved) = self.commit(last, row_width, new_height, Some(render))?;
+        *applied += last.len();
+        self.place_cursor(wanted_cursor, moved | last_moved)
     }
 
     /// Cursor position after a resize: queried from the terminal, or estimated if the query
@@ -696,13 +747,24 @@ impl<W: Write> Terminal<W> {
 
     /// Clear the viewport and force the next `draw` to rewrite everything.
     ///
-    /// Fullscreen: clear the entire screen. Inline: clear only the viewport lines and
-    /// leave the cursor at the viewport start, where the shell will resume.
+    /// Fullscreen: clear the entire screen. Inline: first write the lines still pending (see
+    /// [`Terminal::insert_before`]: the viewport filled the screen, for instance) above a
+    /// viewport shrunk to one row, so that they are not lost when the application quits;
+    /// then clear only the viewport lines and leave the cursor at the viewport start, where
+    /// the shell will resume. The requested height is kept for the next `draw`. Lines that
+    /// still have no room (a screen of one row, or with no rows or columns) stay pending.
     ///
     /// # Errors
     ///
     /// Returns an error if writing to the terminal fails.
     pub fn clear(&mut self) -> io::Result<()> {
+        if matches!(self.viewport, Viewport::Inline(_)) && !self.pending.is_empty() {
+            let wanted = self.wanted_height;
+            self.wanted_height = 1;
+            let flushed = self.draw(|_| {});
+            self.wanted_height = wanted;
+            flushed?;
+        }
         match self.viewport {
             Viewport::Fullscreen => {
                 self.backend.set_cursor_position(0, 0)?;
@@ -1389,6 +1451,61 @@ mod tests {
             // The next frame works again.
             term.draw(|f| f.render_widget("again", f.area())).unwrap();
         }
+    }
+
+    /// Whether `needle` appears in `haystack`.
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+    }
+
+    #[test]
+    fn a_frame_after_a_write_error_loses_no_line_and_redraws_everything() {
+        let mut term = failing_terminal();
+        term.insert_before(1, |b| "log line".render(b.area(), b));
+        let before = term.backend().writer().bytes.len();
+        term.draw(|f| f.render_widget("hello", f.area())).unwrap();
+        let frame_len = term.backend().writer().bytes.len() - before;
+        // Every offset of the failure within the frame.
+        for offset in 1..frame_len {
+            let mut term = failing_terminal();
+            term.insert_before(1, |b| "log line".render(b.area(), b));
+            let writer = term.backend_mut().writer_mut();
+            writer.fail_at = Some(writer.bytes.len() + offset);
+            assert!(term.draw(|f| f.render_widget("hello", f.area())).is_err());
+            let failed = term.backend().writer().bytes.len();
+            term.draw(|f| f.render_widget("again", f.area())).unwrap();
+            let bytes = &term.backend().writer().bytes;
+            let recovery = &bytes[failed..];
+            // Written by the interrupted frame, or else queued again for the next one (the
+            // diff skips the space, already blank on screen: `log`, then `line`).
+            let shows_line = |part: &[u8]| contains(part, b"log") && contains(part, b"line");
+            assert!(
+                shows_line(&bytes[before..failed]) || shows_line(recovery),
+                "offset {offset}: line lost: {:?}",
+                String::from_utf8_lossy(bytes)
+            );
+            // The next frame starts over: erase from the viewport down, then the whole
+            // viewport.
+            assert!(
+                contains(recovery, b"\x1b[J") && contains(recovery, b"again"),
+                "offset {offset}: {:?}",
+                String::from_utf8_lossy(recovery)
+            );
+        }
+    }
+
+    #[test]
+    fn a_frame_after_a_good_one_does_not_start_over() {
+        let mut term = failing_terminal();
+        term.draw(|f| f.render_widget("hello", f.area())).unwrap();
+        let before = term.backend().writer().bytes.len();
+        term.draw(|f| f.render_widget("again", f.area())).unwrap();
+        assert!(!contains(
+            &term.backend().writer().bytes[before..],
+            b"\x1b[J"
+        ));
     }
 
     #[test]

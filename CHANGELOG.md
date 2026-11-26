@@ -83,6 +83,13 @@ break the API).
   open (frozen display) and maybe a scroll region set; the terminal restoration also closes
   both now.
 - `tilefab-term`: `insert_before` could queue lines without bound until the next `draw`.
+- `tilefab-term`: the lines still pending when the application quit (a viewport as tall as
+  the screen has no room for them) were lost: `Terminal::clear` now writes them first, above
+  a viewport of one row.
+- `tilefab-term`: after a frame interrupted by a write error or a panic, the inserted lines
+  of that frame were lost, and the next frames were drawn against a screen they no longer
+  matched. The lines not written in full are queued again (one may show twice), and the next
+  `draw` clears and redraws the viewport, as after a resize.
 - `tilefab-term`: a frame that changed a text modifier (bold, dim…) allocated.
 - `tilefab-input`: `LineEditor::render` allocated at every frame.
 - `tilefab-widget`: the layout of a `LineWidget` was quadratic in its number of components.
