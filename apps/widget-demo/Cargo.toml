@@ -8,7 +8,8 @@ license.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
-# Published so that `cargo install widget-demo` gives a ready-to-run demo.
+# Published with the first release, so that `cargo install widget-demo` gives a ready-to-run
+# demo (until then, the READMEs say `cargo install --path apps/widget-demo`).
 publish.workspace = true
 
 [[bin]]
