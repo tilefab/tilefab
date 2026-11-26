@@ -91,8 +91,9 @@ impl LineWidgetBuilder {
     /// The two characters of `I`, each exactly 1 column wide: `done` fills the part of the
     /// width reached by the progress, `todo` the rest. Without them, `I` is a bar (`█`/`░`).
     ///
-    /// When the composition gives a look to `I` (`IB`, `IL`, `ID`), the look picks the
-    /// characters and only the styles of `done` and `todo` are kept.
+    /// When the composition gives a look to `I` (`IB`, `IL`, `I20C`…: the letters are listed in
+    /// the crate documentation), the look picks the characters and only the styles of `done`
+    /// and `todo` are kept.
     pub fn illustration(mut self, done: Entry, todo: Entry) -> Self {
         self.illustration = Some((done, todo));
         self
