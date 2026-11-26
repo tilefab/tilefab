@@ -17,7 +17,7 @@
 //! | `N` | name of the `names` list, as wide as the entry shown | `N14`: fixed; `N`: dynamic |
 //! | `L` | log text | `L40`: fixed size; `L`: elastic |
 //! | `V` | value, with optional unit (`U`) and total (`/`): `V5U/` | size 1–999 (5 by default) |
-//! | `I` | illustration of the progress with two characters: bar `█`/`░`, line `━`/`─` or dots `●`/`·` | `I20`: fixed size; `I`: elastic; then `B`, `L` or `D` for the look (`I20L`), else the characters given to the builder or the bar |
+//! | `I` | illustration of the progress with two characters, chosen by its look: `B` bar `█░`, `L` line `━─`, `D` dots `●·`, `S` squares `■□`, `O` circles `●○`, `R` diamonds `◆◇`, `G` segments `▰▱`, `H` shaded blocks `▓░`, `V` vertical bars `┃│`, `A` ASCII `#-`, `C` chevrons `>·` | `I20`: fixed size; `I`: elastic; then the letter of the look (`I20L`), else the characters given to the builder or the bar |
 //!
 //! `D`, `T`, `P`, `K`, `L`, `V` and `I` appear at most once; `S`, `B` and `N` can be repeated.
 //!
