@@ -139,6 +139,9 @@ break the API).
 - Demo: a stdin line had no length limit in headless mode; a line longer than the prompt
   (4096 bytes) is refused whole.
 - Demo: the lines waiting while the terminal had no columns were kept without bound.
+- Demo: in a terminal one column wide, the wide characters of the log lines (emoji,
+  ideographs) disappeared without a trace; each one is now shown as the replacement
+  character, U+FFFD.
 - Demo: log lines wrapped into more than 65,535 rows (a narrow terminal) lost their newest
   rows; the demo now inserts the newest `MAX_PENDING_LINES` rows, and warns about the others.
 - Demo: the value of a `V` whose paint has a second part (`V5U.W/K+`) stayed at 0: the demo
