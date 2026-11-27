@@ -98,12 +98,12 @@ fn animate(widgets: &mut Widgets, elapsed: Duration) -> Result<(), tilefab::Upda
     let ratio = (elapsed.as_secs_f64() % 10.0) / 10.0;
     let now = wall_time(elapsed);
     let step_count = STEPS.len();
-    // `ratio` is in 0..1: the index is below `step_count`.
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         clippy::cast_precision_loss,
-        reason = "a small index in 0..STEPS.len()"
+        reason = "`ratio` in 0..1 times the length of a short list: a non-negative value below \
+                  that length, exact in f64, capped to the last index"
     )]
     let step = ((ratio * step_count as f64) as usize).min(step_count - 1);
     let state = match ratio {

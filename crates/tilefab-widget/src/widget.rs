@@ -614,8 +614,10 @@ impl LineWidget {
                     x,
                     y,
                     width,
-                    name.entry.text(),
-                    name.width,
+                    MeasuredText {
+                        text: name.entry.text(),
+                        width: name.width,
+                    },
                     first(name.entry.style()),
                     true,
                 );
@@ -628,8 +630,10 @@ impl LineWidget {
                         x,
                         y,
                         width,
-                        &state.log,
-                        state.log_width,
+                        MeasuredText {
+                            text: &state.log,
+                            width: state.log_width,
+                        },
                         first(self.styles.log),
                         !last,
                     );
@@ -706,19 +710,28 @@ fn left(buf: &mut Buffer, x: u16, y: u16, width: usize, measured: &Measured, sty
     pad(buf, next, y, width.saturating_sub(measured.width), style);
 }
 
-/// Write `text` (`text_width` columns) in `width` columns, truncated with `…` when it does not
-/// fit; the padding after a text that fits is written only when `pad_end` is set.
-#[expect(clippy::too_many_arguments, reason = "a private drawing helper")]
+/// A text and its width in columns, measured beforehand.
+#[derive(Clone, Copy)]
+struct MeasuredText<'a> {
+    text: &'a str,
+    width: usize,
+}
+
+/// Write `text` in `width` columns, truncated with `…` when it does not fit; the padding after
+/// a text that fits is written only when `pad_end` is set.
 fn fitted(
     buf: &mut Buffer,
     x: u16,
     y: u16,
     width: usize,
-    text: &str,
-    text_width: usize,
+    text: MeasuredText<'_>,
     style: Style,
     pad_end: bool,
 ) {
+    let MeasuredText {
+        text,
+        width: text_width,
+    } = text;
     let fit = truncate(text, text_width, width);
     let mut x = put(buf, x, y, fit.prefix, width, style);
     if fit.ellipsis {

@@ -563,18 +563,13 @@ pub(crate) mod tests {
         #[test]
         fn sharing_matches_the_reference(
             nominals in proptest::collection::vec(1usize..50, 1..8),
-            pick in 0.0f64..1.0,
+            per_mille in 0usize..1000,
         ) {
             let low: usize = nominals.iter().map(|&w| minimum(w)).sum();
             let high: usize = nominals.iter().sum();
             prop_assume!(low < high);
-            #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                clippy::cast_precision_loss,
-                reason = "a small budget"
-            )]
-            let budget = low + ((high - low) as f64 * pick) as usize;
+            // From `low` to just under `high`, in integers.
+            let budget = low + (high - low) * per_mille / 1000;
             let share = Share::proportional(budget, || nominals.iter().copied());
             let mut active = 0;
             let widths: Vec<usize> = nominals.iter().map(|&w| share.width(w, &mut active)).collect();
