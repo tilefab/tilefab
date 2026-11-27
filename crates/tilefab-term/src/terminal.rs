@@ -17,6 +17,9 @@
 //!   height, redraw) in a single synchronized block. See [`super::viewport`] for the placement
 //!   rule.
 //!
+//! In both modes, a `draw` that changes nothing on screen writes nothing, not even an empty
+//! synchronized block (see [`Backend::begin_sync`]).
+//!
 //! # Resizing
 //!
 //! At the start of each `draw`, compare the terminal size with the known size.
@@ -880,13 +883,13 @@ mod tests {
     }
 
     #[test]
-    fn unchanged_frame_emits_only_the_sync_frame() {
+    fn an_unchanged_frame_writes_nothing() {
         let mut term = terminal(6, 2);
         let render = |f: &mut Frame| f.render_widget("hi", f.area());
         term.draw(render).unwrap();
         take(&mut term);
         term.draw(render).unwrap();
-        assert_eq!(take(&mut term), "\x1b[?2026h\x1b[?2026l");
+        assert_eq!(take(&mut term), "");
     }
 
     #[test]
@@ -911,14 +914,14 @@ mod tests {
     fn cursor_is_hidden_by_default_and_shown_then_hidden_on_request() {
         let mut term = terminal(6, 2);
         term.draw(|_| {}).unwrap();
-        assert_eq!(take(&mut term), "\x1b[?2026h\x1b[?2026l");
+        assert_eq!(take(&mut term), "");
 
         term.draw(|f| f.set_cursor_position((2, 1))).unwrap();
         assert_eq!(take(&mut term), "\x1b[?2026h\x1b[?25h\x1b[2;3H\x1b[?2026l");
 
-        // Same position, nothing to redraw: no cursor sequence.
+        // Same position, nothing to redraw: no cursor sequence, nothing at all.
         term.draw(|f| f.set_cursor_position((2, 1))).unwrap();
-        assert_eq!(take(&mut term), "\x1b[?2026h\x1b[?2026l");
+        assert_eq!(take(&mut term), "");
 
         term.draw(|_| {}).unwrap();
         assert_eq!(take(&mut term), "\x1b[?2026h\x1b[?25l\x1b[?2026l");
@@ -1277,7 +1280,7 @@ mod tests {
         // Nothing is queued either: lines kept here would never be applied.
         assert!(term.pending.is_empty(), "lines queued in fullscreen mode");
         term.draw(|_| {}).unwrap();
-        assert_eq!(take(&mut term), "\x1b[?2026h\x1b[?2026l");
+        assert_eq!(take(&mut term), "");
         assert_eq!(term.area(), Rect::new(0, 0, 5, 3));
     }
 
@@ -1537,15 +1540,33 @@ mod tests {
     #[test]
     fn a_panic_in_the_render_function_closes_the_synchronized_update() {
         let mut term = failing_terminal();
+        // A line to insert: the scroll that makes room for it is written before `render`,
+        // so the update is open when the panic comes.
+        term.insert_before(1, |b| {
+            b.set_string(0, 0, "log", Style::default());
+        });
+        let before = term.backend().writer().bytes.len();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = term.draw(|_| panic!("render failed"));
         }));
         assert!(result.is_err());
-        let bytes = &term.backend().writer().bytes;
+        let bytes = &term.backend().writer().bytes[before..];
         assert!(
-            bytes.ends_with(CLOSING),
+            bytes.starts_with(b"\x1b[?2026h") && bytes.ends_with(CLOSING),
             "{:?}",
             String::from_utf8_lossy(bytes)
         );
+    }
+
+    #[test]
+    fn a_panic_before_any_write_leaves_nothing_to_close() {
+        let mut term = failing_terminal();
+        let before = term.backend().writer().bytes.len();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = term.draw(|_| panic!("render failed"));
+        }));
+        assert!(result.is_err());
+        let bytes = &term.backend().writer().bytes[before..];
+        assert!(bytes.is_empty(), "{:?}", String::from_utf8_lossy(bytes));
     }
 }

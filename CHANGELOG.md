@@ -57,6 +57,10 @@ break the API).
 
 ### Changed
 
+- `tilefab-term`: a `draw` that changes nothing on screen writes nothing; it wrote an empty
+  synchronized update (`ESC[?2026h ESC[?2026l`), so that an idle application redrawing
+  on a timer, like the demo, sent ten of them a second. `Backend::begin_sync` now writes the
+  opening with the first write that follows, and `end_sync` closes only an update opened.
 - Workspace lints `allow_attributes` and `allow_attributes_without_reason`: every lint
   exception is an `#[expect(…, reason = …)]`.
 
