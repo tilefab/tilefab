@@ -2015,10 +2015,8 @@ mod tests {
 
     #[test]
     fn a_history_write_error_is_reported_once_by_the_editor() {
-        let dir =
-            std::env::temp_dir().join(format!("tilefab-editor-history-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let path = dir.join("history");
+        let dir = crate::test_dir::TempDir::new("editor");
+        let path = dir.0.join("history");
         let (history, error) = History::with_file(&path, 10);
         assert!(error.is_none());
         // The file becomes a directory: the next append fails.
@@ -2028,7 +2026,6 @@ mod tests {
         let _ = e.execute(Command::Submit);
         assert!(e.take_history_error().is_some());
         assert!(e.take_history_error().is_none());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

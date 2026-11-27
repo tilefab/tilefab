@@ -22,6 +22,8 @@ mod keymap;
 mod kill_ring;
 mod render;
 mod search;
+#[cfg(test)]
+mod test_dir;
 mod undo;
 
 pub use completion::{Candidate, Completer, Completions};
