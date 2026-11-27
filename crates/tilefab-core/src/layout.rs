@@ -275,9 +275,66 @@ pub enum Direction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layout {
     direction: Direction,
-    constraints: Vec<Constraint>,
+    constraints: Constraints,
     margin: Margin,
     spacing: u16,
+}
+
+/// Number of constraints a [`Layout`] keeps without allocating.
+const INLINE: usize = 8;
+
+/// The constraints of a [`Layout`]: up to [`INLINE`] kept inline, so that a layout built at
+/// every frame (`Layout::vertical([…])`) allocates nothing.
+#[derive(Clone)]
+enum Constraints {
+    Inline {
+        items: [Constraint; INLINE],
+        len: usize,
+    },
+    Heap(Vec<Constraint>),
+}
+
+impl Constraints {
+    fn collect(constraints: impl IntoIterator<Item = Constraint>) -> Self {
+        let mut constraints = constraints.into_iter();
+        let mut items = [Constraint::Length(0); INLINE];
+        for (len, slot) in items.iter_mut().enumerate() {
+            match constraints.next() {
+                Some(constraint) => *slot = constraint,
+                None => return Self::Inline { items, len },
+            }
+        }
+        match constraints.next() {
+            None => Self::Inline { items, len: INLINE },
+            Some(next) => {
+                let mut all = items.to_vec();
+                all.push(next);
+                all.extend(constraints);
+                Self::Heap(all)
+            }
+        }
+    }
+
+    fn as_slice(&self) -> &[Constraint] {
+        match self {
+            Self::Inline { items, len } => &items[..*len],
+            Self::Heap(all) => all,
+        }
+    }
+}
+
+impl PartialEq for Constraints {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl Eq for Constraints {}
+
+impl std::fmt::Debug for Constraints {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.as_slice().fmt(f)
+    }
 }
 
 impl Layout {
@@ -285,7 +342,7 @@ impl Layout {
     pub fn new(direction: Direction, constraints: impl IntoIterator<Item = Constraint>) -> Self {
         Self {
             direction,
-            constraints: constraints.into_iter().collect(),
+            constraints: Constraints::collect(constraints),
             margin: Margin::default(),
             spacing: 0,
         }
@@ -332,15 +389,44 @@ impl Layout {
 
     /// Split `area`: one rectangle per constraint, in order. Rectangles do not
     /// overlap, stay within `area`, and may be empty (size 0).
+    ///
+    /// Allocates the returned `Vec` only; [`Layout::areas`] allocates nothing.
     #[must_use]
     pub fn split(&self, area: Rect) -> Vec<Rect> {
+        let mut rects = vec![Rect::default(); self.constraints.as_slice().len()];
+        self.split_into(area, &mut rects);
+        rects
+    }
+
+    /// Like [`Layout::split`], with an array whose size is known at compile time:
+    /// `let [a, b] = layout.areas(area);`. Allocates nothing, up to 8 constraints (the
+    /// layout itself included), so it fits a frame drawn at every tick.
+    ///
+    /// # Panics
+    ///
+    /// If `N` is not the number of constraints.
+    #[must_use]
+    pub fn areas<const N: usize>(&self, area: Rect) -> [Rect; N] {
+        let count = self.constraints.as_slice().len();
+        assert!(
+            count == N,
+            "Layout::areas::<{N}> called with {count} constraints"
+        );
+        let mut rects = [Rect::default(); N];
+        self.split_into(area, &mut rects);
+        rects
+    }
+
+    /// Fill `rects`, one per constraint (as many), with the split of `area`.
+    fn split_into(&self, area: Rect, rects: &mut [Rect]) {
+        let constraints = self.constraints.as_slice();
         let area = area.inner(self.margin);
         let (start, length) = match self.direction {
             Direction::Horizontal => (area.x, area.width),
             Direction::Vertical => (area.y, area.height),
         };
 
-        let gaps = self.constraints.len().saturating_sub(1);
+        let gaps = constraints.len().saturating_sub(1);
         // Effective spacing: reduced if the `gaps` gaps do not fit in the area.
         let spacing = usize::from(length)
             .checked_div(gaps)
@@ -348,115 +434,89 @@ impl Layout {
         let available = length - saturating_u16(gaps).wrapping_mul(spacing).min(length);
         // `gaps * spacing <= length <= u16::MAX`, so the u16 product cannot overflow;
         // the `min` above is just a guard.
-        let sizes = solve(&self.constraints, available);
+
+        // The sizes on the stack, unless there are many constraints.
+        let mut inline = [0u16; INLINE];
+        let mut heap = Vec::new();
+        let sizes: &mut [u16] = if constraints.len() <= INLINE {
+            &mut inline[..constraints.len()]
+        } else {
+            heap.resize(constraints.len(), 0);
+            &mut heap
+        };
+        solve(constraints, available, sizes);
 
         let mut position = start;
-        sizes
-            .into_iter()
-            .map(|size| {
-                let rect = match self.direction {
-                    Direction::Horizontal => Rect::new(position, area.y, size, area.height),
-                    Direction::Vertical => Rect::new(area.x, position, area.width, size),
-                };
-                position = position.saturating_add(size).saturating_add(spacing);
-                rect
-            })
-            .collect()
-    }
-
-    /// Like [`Layout::split`], with an array whose size is known at compile time:
-    /// `let [a, b] = layout.areas(area);`.
-    ///
-    /// # Panics
-    ///
-    /// If `N` is not the number of constraints.
-    #[must_use]
-    pub fn areas<const N: usize>(&self, area: Rect) -> [Rect; N] {
-        let rects = self.split(area);
-        let count = rects.len();
-        rects
-            .try_into()
-            .unwrap_or_else(|_| panic!("Layout::areas::<{N}> called with {count} constraints"))
+        for (rect, &size) in rects.iter_mut().zip(sizes.iter()) {
+            *rect = match self.direction {
+                Direction::Horizontal => Rect::new(position, area.y, size, area.height),
+                Direction::Vertical => Rect::new(area.x, position, area.width, size),
+            };
+            position = position.saturating_add(size).saturating_add(spacing);
+        }
     }
 }
 
-/// Sizes (in cells) of each constraint for `available` cells. See the module header.
-/// The sum of sizes never exceeds `available`.
-fn solve(constraints: &[Constraint], available: u16) -> Vec<u16> {
+/// Write into `sizes` (one per constraint) the size in cells of each constraint for
+/// `available` cells. See the module header. The sum of sizes never exceeds `available`.
+/// Allocates nothing.
+fn solve(constraints: &[Constraint], available: u16, sizes: &mut [u16]) {
     let avail = u64::from(available);
 
-    // 1. Requests.
-    let mut requests = vec![0u64; constraints.len()];
-    let mut proportional: Vec<(usize, f64)> = Vec::new();
-    for (i, constraint) in constraints.iter().enumerate() {
-        match *constraint {
-            Constraint::Length(n) | Constraint::Min(n) | Constraint::Max(n) => {
-                requests[i] = u64::from(n);
-            }
-            // The product and quotient are exact when the result is an integer.
-            Constraint::Percentage(p) => {
-                proportional.push((i, exact_f64(avail * u64::from(p)) / 100.0));
-            }
-            Constraint::Ratio(_, 0) | Constraint::Fill(_) => {}
-            Constraint::Ratio(a, b) => {
-                proportional.push((i, exact_f64(avail * u64::from(a)) / f64::from(b)));
-            }
-        }
+    // 1. Requests: proportional constraints share the available space by the largest
+    // remainder method; a request above `u16::MAX` is capped, which changes nothing since
+    // step 2 limits it to the remaining space.
+    let share = |i: usize| match constraints[i] {
+        // The product and quotient are exact when the result is an integer.
+        Constraint::Percentage(p) => Some(exact_f64(avail * u64::from(p)) / 100.0),
+        Constraint::Ratio(_, 0) => None,
+        Constraint::Ratio(a, b) => Some(exact_f64(avail * u64::from(a)) / f64::from(b)),
+        _ => None,
+    };
+    for (size, constraint) in sizes.iter_mut().zip(constraints) {
+        *size = match *constraint {
+            Constraint::Length(n) | Constraint::Min(n) | Constraint::Max(n) => n,
+            _ => 0,
+        };
     }
-    let shares: Vec<f64> = proportional.iter().map(|&(_, exact)| exact).collect();
-    for (&(i, _), size) in proportional.iter().zip(largest_remainder(&shares)) {
-        requests[i] = size;
-    }
+    largest_remainder(constraints.len(), share, |i, size| {
+        sizes[i] = u16::try_from(size).unwrap_or(u16::MAX);
+    });
 
     // 2. Allocate in order, limited by remaining space.
-    let mut remaining = avail;
-    let mut sizes: Vec<u64> = requests
-        .iter()
-        .map(|&request| {
-            let size = request.min(remaining);
-            remaining -= size;
-            size
-        })
-        .collect();
-
-    // 3. Share the remainder: among Fill constraints (by weight), otherwise Min constraints (equally).
-    if remaining > 0 {
-        let fills: Vec<usize> = (0..constraints.len())
-            .filter(|&i| matches!(constraints[i], Constraint::Fill(w) if w > 0))
-            .collect();
-        let receivers = if fills.is_empty() {
-            (0..constraints.len())
-                .filter(|&i| matches!(constraints[i], Constraint::Min(_)))
-                .collect()
-        } else {
-            fills
-        };
-        let weights: Vec<f64> = receivers
-            .iter()
-            .map(|&i| match constraints[i] {
-                Constraint::Fill(w) => f64::from(w),
-                _ => 1.0,
-            })
-            .collect();
-        let total: f64 = weights.iter().sum();
-        if total > 0.0 {
-            let exact: Vec<f64> = weights
-                .iter()
-                .map(|w| exact_f64(remaining) * w / total)
-                .collect();
-            // Force the sum to exactly `remaining` (the method distributes only
-            // the integer part of the sum, which equals `remaining` up to floating-point error).
-            for (&i, extra) in receivers.iter().zip(largest_remainder(&exact)) {
-                sizes[i] += extra;
-            }
-        }
+    let mut remaining = available;
+    for size in sizes.iter_mut() {
+        *size = (*size).min(remaining);
+        remaining -= *size;
     }
 
-    // Each size is at most `available`, a `u16`: the fallback is never used.
-    sizes
-        .into_iter()
-        .map(|size| u16::try_from(size).unwrap_or(u16::MAX))
-        .collect()
+    // 3. Share the remainder: among Fill constraints (by weight), otherwise Min constraints
+    // (equally).
+    if remaining > 0 {
+        let has_fill = constraints
+            .iter()
+            .any(|c| matches!(c, Constraint::Fill(w) if *w > 0));
+        let weight = |i: usize| match constraints[i] {
+            Constraint::Fill(w) if has_fill && w > 0 => Some(f64::from(w)),
+            Constraint::Min(_) if !has_fill => Some(1.0),
+            _ => None,
+        };
+        let total: f64 = (0..constraints.len()).filter_map(weight).sum();
+        if total > 0.0 {
+            let extra = u64::from(remaining);
+            // Force the sum to exactly `remaining` (the method distributes only the integer
+            // part of the sum, which equals `remaining` up to floating-point error).
+            largest_remainder(
+                constraints.len(),
+                |i| weight(i).map(|w| exact_f64(extra) * w / total),
+                |i, more| {
+                    // At most `remaining` in all, a `u16`: the fallback is never used.
+                    let more = u16::try_from(more).unwrap_or(u16::MAX);
+                    sizes[i] = sizes[i].saturating_add(more);
+                },
+            );
+        }
+    }
 }
 
 /// Convert an integer to `f64` without rounding.
@@ -472,34 +532,44 @@ fn exact_f64(n: u64) -> f64 {
     n as f64
 }
 
-/// Round exact shares to integers whose sum is the integer part of the exact sum:
-/// round each share down, then assign remaining cells to the shares with the
-/// largest fractional parts (ties favor the first).
+/// Round the exact shares of the elements `0..len` that take part (`exact` gives `Some`) to
+/// integers whose sum is the integer part of the exact sum: round each share down, then give
+/// one more to the `missing` shares with the largest fractional parts (ties favor the first).
+/// `give(i, share)` receives the rounded share of each element taking part.
+///
+/// Without storage: the shares are computed again rather than kept, and a share gets one
+/// more when fewer than `missing` shares come before it in that order. Quadratic in `len`,
+/// the number of constraints of a layout.
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     reason = "shares are finite, non-negative and below 2^48: `floor` gives an exact u64"
 )]
-fn largest_remainder(exact: &[f64]) -> Vec<u64> {
+fn largest_remainder(
+    len: usize,
+    exact: impl Fn(usize) -> Option<f64>,
+    mut give: impl FnMut(usize, u64),
+) {
+    let shares = || (0..len).filter_map(|i| exact(i).map(|share| (i, share)));
     // The small tolerance absorbs floating-point summation error (e.g. 0.1 + 0.2).
-    let target = (exact.iter().sum::<f64>() + 1e-6).floor() as u64;
-    let mut sizes: Vec<u64> = exact.iter().map(|share| share.floor() as u64).collect();
-    let mut missing = target.saturating_sub(sizes.iter().sum());
-
-    let mut order: Vec<usize> = (0..exact.len()).collect();
-    // Stable sort: equal remainders preserve the original order (favoring the first).
-    order.sort_by(|&a, &b| {
-        let (fa, fb) = (exact[a].fract(), exact[b].fract());
-        fb.partial_cmp(&fa).unwrap_or(std::cmp::Ordering::Equal)
-    });
-    for i in order {
-        if missing == 0 {
-            break;
-        }
-        sizes[i] += 1;
-        missing -= 1;
+    let target = (shares().map(|(_, share)| share).sum::<f64>() + 1e-6).floor() as u64;
+    let floors: u64 = shares().map(|(_, share)| share.floor() as u64).sum();
+    let missing = target.saturating_sub(floors);
+    for (i, share) in shares() {
+        let fraction = share.fract();
+        // Shares before this one: a larger fractional part, or the same one earlier.
+        let before = shares()
+            .filter(|&(j, other)| match other.fract().partial_cmp(&fraction) {
+                Some(std::cmp::Ordering::Greater) => true,
+                Some(std::cmp::Ordering::Equal) => j < i,
+                _ => false,
+            })
+            .count();
+        give(
+            i,
+            share.floor() as u64 + u64::from((before as u64) < missing),
+        );
     }
-    sizes
 }
 
 #[cfg(test)]
@@ -815,7 +885,142 @@ mod tests {
         ]
     }
 
+    /// The former solver, with `Vec`s: the reference the allocation-free one must agree
+    /// with. Sizes (in cells) of each constraint for `available` cells. See the module header.
+    /// The sum of sizes never exceeds `available`.
+    fn solve_with_vecs(constraints: &[Constraint], available: u16) -> Vec<u16> {
+        let avail = u64::from(available);
+
+        // 1. Requests.
+        let mut requests = vec![0u64; constraints.len()];
+        let mut proportional: Vec<(usize, f64)> = Vec::new();
+        for (i, constraint) in constraints.iter().enumerate() {
+            match *constraint {
+                Constraint::Length(n) | Constraint::Min(n) | Constraint::Max(n) => {
+                    requests[i] = u64::from(n);
+                }
+                // The product and quotient are exact when the result is an integer.
+                Constraint::Percentage(p) => {
+                    proportional.push((i, exact_f64(avail * u64::from(p)) / 100.0));
+                }
+                Constraint::Ratio(_, 0) | Constraint::Fill(_) => {}
+                Constraint::Ratio(a, b) => {
+                    proportional.push((i, exact_f64(avail * u64::from(a)) / f64::from(b)));
+                }
+            }
+        }
+        let shares: Vec<f64> = proportional.iter().map(|&(_, exact)| exact).collect();
+        for (&(i, _), size) in proportional
+            .iter()
+            .zip(largest_remainder_with_vecs(&shares))
+        {
+            requests[i] = size;
+        }
+
+        // 2. Allocate in order, limited by remaining space.
+        let mut remaining = avail;
+        let mut sizes: Vec<u64> = requests
+            .iter()
+            .map(|&request| {
+                let size = request.min(remaining);
+                remaining -= size;
+                size
+            })
+            .collect();
+
+        // 3. Share the remainder: among Fill constraints (by weight), otherwise Min constraints (equally).
+        if remaining > 0 {
+            let fills: Vec<usize> = (0..constraints.len())
+                .filter(|&i| matches!(constraints[i], Constraint::Fill(w) if w > 0))
+                .collect();
+            let receivers = if fills.is_empty() {
+                (0..constraints.len())
+                    .filter(|&i| matches!(constraints[i], Constraint::Min(_)))
+                    .collect()
+            } else {
+                fills
+            };
+            let weights: Vec<f64> = receivers
+                .iter()
+                .map(|&i| match constraints[i] {
+                    Constraint::Fill(w) => f64::from(w),
+                    _ => 1.0,
+                })
+                .collect();
+            let total: f64 = weights.iter().sum();
+            if total > 0.0 {
+                let exact: Vec<f64> = weights
+                    .iter()
+                    .map(|w| exact_f64(remaining) * w / total)
+                    .collect();
+                // Force the sum to exactly `remaining` (the method distributes only
+                // the integer part of the sum, which equals `remaining` up to floating-point error).
+                for (&i, extra) in receivers.iter().zip(largest_remainder_with_vecs(&exact)) {
+                    sizes[i] += extra;
+                }
+            }
+        }
+
+        // Each size is at most `available`, a `u16`: the fallback is never used.
+        sizes
+            .into_iter()
+            .map(|size| u16::try_from(size).unwrap_or(u16::MAX))
+            .collect()
+    }
+
+    /// Round exact shares to integers whose sum is the integer part of the exact sum:
+    /// round each share down, then assign remaining cells to the shares with the
+    /// largest fractional parts (ties favor the first).
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "shares are finite, non-negative and below 2^48: `floor` gives an exact u64"
+    )]
+    fn largest_remainder_with_vecs(exact: &[f64]) -> Vec<u64> {
+        // The small tolerance absorbs floating-point summation error (e.g. 0.1 + 0.2).
+        let target = (exact.iter().sum::<f64>() + 1e-6).floor() as u64;
+        let mut sizes: Vec<u64> = exact.iter().map(|share| share.floor() as u64).collect();
+        let mut missing = target.saturating_sub(sizes.iter().sum());
+
+        let mut order: Vec<usize> = (0..exact.len()).collect();
+        // Stable sort: equal remainders preserve the original order (favoring the first).
+        order.sort_by(|&a, &b| {
+            let (fa, fb) = (exact[a].fract(), exact[b].fract());
+            fb.partial_cmp(&fa).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for i in order {
+            if missing == 0 {
+                break;
+            }
+            sizes[i] += 1;
+            missing -= 1;
+        }
+        sizes
+    }
+
+    #[test]
+    fn more_constraints_than_kept_inline() {
+        let constraints = [Length(1); INLINE + 3];
+        let rects = Layout::vertical(constraints).split(Rect::new(0, 0, 4, 20));
+        assert_eq!(rects.len(), INLINE + 3);
+        assert_eq!(rects[INLINE + 2], Rect::new(0, 10, 4, 1));
+        assert_eq!(
+            Layout::vertical(constraints),
+            Layout::vertical(constraints.to_vec())
+        );
+    }
+
     proptest::proptest! {
+        #[test]
+        fn the_solver_agrees_with_the_former_one(
+            constraints in proptest::collection::vec(constraint(), 0..12),
+            available in 0u16..2000,
+        ) {
+            let mut sizes = vec![0; constraints.len()];
+            solve(&constraints, available, &mut sizes);
+            proptest::prop_assert_eq!(sizes, solve_with_vecs(&constraints, available));
+        }
+
         #[test]
         fn split_stays_in_the_area_in_order_without_overlap(
             constraints in proptest::collection::vec(constraint(), 0..6),
