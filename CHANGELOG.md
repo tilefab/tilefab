@@ -136,6 +136,10 @@ break the API).
   release). Each entry is now lowered once and searched in linear time (54 ms there), with
   the same matches.
 - `tilefab-widget`: the layout of a `LineWidget` was quadratic in its number of components.
+- `tilefab-core`: building and solving a `Layout` allocated about ten times per frame (a
+  layout built at every frame, as the demo does). Up to 8 constraints are now kept inline,
+  the solver uses no intermediate `Vec`, and `Layout::areas` allocates nothing; `split`
+  allocates only the returned `Vec`. The sizes are the same.
 - Demo: a task name with control characters (read on stdin) reached the terminal raw in the
   task started / finished lines; it is now escaped.
 - Demo: a failure of the keyboard reader left the application running in raw mode without

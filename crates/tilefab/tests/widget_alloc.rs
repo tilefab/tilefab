@@ -1,7 +1,7 @@
 //! Drawing `LineWidget`s and a `LineEditor` in the frames of an inline `Terminal` allocates
 //! nothing: a warm frame that updates the widgets and draws them, with the prompt line and its
-//! hint, a history search (Ctrl+R) or the completion menu, stays allocation-free (see
-//! `terminal_alloc.rs` for the `Terminal` side alone).
+//! hint, a history search (Ctrl+R) or the completion menu, placed by a `Layout`, stays
+//! allocation-free (see `terminal_alloc.rs` for the `Terminal` side alone).
 //!
 //! A separate test binary, because the counting allocator is global to the whole binary:
 //! it holds this single test, so no other test thread allocates during the measurement.
@@ -12,9 +12,9 @@ use std::alloc::System;
 
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 use tilefab::{
-    Backend, Candidate, Color, Completer, Completions, EditorCommand, EditorConfig, Entry, History,
-    Line, LineEditor, LineWidget, Position, Rect, Size, Style, Terminal, TerminalOptions, Viewport,
-    WallTime,
+    Backend, Candidate, Color, Completer, Completions, Constraint, EditorCommand, EditorConfig,
+    Entry, History, Layout, Line, LineEditor, LineWidget, Position, Size, Style, Terminal,
+    TerminalOptions, Viewport, WallTime,
 };
 
 // `stats_alloc` holds the `unsafe` code, which this project forbids in its own sources.
@@ -126,8 +126,9 @@ fn drawing_line_widgets_in_frames_allocates_nothing() {
                     frame.render_widget(task, row);
                 }
                 // The prompt row and the rows of the menu, below the tasks.
-                let used = u16::try_from(tasks.len()).unwrap();
-                let rest = Rect::new(area.x, area.y + used, area.width, area.height - used);
+                // A layout built and solved at every frame, as the demo does (`ui.rs`).
+                let [_, rest] =
+                    Layout::vertical([Constraint::Fill(1), Constraint::Length(3)]).areas(area);
                 let editor = &mut editors[usize::from(i % 3)];
                 if let Some(cursor) = editor.render(rest, frame.buffer_mut(), &prompt) {
                     frame.set_cursor_position(cursor);
