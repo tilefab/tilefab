@@ -9,17 +9,31 @@ use unicode_segmentation::UnicodeSegmentation;
 /// terminal): the replacement character, one column wide.
 pub const TOO_WIDE: &str = "\u{FFFD}";
 
+/// [`wrap_into`] into a new list (for the tests).
+#[cfg(test)]
+pub fn wrap(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
+    let mut rows = Vec::new();
+    wrap_into(lines, width, &mut rows);
+    rows
+}
+
 /// Cut `lines` into rows at most `width` columns wide, keeping the style of each span and
 /// line. An empty line stays one empty row; a grapheme wider than `width` (a wide character
 /// in a 1-column terminal) cannot be shown and is replaced with [`TOO_WIDE`], so that the
 /// loss is visible. With `width` 0, no row.
-pub fn wrap(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
+///
+/// The rows are appended to `rows`: the caller keeps that list (and the one it takes `lines`
+/// from, with `drain`) from one burst to the next, with its capacity.
+pub fn wrap_into(
+    lines: impl IntoIterator<Item = Line<'static>>,
+    width: u16,
+    rows: &mut Vec<Line<'static>>,
+) {
     debug_assert_eq!(grapheme_width(TOO_WIDE), 1);
     let width = usize::from(width);
     if width == 0 {
-        return Vec::new();
+        return;
     }
-    let mut rows = Vec::new();
     for line in lines {
         let empty_row = || Line {
             spans: Vec::new(),
@@ -52,10 +66,9 @@ pub fn wrap(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
         }
         rows.push(row);
     }
-    rows
 }
 
-/// Draw `rows` (from [`wrap`]) one per row of `buf`, from its top.
+/// Draw `rows` (from [`wrap_into`]) one per row of `buf`, from its top.
 pub fn render(rows: &[Line<'_>], buf: &mut Buffer) {
     let area = buf.area();
     for (y, row) in (area.top()..area.bottom()).zip(rows) {
