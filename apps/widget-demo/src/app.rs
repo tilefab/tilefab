@@ -411,6 +411,9 @@ pub struct App {
     pub output: Vec<Line<'static>>,
     /// Lines dropped from `output` while they could not be shown (see [`App::limit_output`]).
     pub dropped_output: usize,
+    /// The rows of `output` wrapped to the terminal width, kept empty between two bursts so
+    /// that its capacity is reused (see `queue_output`).
+    pub wrapped: Vec<Line<'static>>,
     /// Composition given to the tasks started next (`compose`).
     pub composition: String,
     pub should_quit: bool,
@@ -427,6 +430,7 @@ impl App {
             tasks: Vec::new(),
             output: Vec::new(),
             dropped_output: 0,
+            wrapped: Vec::new(),
             composition: line::DEFAULT_COMPOSITION.to_string(),
             should_quit: false,
             tx,

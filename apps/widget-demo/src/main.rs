@@ -397,7 +397,10 @@ fn queue_output<W: Write>(terminal: &mut Terminal<W>, app: &mut App) {
     // `draw`), not the current terminal width: after a resize they differ until the
     // next `draw`, and wrapping at another width would truncate the lines.
     let width = terminal.area().width;
-    let rows = wrap::wrap(std::mem::take(&mut app.output), width);
+    // `drain` and a kept list of rows: both lists keep their capacity from one burst to the
+    // next (only the lines themselves are new).
+    wrap::wrap_into(app.output.drain(..), width, &mut app.wrapped);
+    let rows = &app.wrapped;
     // The terminal keeps at most MAX_PENDING_LINES rows of one insert, the first ones: pass
     // the newest (a narrow terminal can wrap the kept text into many more rows).
     let newest = &rows[rows.len().saturating_sub(MAX_PENDING_LINES)..];
@@ -409,6 +412,7 @@ fn queue_output<W: Write>(terminal: &mut Terminal<W>, app: &mut App) {
     }
     let height = u16::try_from(newest.len()).unwrap_or(u16::MAX);
     terminal.insert_before(height, |buf| wrap::render(newest, buf));
+    app.wrapped.clear();
 }
 
 #[cfg(test)]
@@ -472,6 +476,34 @@ mod tests {
         let written =
             String::from_utf8(std::mem::take(terminal.backend_mut().writer_mut())).unwrap();
         assert!(written.contains("kept"), "line not written: {written:?}");
+    }
+
+    #[test]
+    fn the_output_lists_keep_their_capacity_from_one_burst_to_the_next() {
+        let backend = Backend::with_fixed(Vec::new(), Size::new(10, 10), Position::new(0, 0));
+        let mut terminal = Terminal::with_options(
+            backend,
+            TerminalOptions::default().viewport(Viewport::Inline(1)),
+        )
+        .unwrap();
+        terminal.draw(|_| {}).unwrap();
+        let (tx, _rx) = mpsc::channel(16);
+        let mut app = App::new(tx);
+        for burst in 0..3 {
+            for n in 0..20 {
+                // Two rows each, at 10 columns.
+                app.output
+                    .push(Line::from(format!("burst {burst} line {n:02}")));
+            }
+            queue_output(&mut terminal, &mut app);
+            terminal.draw(|_| {}).unwrap();
+            assert!(app.output.is_empty() && app.wrapped.is_empty());
+            assert!(app.output.capacity() >= 20, "output lost its capacity");
+            assert!(
+                app.wrapped.capacity() >= 40,
+                "wrapped rows lost their capacity"
+            );
+        }
     }
 
     #[test]

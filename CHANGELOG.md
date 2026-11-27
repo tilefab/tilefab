@@ -165,6 +165,8 @@ break the API).
 - Demo: a stdin line had no length limit in headless mode; a line longer than the prompt
   (4096 bytes) is refused whole.
 - Demo: the lines waiting while the terminal had no columns were kept without bound.
+- Demo: the list of log lines to insert, and the list of their wrapped rows, started from
+  nothing at every burst; both keep their capacity now.
 - Demo: in a terminal one column wide, the wide characters of the log lines (emoji,
   ideographs) disappeared without a trace; each one is now shown as the replacement
   character, U+FFFD.
