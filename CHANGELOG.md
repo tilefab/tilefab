@@ -93,6 +93,9 @@ break the API).
   open (frozen display) and maybe a scroll region set; the terminal restoration also closes
   both now.
 - `tilefab-term`: `insert_before` could queue lines without bound until the next `draw`.
+- `tilefab-term`: `insert_before` with a large `height` allocated a buffer of that many rows,
+  and kept it, to keep only the last `MAX_PENDING_LINES`; `height` is now capped at
+  `MAX_PENDING_LINES` (a warning tells that the rows below are lost).
 - `tilefab-term`: the lines still pending when the application quit (a viewport as tall as
   the screen has no room for them) were lost: `Terminal::clear` now writes them first, above
   a viewport of one row.
@@ -110,6 +113,8 @@ break the API).
 - Demo: a stdin line had no length limit in headless mode; a line longer than the prompt
   (4096 bytes) is refused whole.
 - Demo: the lines waiting while the terminal had no columns were kept without bound.
+- Demo: log lines wrapped into more than 65,535 rows (a narrow terminal) lost their newest
+  rows; the demo now inserts the newest `MAX_PENDING_LINES` rows, and warns about the others.
 - Demo: the value of a `V` whose paint has a second part (`V5U.W/K+`) stayed at 0: the demo
   took the `/` of the paint for a total. It now reads the shape from the widget.
 - Demo: a carriage return, a tab or another C0 control character of a task name (read on
