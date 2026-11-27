@@ -92,6 +92,11 @@ break the API).
 - `tilefab-term`: a frame interrupted by a write error or a panic left the synchronized update
   open (frozen display) and maybe a scroll region set; the terminal restoration also closes
   both now.
+- `tilefab-term`: the panic hooks restored the terminal while another thread could still
+  write to it: with `install_fatal_panic_hook`, a UI thread drawing while a task panicked
+  could reopen a synchronized update before the exit, and the shell inherited a frozen
+  display. The hooks now hold the lock of stdout from the restoration to the end of the
+  report, and until the exit when fatal.
 - `tilefab-term`: `insert_before` could queue lines without bound until the next `draw`.
 - `tilefab-term`: `insert_before` with a large `height` allocated a buffer of that many rows,
   and kept it, to keep only the last `MAX_PENDING_LINES`; `height` is now capped at
