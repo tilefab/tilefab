@@ -125,6 +125,11 @@ break the API).
   matched. The lines not written in full are queued again (one may show twice), and the next
   `draw` clears and redraws the viewport, as after a resize.
 - `tilefab-term`: a frame that changed a text modifier (bold, dim…) allocated.
+- `tilefab-term`: an inline frame copied the viewport about five times (a model of the screen,
+  a target, then back into the previous buffer), even when nothing was inserted and the
+  viewport stayed in place, as in a redraw at every tick. That frame is now diffed against
+  the previous one directly, and the two buffers swapped, as in fullscreen (30 % less time
+  per frame in `idle`, a new scenario of `cell_alloc`).
 - `tilefab-core`: each grapheme written was segmented and measured up to three times, and
   `Cell::width` measured its symbol again at every call (the diff and the backend call it
   for every cell): a cell now keeps its width, measured once. In release, a screen of CJK

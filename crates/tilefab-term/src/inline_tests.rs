@@ -302,6 +302,29 @@ fn lines_with_room_below_push_the_viewport_down() {
 }
 
 #[test]
+fn frames_without_inserted_lines_rewrite_only_what_changed() {
+    // The fast path of the commit: the viewport in place, nothing inserted.
+    for mode in [ScrollMode::Screen, ScrollMode::Region, ScrollMode::Fallback] {
+        let mut rig = at_bottom(mode);
+        let view = ["alpha 60%", "beta 20%", "gamma 5%", ">"];
+        let stats = rig.commit(&[], &view);
+        assert_bottom(&rig, &view);
+        assert_eq!(stats.rows_written, set(&[H - 4]), "mode {mode:?}");
+        assert_eq!(stats.scrolled, 0);
+        assert!(stats.rows_erased.is_empty() && !stats.erased_screen);
+        assert_eq!(rig.sim.cursor, (2, H - 1), "the cursor is placed again");
+
+        // A wide character over two narrow ones, then back.
+        let wide = ["alpha 60%", "界 20%", "gamma 5%", ">"];
+        let stats = rig.commit(&[], &wide);
+        assert_bottom(&rig, &wide);
+        assert_eq!(stats.rows_written, set(&[H - 3]), "mode {mode:?}");
+        rig.commit(&[], &view);
+        assert_bottom(&rig, &view);
+    }
+}
+
+#[test]
 fn nothing_changed_emits_nothing() {
     let mut rig = at_bottom(ScrollMode::Region);
     let stats = rig.commit(&[], &["alpha 50%", "beta 20%", "gamma 5%", ">"]);

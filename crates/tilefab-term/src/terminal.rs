@@ -635,6 +635,11 @@ impl<W: Write> Terminal<W> {
         let Some(plan) = plan_commit(screen.height, top, height, lines, new_height) else {
             return Ok((None, false));
         };
+        let new_area = Rect::new(0, plan.top, screen.width, new_height);
+        // The common frame, a redraw at every tick (see `commit_in_place`).
+        if lines == 0 && plan.scroll == 0 && plan.erase.is_empty() && new_area == self.area {
+            return render.map_or(Ok((None, false)), |render| self.commit_in_place(render));
+        }
         let old_bottom = top + height;
 
         let mut moved = false;
@@ -709,7 +714,6 @@ impl<W: Write> Terminal<W> {
             }
         }
         // …and, if drawing, the viewport rendered by the application.
-        let new_area = Rect::new(0, plan.top, screen.width, new_height);
         let mut wanted_cursor = None;
         if let Some(render) = render {
             self.next.reset_to(new_area);
@@ -751,6 +755,37 @@ impl<W: Write> Terminal<W> {
             .content_mut()
             .clone_from_slice(&self.target.content()[usize::from(lines) * width..]);
         Ok((wanted_cursor, moved))
+    }
+
+    /// The fast path of [`Terminal::commit`], for the common frame (a redraw at every tick):
+    /// nothing inserted nor scrolled, and the viewport keeps its place and height. Render
+    /// into `next`, write what differs from `previous`, then swap them, as in fullscreen,
+    /// instead of building the model and the target (about five copies of the viewport).
+    fn commit_in_place<F: FnOnce(&mut Frame<'_>)>(
+        &mut self,
+        render: F,
+    ) -> io::Result<(Option<Position>, bool)> {
+        self.next.reset_to(self.area);
+        let mut frame = Frame {
+            area: self.area,
+            buffer: &mut self.next,
+            cursor_position: None,
+        };
+        render(&mut frame);
+        let wanted_cursor = frame.cursor_position;
+        // As in the general path: the diff needs the pairing of wide characters.
+        self.next.normalize_wide();
+        let mut last_row = None;
+        self.backend.draw(
+            self.next
+                .diff_iter(&self.previous)
+                .inspect(|&(_, y, _)| last_row = Some(y)),
+        )?;
+        if let Some(y) = last_row {
+            self.cursor_row = y;
+        }
+        std::mem::swap(&mut self.previous, &mut self.next);
+        Ok((wanted_cursor, last_row.is_some()))
     }
 
     // --- shared --------------------------------------------------------------------------

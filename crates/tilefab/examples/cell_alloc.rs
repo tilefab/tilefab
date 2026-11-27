@@ -7,6 +7,8 @@
 //!
 //! - **inline**: like `widget-demo`, a 6-row viewport on a 100-column screen (5 task lines drawn
 //!   by `LineWidget`s and a prompt), one log line inserted above it per frame;
+//! - **idle**: the same viewport redrawn without log lines, as the demo's ticker does most of
+//!   the time;
 //! - **fullscreen**: a 200 × 50 screen with rows of text and three line widgets;
 //! - **line**: a `LineWidget` alone in a buffer whose width changes at every frame (0 to 119
 //!   columns), so that it is laid out again each time: nominal widths, shrinking, components
@@ -17,8 +19,8 @@
 //!
 //! Each frame changes a little (progress, time, log text), as in a real application. The
 //! widgets are built before the measurement: a warm frame that draws them allocates nothing,
-//! so the scenarios show 0 allocations per frame. The rows are laid out with `Rect::rows`
-//! rather than `Layout`, whose computation allocates a few small lists.
+//! so the scenarios show 0 allocations per frame. The rows are laid out with `Rect::rows`; a
+//! `Layout` would not allocate either (see `widget_alloc.rs`).
 
 use std::alloc::System;
 use std::hint::black_box;
@@ -109,7 +111,8 @@ fn animate(widget: &mut LineWidget, i: u32, offset: u32) {
     widget.set_log(STEPS[usize::try_from(step / 25).unwrap_or(0)]);
 }
 
-fn inline() -> Report {
+/// The inline scenario, with one log line per frame when `with_log` (otherwise `idle`).
+fn inline(with_log: bool) -> Report {
     let backend = Backend::with_fixed(Vec::new(), Size::new(100, 40), Position::new(0, 0));
     let mut terminal = Terminal::with_options(
         backend,
@@ -119,16 +122,18 @@ fn inline() -> Report {
     let mut tasks: Vec<LineWidget> = (0..5).map(|n| task_line(DIGITS[n])).collect();
     measure(2_000, |i| {
         let digit = DIGITS[(i % 10) as usize];
-        terminal.insert_before(1, |buf| {
-            buf.set_string(0, 0, "[INFO] log line ", Style::new());
-            buf.set_string(16, 0, digit, Style::new());
-        });
+        if with_log {
+            terminal.insert_before(1, |buf| {
+                buf.set_string(0, 0, "[INFO] log line ", Style::new());
+                buf.set_string(16, 0, digit, Style::new());
+            });
+        }
         for (offset, task) in (0..).step_by(17).zip(&mut tasks) {
             animate(task, i, offset);
         }
         terminal
             .draw(|frame| {
-                // `Rect::rows` rather than `Layout`, which allocates its intermediate lists.
+                // One row per line: `Rect::rows` (a `Layout` would not allocate either).
                 let area = frame.area();
                 for (task, row) in tasks.iter().zip(area.rows()) {
                     frame.render_widget(task, row);
@@ -163,7 +168,7 @@ fn fullscreen() -> Report {
         }
         terminal
             .draw(|frame| {
-                // The text, then three rows for the widgets (without `Layout`, which allocates).
+                // The text, then three rows for the widgets.
                 let area = frame.area();
                 let split = area.bottom().saturating_sub(3).max(area.y);
                 let body = Rect::new(area.x, area.y, area.width, split - area.y);
@@ -224,7 +229,8 @@ fn main() {
         "scenario", "allocs/frame", "KiB/frame", "µs/frame"
     );
     for (name, report) in [
-        ("inline", inline()),
+        ("inline", inline(true)),
+        ("idle", inline(false)),
         ("fullscreen", fullscreen()),
         ("line", line()),
         ("terminal", terminal_only()),
