@@ -126,6 +126,8 @@ break the API).
   `draw` clears and redraws the viewport, as after a resize.
 - `tilefab-term`: a frame that changed a text modifier (bold, dim…) allocated.
 - `tilefab-input`: `LineEditor::render` allocated at every frame.
+- `tilefab-input`: a completion menu drawn down to the last row a `Rect` can reach
+  (`u16::MAX - 1`) panicked with an overflow in debug builds.
 - `tilefab-input`: the case-insensitive history search (Ctrl+R) compared the query from every
   position of each entry: a pasted query of 4 KiB over 1000 long entries took 13 s (in
   release). Each entry is now lowered once and searched in linear time (54 ms there), with
