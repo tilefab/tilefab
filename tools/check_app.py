@@ -17,7 +17,9 @@ Scenarios:
     and the line is shown once the rows are back;
   * line-editor: ↑ history recall, Tab completion and its menu (opened and closed without
     stale rows), Ctrl+R search, a bracketed paste that does not run;
-  * signals: SIGTERM, SIGINT and SIGHUP exit cleanly, with code 0;
+  * signals: SIGTERM, SIGINT and SIGHUP exit cleanly, with code 128 + the signal number;
+  * stuck: with the UI loop blocked on a full pty, a second signal ends the application
+    at once, raw mode disabled, with the code of that signal;
   * panic: the hidden `panic` command leaves a clean terminal (with --release, where
     the command does not exist: `panic` is reported as unknown and the application goes on);
   * headless: no terminal (stdin or stdout redirected), no UI; input escape
@@ -371,12 +373,40 @@ def scenario_signals(rows: int, cols: int, prefill: int) -> list:
         name = sig.name
         code = term.wait_exit(3.0)
         check.ok(code is not None, "the application is still alive after %s" % name)
-        check.ok(code == 0, "exit code %r after %s, expected 0" % (code, name))
+        expected = 128 + sig.value
+        check.ok(code == expected, "exit code %r after %s, expected %d" % (code, name, expected))
         check.ok(terminal_is_clean(term), "terminal left in raw mode after %s" % name)
         raw = bytes(term.raw)
         check.ok(raw.rfind(CURSOR_SHOW) > raw.rfind(CURSOR_HIDE), "cursor left hidden after %s" % name)
         check.ok('task "alpha" started' in term.all_text(), "log lost after %s" % name)
         term.close()
+    return check.failures
+
+
+def scenario_stuck(rows: int, cols: int, prefill: int) -> list:
+    """A second signal ends the application even when its UI loop is stuck.
+
+    Nothing reads the pty: the running tasks fill its buffer, the next write of the UI
+    loop blocks, and the first signal (SIGTERM) cannot be handled. The second one (SIGINT)
+    ends the process at once, raw mode disabled, with its own code: 130, where the cleanup
+    of the first one would give 143 once the pty is read again. (The process cannot finish
+    exiting before then: closing a pty waits for its unread output.)
+    """
+    check = Check()
+    term = launch(rows, cols, prefill)
+    term.send("start a\rstart b\rstart c\rstart d\rstart e\r")
+    time.sleep(3.0)  # no pump: the pty buffer fills
+    os.kill(term.pid, signal.SIGTERM)
+    time.sleep(1.0)
+    check.ok(term.alive(), "inconclusive: the UI loop was not stuck (the first SIGTERM quit)")
+    os.kill(term.pid, signal.SIGINT)
+    time.sleep(1.5)  # still no pump: reading would unblock the loop
+    code = term.wait_exit(3.0)
+    check.ok(code is not None, "the application is still alive after a second signal")
+    expected = 128 + signal.SIGINT.value
+    check.ok(code == expected, "exit code %r after a second signal, expected %d" % (code, expected))
+    check.ok(terminal_is_clean(term), "terminal left in raw mode after a second signal")
+    term.close()
     return check.failures
 
 
@@ -465,6 +495,7 @@ def main() -> int:
         ("zero-height", lambda: scenario_zero_height(args.rows, args.cols, args.prefill)),
         ("line-editor", lambda: scenario_line_editor(args.rows, args.cols, args.prefill)),
         ("signals", lambda: scenario_signals(args.rows, args.cols, args.prefill)),
+        ("stuck", lambda: scenario_stuck(args.rows, args.cols, args.prefill)),
         ("panic", lambda: (scenario_panic_absent if args.release else scenario_panic)(args.rows, args.cols, args.prefill)),
         ("degraded", scenario_degraded),
     ]
