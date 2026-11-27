@@ -62,7 +62,7 @@ use std::io::{self, Write};
 use std::panic::{self, AssertUnwindSafe};
 
 use super::backend::{Backend, ClearType};
-use super::viewport::{ScrollMode, TerminalOptions, Viewport, plan_commit};
+use super::viewport::{CommitPlan, ScrollMode, TerminalOptions, Viewport, plan_commit};
 use tilefab_core::buffer::{Buffer, Cell};
 use tilefab_core::convert::saturating_u16;
 use tilefab_core::layout::{Position, Rect, Size};
@@ -96,6 +96,20 @@ fn capped(size: Size, viewport: Viewport) -> Size {
         size.height
     };
     Size::new(size.width.min(MAX_SCREEN_WIDTH), height)
+}
+
+/// How the old viewport moved on screen when a commit made room for its lines (see
+/// [`Terminal::commit`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scrolled {
+    /// Nothing scrolled.
+    None,
+    /// The area above the viewport scrolled (a scroll region): the viewport stayed put.
+    Region,
+    /// The whole screen scrolled, the viewport with it (`ScrollMode::Screen`).
+    Shifted,
+    /// The old viewport was cleared, then the screen scrolled: nothing of it is left.
+    Blank,
 }
 
 /// The tallest inline viewport on `screen`: its height, capped to [`MAX_SCREEN_HEIGHT`], and
@@ -672,67 +686,109 @@ impl<W: Write> Terminal<W> {
         if lines == 0 && plan.scroll == 0 && plan.erase.is_empty() && new_area == self.area {
             return render.map_or(Ok((None, false)), |render| self.commit_in_place(render));
         }
-        let old_bottom = top + height;
+        let scrolled = self.scroll_for_commit(&plan, top, height)?;
+        // A fallback scroll erased the old viewport, and the stale lines with it.
+        let erase = if scrolled == Scrolled::Blank {
+            0..0
+        } else {
+            plan.erase.clone()
+        };
+        self.build_model(scrolled, top - plan.scroll, lines + new_height, top, height);
+        let wanted_cursor = self.build_target(rows, row_width, lines, new_area, render);
+        let written = self.write_commit(erase)?;
+        let moved = scrolled != Scrolled::None || written;
 
-        let mut moved = false;
-        let mut erase = plan.erase.clone();
-        let mut model_is_blank = false;
-        // The whole screen scrolled with the viewport (`ScrollMode::Screen`).
-        let mut shifted = false;
-        if plan.scroll > 0 {
-            moved = true;
-            if self.scroll_mode == ScrollMode::Region && top >= 2 {
-                // Only the area above the viewport scrolls; the viewport stays put.
-                self.backend.scroll_region_up(0, top - 1, plan.scroll)?;
-            } else if self.scroll_mode == ScrollMode::Screen && plan.scroll <= top {
-                // Only rows above the viewport leave the screen, into the scrollback: line
-                // feeds on the last row scroll everything, the viewport moves up with the rest
-                // and the diff below rewrites what differs.
-                self.backend
-                    .set_cursor_position(0, screen.height.saturating_sub(1))?;
-                self.backend.append_lines(plan.scroll)?;
-                shifted = true;
-            } else {
-                // Fallback (or region too small: terminals ignore single-line regions).
-                // Clear the old viewport, then scroll the whole screen by writing
-                // line feeds at the bottom: the result is the same, since everything below
-                // the logs is empty. The viewport will be fully rewritten.
-                for y in top..old_bottom {
-                    self.backend.set_cursor_position(0, y)?;
-                    self.backend.clear(ClearType::CurrentLine)?;
-                }
-                self.backend
-                    .set_cursor_position(0, screen.height.saturating_sub(1))?;
-                self.backend.append_lines(plan.scroll)?;
-                model_is_blank = true;
-                erase = 0..0;
-            }
+        self.area = new_area;
+        self.previous.reset_to(new_area);
+        self.previous
+            .content_mut()
+            .clone_from_slice(&self.target.content()[usize::from(lines) * width..]);
+        Ok((wanted_cursor, moved))
+    }
+
+    /// Step 1 of [`Terminal::commit`]: make room for `plan.scroll` lines above the viewport
+    /// (`top`, `height` rows), in the way of the scroll mode, and say how the old viewport
+    /// moved on screen.
+    fn scroll_for_commit(
+        &mut self,
+        plan: &CommitPlan,
+        top: u16,
+        height: u16,
+    ) -> io::Result<Scrolled> {
+        if plan.scroll == 0 {
+            return Ok(Scrolled::None);
         }
+        let last_row = self.screen.height.saturating_sub(1);
+        if self.scroll_mode == ScrollMode::Region && top >= 2 {
+            // Only the area above the viewport scrolls; the viewport stays put.
+            self.backend.scroll_region_up(0, top - 1, plan.scroll)?;
+            Ok(Scrolled::Region)
+        } else if self.scroll_mode == ScrollMode::Screen && plan.scroll <= top {
+            // Only rows above the viewport leave the screen, into the scrollback: line
+            // feeds on the last row scroll everything, the viewport moves up with the rest
+            // and the diff rewrites what differs.
+            self.backend.set_cursor_position(0, last_row)?;
+            self.backend.append_lines(plan.scroll)?;
+            Ok(Scrolled::Shifted)
+        } else {
+            // Fallback (or region too small: terminals ignore single-line regions).
+            // Clear the old viewport, then scroll the whole screen by writing
+            // line feeds at the bottom: the result is the same, since everything below
+            // the logs is empty. The viewport will be fully rewritten.
+            for y in top..top + height {
+                self.backend.set_cursor_position(0, y)?;
+                self.backend.clear(ClearType::CurrentLine)?;
+            }
+            self.backend.set_cursor_position(0, last_row)?;
+            self.backend.append_lines(plan.scroll)?;
+            Ok(Scrolled::Blank)
+        }
+    }
 
-        // The model: screen content from `lo` to the bottom of the new viewport.
-        let lo = top - plan.scroll;
-        let span = Rect::new(0, lo, screen.width, lines + new_height);
+    /// Step 2 of [`Terminal::commit`]: the model, what the screen holds from row `lo`, over
+    /// `rows` rows, once scrolled: the rows of the old viewport (`top`, `height` rows) where
+    /// they now are, blank elsewhere.
+    fn build_model(&mut self, scrolled: Scrolled, lo: u16, rows: u16, top: u16, height: u16) {
+        let width = usize::from(self.screen.width);
+        let span = Rect::new(0, lo, self.screen.width, rows);
         self.model.reset_to(span);
-        if shifted {
-            // The old viewport is now `plan.scroll` rows higher: from `lo`, the top of the
-            // model. The rows below it scrolled in blank.
-            let rows = usize::from(height).min(usize::from(span.height));
-            self.model.content_mut()[..rows * width]
-                .clone_from_slice(&self.previous.content()[..rows * width]);
-        } else if !model_is_blank {
-            // The old viewport lines have not moved on screen: reuse them.
-            for y in lo.max(top)..old_bottom.min(span.bottom()) {
-                let from = usize::from(y - top) * width;
-                let to = usize::from(y - lo) * width;
-                self.model.content_mut()[to..to + width]
-                    .clone_from_slice(&self.previous.content()[from..from + width]);
+        match scrolled {
+            Scrolled::Shifted => {
+                // The old viewport is now `plan.scroll` rows higher: from `lo`, the top of
+                // the model. The rows below it scrolled in blank.
+                let rows = usize::from(height).min(usize::from(span.height));
+                self.model.content_mut()[..rows * width]
+                    .clone_from_slice(&self.previous.content()[..rows * width]);
             }
+            Scrolled::None | Scrolled::Region => {
+                // The old viewport lines have not moved on screen: reuse them.
+                for y in lo.max(top)..(top + height).min(span.bottom()) {
+                    let from = usize::from(y - top) * width;
+                    let to = usize::from(y - lo) * width;
+                    self.model.content_mut()[to..to + width]
+                        .clone_from_slice(&self.previous.content()[from..from + width]);
+                }
+            }
+            Scrolled::Blank => {}
         }
+    }
 
-        // The target: the model (copied into the kept buffer's memory) with inserted lines
-        // at the top…
+    /// Step 3 of [`Terminal::commit`]: the target, the model with the inserted `rows`
+    /// (`lines` of them) at its top and, if drawing, the viewport (`new_area`) rendered by
+    /// the application below them. Return the cursor position the frame asked for.
+    fn build_target<F: FnOnce(&mut Frame<'_>)>(
+        &mut self,
+        rows: &[Cell],
+        row_width: usize,
+        lines: u16,
+        new_area: Rect,
+        render: Option<F>,
+    ) -> Option<Position> {
+        let width = usize::from(self.screen.width);
+        // The model, copied into the kept buffer's memory…
         self.target.clone_from(&self.model);
         let target = self.target.content_mut();
+        // …with the inserted lines at the top…
         for (i, row) in rows.chunks(row_width).enumerate() {
             for x in 0..width {
                 target[i * width + x] = row.get(x).cloned().unwrap_or_default();
@@ -746,47 +802,44 @@ impl<W: Write> Terminal<W> {
             }
         }
         // …and, if drawing, the viewport rendered by the application.
-        let mut wanted_cursor = None;
-        if let Some(render) = render {
-            self.next.reset_to(new_area);
-            let mut frame = Frame {
-                area: new_area,
-                buffer: &mut self.next,
-                cursor_position: None,
-            };
-            render(&mut frame);
-            wanted_cursor = frame.cursor_position;
-            // As in fullscreen: the diff needs the pairing of wide characters.
-            self.next.normalize_wide();
-            self.target.content_mut()[usize::from(lines) * width..]
-                .clone_from_slice(self.next.content());
-        }
+        let render = render?;
+        self.next.reset_to(new_area);
+        let mut frame = Frame {
+            area: new_area,
+            buffer: &mut self.next,
+            cursor_position: None,
+        };
+        render(&mut frame);
+        let wanted_cursor = frame.cursor_position;
+        // As in fullscreen: the diff needs the pairing of wide characters.
+        self.next.normalize_wide();
+        self.target.content_mut()[usize::from(lines) * width..]
+            .clone_from_slice(self.next.content());
+        wanted_cursor
+    }
 
+    /// Step 4 of [`Terminal::commit`]: write what differs between the model and the target,
+    /// then clear the rows of `erase` (stale lines below a viewport that shrinks more than
+    /// the logs fill). Return whether anything was written (the real cursor moved).
+    fn write_commit(&mut self, erase: std::ops::Range<u16>) -> io::Result<bool> {
         let mut last_row = None;
         self.backend.draw(
             self.target
                 .diff_iter(&self.model)
                 .inspect(|&(_, y, _)| last_row = Some(y)),
         )?;
+        let mut written = false;
         if let Some(y) = last_row {
-            moved = true;
+            written = true;
             self.cursor_row = y;
         }
-
-        // Stale lines below the viewport when it shrinks more than the logs fill.
         for y in erase {
             self.backend.set_cursor_position(0, y)?;
             self.backend.clear(ClearType::CurrentLine)?;
-            moved = true;
+            written = true;
             self.cursor_row = y;
         }
-
-        self.area = new_area;
-        self.previous.reset_to(new_area);
-        self.previous
-            .content_mut()
-            .clone_from_slice(&self.target.content()[usize::from(lines) * width..]);
-        Ok((wanted_cursor, moved))
+        Ok(written)
     }
 
     /// The fast path of [`Terminal::commit`], for the common frame (a redraw at every tick):
@@ -1216,6 +1269,92 @@ mod tests {
     }
 
     /// Queue `count` one-row lines labelled `#0`, `#1`…, from `first`.
+    /// [`inline_terminal`] in `mode`, its viewport moved to the bottom of the screen by
+    /// enough log lines (so that the next one scrolls, with `top >= 2`).
+    fn at_bottom(mode: ScrollMode, rows: u16, height: u16) -> Terminal<Vec<u8>> {
+        let mut term = inline_terminal(rows, height);
+        term.scroll_mode = mode;
+        insert_numbered(&mut term, 0, usize::from(rows));
+        term.draw(|_| {}).unwrap();
+        assert_eq!(term.area().bottom(), rows, "not at the bottom");
+        take(&mut term);
+        term
+    }
+
+    /// Whether `out` sets a scroll region (`CSI top ; bottom r`, not the reset `CSI r`).
+    fn sets_a_scroll_region(out: &str) -> bool {
+        out.split("\x1b[").any(|seq| {
+            seq.split_once('r').is_some_and(|(params, _)| {
+                params.contains(';') && params.chars().all(|c| c.is_ascii_digit() || c == ';')
+            })
+        })
+    }
+
+    #[test]
+    fn each_scroll_mode_makes_room_its_own_way() {
+        for mode in [ScrollMode::Screen, ScrollMode::Region, ScrollMode::Fallback] {
+            let mut term = at_bottom(mode, 10, 3);
+            assert!(term.area().y >= 2);
+            insert_numbered(&mut term, 50, 1);
+            term.draw(|_| {}).unwrap();
+            let out = take(&mut term);
+            assert!(out.contains("#50"), "{mode:?}: {out:?}");
+            assert_eq!(
+                sets_a_scroll_region(&out),
+                mode == ScrollMode::Region,
+                "{mode:?}: {out:?}"
+            );
+            // `Fallback` clears the 3 rows of the old viewport before scrolling; `Screen`
+            // and `Region` clear nothing.
+            let cleared = out.matches("\x1b[2K").count();
+            let expected = if mode == ScrollMode::Fallback { 3 } else { 0 };
+            assert_eq!(cleared, expected, "{mode:?}: {out:?}");
+        }
+    }
+
+    #[test]
+    fn the_cursor_is_placed_again_after_a_scroll_that_writes_nothing() {
+        // A blank line inserted under a blank viewport: the screen scrolls, nothing differs,
+        // but the real cursor moved, so it is placed again where the frame wants it.
+        for mode in [ScrollMode::Screen, ScrollMode::Region, ScrollMode::Fallback] {
+            let mut term = at_bottom(mode, 10, 3);
+            let top = term.area().y;
+            let blank = |f: &mut Frame| {
+                f.buffer_mut().reset();
+                f.set_cursor_position((2, top));
+            };
+            term.draw(blank).unwrap();
+            take(&mut term);
+            term.insert_before(1, |_| {});
+            term.draw(blank).unwrap();
+            let out = take(&mut term);
+            let wanted = format!("\x1b[{};3H", top + 1);
+            assert!(
+                out.ends_with(&format!("{wanted}\x1b[?2026l")),
+                "{mode:?}: {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_frame_in_place_swaps_the_buffers() {
+        // The fast path of `commit`: the frame is diffed against `previous`, then the two
+        // buffers are swapped, so `next` holds the frame before it.
+        let mut term = inline_terminal(10, 2);
+        term.draw(|f| f.render_widget("one", f.area())).unwrap();
+        term.draw(|f| f.render_widget("two", f.area())).unwrap();
+        assert_eq!(term.buffer().lines()[0].trim_end(), "two");
+        assert_eq!(
+            term.next.lines()[0].trim_end(),
+            "one",
+            "not diffed in place"
+        );
+        // With a line inserted, the general path: `next` holds the frame drawn.
+        insert_numbered(&mut term, 0, 1);
+        term.draw(|f| f.render_widget("three", f.area())).unwrap();
+        assert_eq!(term.next.lines()[0].trim_end(), "three");
+    }
+
     fn insert_numbered(term: &mut Terminal<Vec<u8>>, first: usize, count: usize) {
         for n in first..first + count {
             term.insert_before(1, |b| {

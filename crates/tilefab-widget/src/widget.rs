@@ -31,6 +31,17 @@ pub(crate) enum Slot {
     Dynamic(usize),
 }
 
+impl Slot {
+    /// Index of the entry the slot shows: its own, or the one a setter chose for its rank in
+    /// `chosen` (one per dynamic component of its letter).
+    fn index(self, chosen: &[u8]) -> usize {
+        match self {
+            Slot::Fixed(i) => usize::from(i),
+            Slot::Dynamic(rank) => usize::from(chosen[rank]),
+        }
+    }
+}
+
 /// One component of the widget, in composition order, with its list indices checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Component {
@@ -552,10 +563,7 @@ impl LineWidget {
 
     /// Index in `names` of the entry shown by an `N`.
     fn name_index(&self, slot: Slot) -> usize {
-        match slot {
-            Slot::Fixed(i) => usize::from(i),
-            Slot::Dynamic(rank) => usize::from(self.state.names[rank]),
-        }
+        slot.index(&self.state.names)
     }
 
     /// Draw component `i` at `(x, y)` in `width` columns, with its paint; `last` when nothing
@@ -565,34 +573,14 @@ impl LineWidget {
         let first = |style: Style| style.patch(paint.first);
         match self.components[i] {
             Component::Symbol(slot) => {
-                let index = match slot {
-                    Slot::Fixed(i) => usize::from(i),
-                    Slot::Dynamic(rank) => usize::from(self.state.symbols[rank]),
-                };
-                let symbol = &self.symbols[index];
+                let symbol = &self.symbols[slot.index(&self.state.symbols)];
                 left(buf, x, y, width, symbol, first(symbol.entry.style()));
             }
             Component::Barrier(index) => {
                 let barrier = &self.barriers[usize::from(index)];
                 left(buf, x, y, width, barrier, first(barrier.entry.style()));
             }
-            Component::Keyword(slot) => {
-                let index = match slot {
-                    Slot::Fixed(i) => usize::from(i),
-                    Slot::Dynamic(_) => usize::from(self.state.keyword),
-                };
-                let keyword = &self.keywords[index];
-                let free = width.saturating_sub(keyword.width);
-                let before = match self.keyword_alignment {
-                    Alignment::Left => 0,
-                    Alignment::Center => free / 2,
-                    Alignment::Right => free,
-                };
-                let style = first(keyword.entry.style());
-                let x = pad(buf, x, y, before, style);
-                let x = put(buf, x, y, keyword.entry.text(), keyword.width, style);
-                pad(buf, x, y, free - before, style);
-            }
+            Component::Keyword(slot) => self.draw_keyword(buf, x, y, width, slot, paint),
             Component::Date(format) => {
                 let mut text = StackText::<16>::new();
                 let _ = write_date(&mut text, &self.state.time, format);
@@ -641,24 +629,52 @@ impl LineWidget {
                 }
             }
             Component::Value => self.draw_value(buf, x, y, width, paint),
-            Component::Illustration(_) => {
-                if let (Some((done, todo)), true) =
-                    (&self.illustration, width >= MIN_FLEXIBLE_WIDTH)
-                {
-                    let filled = done_cells(self.state.progress, width);
-                    let mut x = x;
-                    let done_style = first(done.style());
-                    let todo_style = todo.style().patch(paint.second());
-                    for cell in 0..width {
-                        let (entry, style) = if cell < filled {
-                            (done, done_style)
-                        } else {
-                            (todo, todo_style)
-                        };
-                        x = put(buf, x, y, entry.text(), 1, style);
-                    }
-                }
-            }
+            Component::Illustration(_) => self.draw_illustration(buf, x, y, width, paint),
+        }
+    }
+
+    /// Draw the keyword shown by `slot` in `width` columns, aligned as the builder said
+    /// (the free columns are spaces in its style).
+    fn draw_keyword(
+        &self,
+        buf: &mut Buffer,
+        x: u16,
+        y: u16,
+        width: usize,
+        slot: Slot,
+        paint: Paint,
+    ) {
+        // The one dynamic `K` has rank 0.
+        let keyword = &self.keywords[slot.index(std::slice::from_ref(&self.state.keyword))];
+        let free = width.saturating_sub(keyword.width);
+        let before = match self.keyword_alignment {
+            Alignment::Left => 0,
+            Alignment::Center => free / 2,
+            Alignment::Right => free,
+        };
+        let style = keyword.entry.style().patch(paint.first);
+        let x = pad(buf, x, y, before, style);
+        let x = put(buf, x, y, keyword.entry.text(), keyword.width, style);
+        pad(buf, x, y, free - before, style);
+    }
+
+    /// Draw the illustration of the progress in `width` columns, when there is room for it:
+    /// the done cells with the first part of `paint`, the others with its second part.
+    fn draw_illustration(&self, buf: &mut Buffer, x: u16, y: u16, width: usize, paint: Paint) {
+        let (Some((done, todo)), true) = (&self.illustration, width >= MIN_FLEXIBLE_WIDTH) else {
+            return;
+        };
+        let filled = done_cells(self.state.progress, width);
+        let mut x = x;
+        let done_style = done.style().patch(paint.first);
+        let todo_style = todo.style().patch(paint.second());
+        for cell in 0..width {
+            let (entry, style) = if cell < filled {
+                (done, done_style)
+            } else {
+                (todo, todo_style)
+            };
+            x = put(buf, x, y, entry.text(), 1, style);
         }
     }
 
