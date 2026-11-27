@@ -65,6 +65,11 @@ impl Search {
 
 /// Byte range of the first occurrence of `query` in `entry`: case-insensitive, unless
 /// `query` contains an upper-case letter (smart case). An empty query matches nothing.
+///
+/// Case-insensitive: `entry` is lowered once, each byte of the result remembering the
+/// character of `entry` it comes from, then searched with `str::find` (linear in the lengths
+/// of both). A match starts at the start of a character's lowercase form, and covers every
+/// character of `entry` it touches (`ß` matched by `ss`, an `İ` partly matched…).
 pub(crate) fn find_match(entry: &str, query: &str) -> Option<Range<usize>> {
     if query.is_empty() {
         return None;
@@ -72,23 +77,27 @@ pub(crate) fn find_match(entry: &str, query: &str) -> Option<Range<usize>> {
     if query.chars().any(char::is_uppercase) {
         return entry.find(query).map(|start| start..start + query.len());
     }
-    let needle: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
-    'starts: for (start, _) in entry.char_indices() {
-        let mut matched = 0;
-        for (offset, c) in entry[start..].char_indices() {
-            for lower in c.to_lowercase() {
-                if matched == needle.len() {
-                    break;
-                }
-                if lower != needle[matched] {
-                    continue 'starts;
-                }
-                matched += 1;
-            }
-            if matched == needle.len() {
-                return Some(start..start + offset + c.len_utf8());
-            }
+    let needle: String = query.chars().flat_map(char::to_lowercase).collect();
+    let mut lowered = String::with_capacity(entry.len());
+    // For each byte of `lowered`: the byte range of the character of `entry` it comes from.
+    let mut origin: Vec<Range<usize>> = Vec::with_capacity(entry.len());
+    for (start, c) in entry.char_indices() {
+        let source = start..start + c.len_utf8();
+        for lower in c.to_lowercase() {
+            lowered.push(lower);
+            origin.resize(lowered.len(), source.clone());
         }
+    }
+    let mut from = 0;
+    while let Some(found) = lowered[from..].find(&needle) {
+        let start = from + found;
+        // Only at the start of a character's lowercase form (not inside the two characters
+        // `İ` lowers to, for instance).
+        if start == 0 || origin[start - 1].start != origin[start].start {
+            return Some(origin[start].start..origin[start + needle.len() - 1].end);
+        }
+        // The next character boundary: the needle may match again from there.
+        from = start + lowered[start..].chars().next().map_or(1, char::len_utf8);
     }
     None
 }
@@ -113,6 +122,72 @@ mod tests {
         assert_eq!(find_match("ÉTÉ été", "été"), Some(0..5));
         assert_eq!(find_match("abc", ""), None);
         assert_eq!(find_match("abc", "abcd"), None);
+    }
+
+    /// The former matching, character by character from every start (quadratic): the
+    /// reference the linear one must agree with.
+    fn find_match_slowly(entry: &str, query: &str) -> Option<Range<usize>> {
+        if query.is_empty() {
+            return None;
+        }
+        if query.chars().any(char::is_uppercase) {
+            return entry.find(query).map(|start| start..start + query.len());
+        }
+        let needle: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
+        'starts: for (start, _) in entry.char_indices() {
+            let mut matched = 0;
+            for (offset, c) in entry[start..].char_indices() {
+                for lower in c.to_lowercase() {
+                    if matched == needle.len() {
+                        break;
+                    }
+                    if lower != needle[matched] {
+                        continue 'starts;
+                    }
+                    matched += 1;
+                }
+                if matched == needle.len() {
+                    return Some(start..start + offset + c.len_utf8());
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn special_lowercase_forms() {
+        // `İ` lowers to `i` + a combining dot (U+0307): a match covers the whole `İ`, and
+        // cannot start at its dot.
+        assert_eq!(find_match("xİy", "i"), Some(1..3));
+        assert_eq!(find_match("xİy", "i\u{307}y"), Some(1..4));
+        assert_eq!(find_match("xİy", "\u{307}y"), None);
+        assert_eq!(
+            find_match("xİy", "\u{307}y"),
+            find_match_slowly("xİy", "\u{307}y")
+        );
+        assert_eq!(find_match("aİİb", "i\u{307}b"), Some(3..6));
+    }
+
+    #[test]
+    fn a_long_query_on_a_long_entry_is_fast() {
+        // Quadratic matching compares about 10^10 characters here: a long freeze.
+        let entry = "a".repeat(200_000);
+        let query = format!("{}b", "a".repeat(50_000));
+        assert_eq!(find_match(&entry, &query), None);
+        assert_eq!(
+            find_match(&format!("{entry}b"), &query),
+            Some(150_000..200_001)
+        );
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn the_linear_matching_agrees_with_the_former_one(
+            entry in "[aAbBßSsİi\u{307}ΣσςéÉ ]{0,12}",
+            query in "[abßsİi\u{307}σςé ]{0,4}",
+        ) {
+            proptest::prop_assert_eq!(find_match(&entry, &query), find_match_slowly(&entry, &query));
+        }
     }
 
     #[test]

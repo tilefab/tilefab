@@ -126,6 +126,10 @@ break the API).
   `draw` clears and redraws the viewport, as after a resize.
 - `tilefab-term`: a frame that changed a text modifier (bold, dim…) allocated.
 - `tilefab-input`: `LineEditor::render` allocated at every frame.
+- `tilefab-input`: the case-insensitive history search (Ctrl+R) compared the query from every
+  position of each entry: a pasted query of 4 KiB over 1000 long entries took 13 s (in
+  release). Each entry is now lowered once and searched in linear time (54 ms there), with
+  the same matches.
 - `tilefab-widget`: the layout of a `LineWidget` was quadratic in its number of components.
 - Demo: a task name with control characters (read on stdin) reached the terminal raw in the
   task started / finished lines; it is now escaped.
