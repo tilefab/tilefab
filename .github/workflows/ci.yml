@@ -1,5 +1,6 @@
 # Continuous integration: runs tools/ci.sh (fmt, clippy, tests, doc, cargo-deny) with the
-# toolchain pinned in rust-toolchain.toml, then builds and tests with the MSRV (job `msrv`).
+# toolchain pinned in rust-toolchain.toml, then builds and tests with the MSRV (job `msrv`),
+# and on Windows and macOS (job `platforms`: the code under `cfg(windows)` or `cfg(unix)`).
 # The pty scripts of tools/ are kept local (see README.md).
 #
 # Actions are pinned by commit SHA, not by tag (a tag can be moved to other code); the
@@ -59,3 +60,27 @@ jobs:
       # `+1.88`: without it, rust-toolchain.toml would win and the job would not test the MSRV.
       - name: Build and test
         run: cargo +1.88 test --locked --all-targets --all-features
+
+  # Lints and tests on the other systems: the code under `cfg(windows)` (console events,
+  # file options) is compiled nowhere else, and macOS has its own terminal and file system.
+  # The static checks that do not depend on the system stay in `checks`.
+  platforms:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install && rustc --version
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test --locked --all-features

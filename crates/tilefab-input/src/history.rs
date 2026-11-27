@@ -276,6 +276,10 @@ fn newest_entries(text: &[u8], capacity: usize, older: Vec<String>) -> (Vec<Stri
 
 /// On Unix, make an existing history file private to the user (mode `0o600`) if others can
 /// read or write it. Through the open file: never another file put at its path.
+#[cfg_attr(
+    not(unix),
+    expect(clippy::unnecessary_wraps, reason = "the Unix version can fail")
+)]
 fn make_private(file: &File, metadata: &fs::Metadata) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -378,6 +382,7 @@ fn read_after(path: &Path, offset: u64) -> io::Result<Vec<u8>> {
 
 /// Options for the files of the history: private to the user on Unix.
 fn open_options() -> OpenOptions {
+    #[cfg_attr(not(unix), expect(unused_mut, reason = "only Unix sets a mode"))]
     let mut options = OpenOptions::new();
     #[cfg(unix)]
     {

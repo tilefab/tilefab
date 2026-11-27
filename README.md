@@ -200,6 +200,8 @@ The GitHub Actions of the CI are pinned by commit SHA (version in a comment). De
 
 The minimum supported Rust version is **1.88** (`rust-version` in the root `Cargo.toml`). The CI job `msrv` builds and tests with it; locally: `rustup toolchain install 1.88 --profile minimal && cargo +1.88 test --all-targets --all-features`.
 
+The CI job `platforms` runs clippy and the tests on Windows and macOS: the code under `cfg(windows)` is compiled nowhere else. Locally, the Windows code can at least be linted: `rustup target add x86_64-pc-windows-msvc && cargo clippy --target x86_64-pc-windows-msvc --all-targets --all-features -- -D warnings`.
+
 End to end, in a pty with a terminal emulator (local only, not part of the CI; once: `python3 -m venv tools/.venv && tools/.venv/bin/pip install -r tools/requirements.txt`):
 
 ```sh
