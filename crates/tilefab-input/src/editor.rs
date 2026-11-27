@@ -409,12 +409,12 @@ impl LineEditor {
         } else {
             None
         };
-        let (search_prompt, highlight) = match &self.mode {
+        let (shown_prompt, highlight) = match &self.mode {
             Mode::Search(search) => (
-                Some(Line::from(search.prompt())),
+                render::Prompt::Parts(search.prompt_parts()),
                 search.found.as_ref().map(|(_, range)| range.clone()),
             ),
-            Mode::Normal | Mode::Menu(_) => (None, None),
+            Mode::Normal | Mode::Menu(_) => (render::Prompt::Line(prompt), None),
         };
         let view = LineView {
             text: self.buffer.value(),
@@ -425,7 +425,7 @@ impl LineEditor {
         let cursor = render::draw_line(
             buf,
             row,
-            search_prompt.as_ref().unwrap_or(prompt),
+            shown_prompt,
             &view,
             &mut self.scroll,
             self.config.scroll_margin,

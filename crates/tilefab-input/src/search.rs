@@ -29,14 +29,21 @@ impl Search {
         }
     }
 
-    /// The prompt shown in place of the application's.
-    pub(crate) fn prompt(&self) -> String {
+    /// The prompt shown in place of the application's, in three parts (drawn one after the
+    /// other, so that drawing it allocates nothing).
+    pub(crate) fn prompt_parts(&self) -> [&str; 3] {
         let state = if self.failing {
-            "failing search"
+            "(failing search) "
         } else {
-            "search"
+            "(search) "
         };
-        format!("({state}) {}: ", self.query)
+        [state, &self.query, ": "]
+    }
+
+    /// The prompt as one string.
+    #[cfg(test)]
+    pub(crate) fn prompt(&self) -> String {
+        self.prompt_parts().concat()
     }
 
     /// Look for the query from entry `from` (included) toward older entries, or toward
