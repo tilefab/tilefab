@@ -22,6 +22,28 @@ pub const DEFAULT_TARGET_WIDTH: usize = 80;
 ///
 /// Every setting is checked by [`build`](Self::build), which reports the first problem.
 /// A list given but not used by the composition is accepted and ignored.
+///
+/// A composition with a paint and a look: the name in bold (`N.*`), a bar of 10 cells drawn
+/// as a line (`I10L`), green over dark gray (`.G/K+`), then the percentage.
+///
+/// ```
+/// use tilefab_core::{Buffer, Color, Modifier, Rect, Widget};
+/// use tilefab_widget::{Entry, LineWidget};
+///
+/// let mut widget = LineWidget::builder("N.* B0 I10L.G/K+ B0 P")
+///     .names([Entry::new("build")])
+///     .barriers([Entry::new(" ")])
+///     .build()?;
+/// widget.set_progress(50.0)?;
+///
+/// let mut buf = Buffer::empty(Rect::new(0, 0, 40, 1));
+/// (&widget).render(buf.area(), &mut buf);
+/// assert_eq!(buf.lines()[0].trim_end(), "build ━━━━━─────  50%");
+/// assert!(buf.get(0, 0).modifier.contains(Modifier::BOLD));
+/// assert_eq!(buf.get(6, 0).fg, Color::Green);
+/// assert_eq!(buf.get(15, 0).fg, Color::DarkGray);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct LineWidgetBuilder {
@@ -156,7 +178,34 @@ impl LineWidgetBuilder {
     /// # Errors
     ///
     /// The first [`BuildError`] found: in the composition, then in the lists, then in the
-    /// fixed indices, then in the illustration and the number of decimals.
+    /// fixed indices, then in the illustration and the number of decimals. Its message names
+    /// the token and its position:
+    ///
+    /// ```
+    /// use tilefab_widget::{BuildError, Entry, LineWidget, ListName, TokenProblem};
+    ///
+    /// // `X` is not a component.
+    /// let error = LineWidget::builder("N X").names([Entry::new("a")]).build().unwrap_err();
+    /// assert!(matches!(
+    ///     error,
+    ///     BuildError::BadToken { position: 2, problem: TokenProblem::UnknownComponent, .. }
+    /// ));
+    /// assert_eq!(error.to_string(), r#"token 2 ("X"): unknown component"#);
+    ///
+    /// // `S2` is the third symbol, and only two are given.
+    /// let error = LineWidget::builder("S2")
+    ///     .symbols([Entry::new("a"), Entry::new("b")])
+    ///     .build()
+    ///     .unwrap_err();
+    /// assert!(matches!(
+    ///     error,
+    ///     BuildError::IndexOutOfList { list: ListName::Symbols, len: 2, .. }
+    /// ));
+    /// assert_eq!(
+    ///     error.to_string(),
+    ///     r#"token 1 ("S2"): index out of the symbols list (length 2)"#
+    /// );
+    /// ```
     pub fn build(self) -> Result<LineWidget, BuildError> {
         let painted = composition::parse(&self.composition)?;
         let tokens: Vec<Token> = painted.iter().map(|p| p.token).collect();

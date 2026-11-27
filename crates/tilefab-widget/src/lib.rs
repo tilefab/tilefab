@@ -30,6 +30,8 @@
 //! barrier), `N.W+:B*` (a bright white bold name on blue), `I20L.G/K+` (a green line on a dark
 //! gray track).
 //! The library has no default colors: they come from the entries and the `*_style` methods.
+//! [`LineWidgetBuilder`] shows a paint and a look at work, and
+//! [`build`](LineWidgetBuilder::build) the errors of a composition.
 //! The dynamic components are changed by the setters (`set_symbol`, `set_keyword`,
 //! `set_name`, `set_progress`, `set_value`, `set_time`, `set_log`); the repeatable ones are
 //! addressed by their *rank* among the dynamic components of the same letter. `P` and `I`
