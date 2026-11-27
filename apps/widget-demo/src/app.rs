@@ -1042,10 +1042,8 @@ mod tests {
 
     #[test]
     fn submitted_lines_go_to_the_history_file() {
-        let dir = std::env::temp_dir().join(format!("widget-demo-history-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let path = dir.join("history");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::test_dir::TempDir::new("history");
+        let path = dir.0.join("history");
         std::fs::write(&path, "list\n").unwrap();
         let mut app = new_app();
         app.load_history(&path);
@@ -1056,23 +1054,19 @@ mod tests {
         type_text(&mut app, " list");
         app.handle_event(key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "list\nhelp\n");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn an_unusable_history_file_is_reported_once() {
-        let dir =
-            std::env::temp_dir().join(format!("widget-demo-bad-history-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::test_dir::TempDir::new("bad-history");
         let mut app = new_app();
         // A directory is not a history file.
-        let logs = logging::capture(|| app.load_history(&dir));
+        let logs = logging::capture(|| app.load_history(&dir.0));
         assert_eq!(logs.len(), 1, "{logs:?}");
         assert!(
             logs[0].starts_with("[WARN] cannot use the history file"),
             "{logs:?}"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

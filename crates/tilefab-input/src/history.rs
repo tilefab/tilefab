@@ -407,28 +407,7 @@ fn create_dir(dir: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    /// A new, unique directory under the system temporary directory, removed on drop.
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new() -> Self {
-            static NEXT: AtomicUsize = AtomicUsize::new(0);
-            let n = NEXT.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir()
-                .join(format!("tilefab-input-history-{}-{n}", std::process::id()));
-            let _ = fs::remove_dir_all(&path);
-            fs::create_dir_all(&path).expect("cannot create the test directory");
-            Self(path)
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::test_dir::TempDir;
 
     fn entries(history: &History) -> Vec<&str> {
         history.iter().collect()
@@ -466,7 +445,7 @@ mod tests {
 
     #[test]
     fn a_missing_file_starts_empty_and_creates_its_directory() {
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let path = dir.0.join("state/tilefab/history");
         let (mut history, error) = History::with_file(&path, 10);
         assert!(error.is_none(), "{error:?}");
@@ -480,7 +459,7 @@ mod tests {
 
     #[test]
     fn loading_skips_invalid_lines_and_keeps_the_latest_duplicates() {
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let path = dir.0.join("history");
         fs::write(&path, b"a\nb\n\xff\xfe\nbad\x07line\n\na\r\nc\n   \n").unwrap();
         let (history, error) = History::with_file(&path, 10);
@@ -492,7 +471,7 @@ mod tests {
 
     #[test]
     fn a_file_twice_too_long_is_compacted_on_load() {
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let path = dir.0.join("history");
         let lines = "cmd0\ncmd1\ncmd2\n".repeat(3) + "cmd0\n";
         fs::write(&path, &lines).unwrap();
@@ -513,7 +492,7 @@ mod tests {
     #[test]
     fn new_files_and_directories_are_private_on_unix() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let path = dir.0.join("private/history");
         let (mut history, _) = History::with_file(&path, 10);
         history.add("secret");
@@ -524,7 +503,7 @@ mod tests {
 
     #[test]
     fn io_errors_keep_the_history_in_memory_and_are_reported_once() {
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         // A directory where the file should be: loading fails.
         let (mut history, error) = History::with_file(&dir.0, 10);
         assert!(error.is_some());
@@ -545,7 +524,7 @@ mod tests {
     #[test]
     fn an_existing_loose_file_becomes_private() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let path = dir.0.join("history");
         fs::write(&path, "a\n").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
@@ -561,7 +540,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_symlink_at_a_temporary_name_is_never_followed() {
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let path = dir.0.join("history");
         let target = dir.0.join("target");
         fs::write(&target, "keep\n").unwrap();
@@ -588,7 +567,7 @@ mod tests {
 
     #[test]
     fn a_line_appended_between_load_and_rewrite_is_kept() {
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let path = dir.0.join("history");
         fs::write(&path, "a\nb\n".repeat(10)).unwrap();
         let loaded = load(&path, 4, MAX_LOAD_BYTES).unwrap();
@@ -608,7 +587,7 @@ mod tests {
 
     #[test]
     fn a_file_larger_than_the_bound_keeps_its_newest_entries() {
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let path = dir.0.join("history");
         let mut text = String::new();
         for i in 0..100 {
@@ -646,7 +625,7 @@ mod tests {
 
     #[test]
     fn a_file_of_exactly_twice_the_capacity_is_not_rewritten() {
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let path = dir.0.join("history");
         let text = "a\nb\n".repeat(4);
         fs::write(&path, &text).unwrap();
@@ -659,7 +638,7 @@ mod tests {
     fn the_load_bound_is_16_mib() {
         assert_eq!(MAX_LOAD_BYTES, 16 * 1024 * 1024);
         // 2 MiB: read whole.
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let path = dir.0.join("history");
         let mut text = "x".repeat(2 * 1024 * 1024);
         text.push_str("\nfirst\n");
@@ -672,7 +651,7 @@ mod tests {
 
     #[test]
     fn reading_after_the_end_gives_nothing() {
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let path = dir.0.join("history");
         fs::write(&path, "abc\n").unwrap();
         assert_eq!(read_after(&path, 4).unwrap(), b"");
@@ -682,7 +661,7 @@ mod tests {
 
     #[test]
     fn only_a_taken_name_makes_the_rewrite_try_another_one() {
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let path = dir.0.join("history");
         fs::write(&path, "a\n").unwrap();
         // A name in a missing directory: that error is returned, the next name is not tried.
@@ -697,7 +676,7 @@ mod tests {
     #[test]
     fn a_file_private_to_the_user_keeps_its_mode() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let path = dir.0.join("history");
         fs::write(&path, "a\n").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
@@ -712,7 +691,7 @@ mod tests {
     #[test]
     fn an_unreadable_directory_is_an_error_not_an_empty_history() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let locked = dir.0.join("locked");
         fs::create_dir(&locked).unwrap();
         fs::write(locked.join("history"), "a\n").unwrap();
@@ -732,7 +711,7 @@ mod tests {
     #[test]
     fn a_failed_rewrite_keeps_appending_to_the_file() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let locked = dir.0.join("locked");
         fs::create_dir(&locked).unwrap();
         let path = locked.join("history");
@@ -782,7 +761,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_fifo_is_refused_at_once() {
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let path = dir.0.join("history");
         make_fifo(&path);
         let (file, kind) = without_blocking(move || {
@@ -796,7 +775,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_file_replaced_by_a_fifo_after_the_load_is_refused_at_once() {
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let path = dir.0.join("history");
         fs::write(&path, "a\n").unwrap();
         let (mut history, error) = History::with_file(&path, 10);
@@ -819,7 +798,7 @@ mod tests {
     #[test]
     fn a_symbolic_link_is_resolved_and_kept_by_the_rewrite() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let target = dir.0.join("target");
         let link = dir.0.join("link");
         // 6 lines, capacity 2: rewritten at the load.
@@ -849,7 +828,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_link_to_a_missing_file_is_an_error() {
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let link = dir.0.join("link");
         std::os::unix::fs::symlink(dir.0.join("missing"), &link).unwrap();
         let (history, error) = History::with_file(&link, 10);
@@ -861,7 +840,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_link_put_at_the_path_after_the_load_is_not_followed() {
-        let dir = TempDir::new();
+        let dir = TempDir::new("history");
         let path = dir.0.join("history");
         let other = dir.0.join("other");
         fs::write(&path, "a\n").unwrap();

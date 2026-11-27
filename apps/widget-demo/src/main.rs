@@ -7,6 +7,8 @@ mod headless;
 mod line;
 mod logging;
 mod tasks;
+#[cfg(test)]
+mod test_dir;
 mod ui;
 mod wrap;
 
