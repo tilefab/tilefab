@@ -6,7 +6,9 @@
 # Actions are pinned by commit SHA, not by tag (a tag can be moved to other code); the
 # comment gives the version (a format Dependabot understands, if it is enabled). Cargo
 # commands run with `--locked`: a Cargo.lock out of sync with Cargo.toml fails instead of
-# being updated.
+# being updated. The checkout does not keep the token in .git/config (`persist-credentials:
+# false`): nothing after it pushes, and the build scripts could read it. Each job stops after
+# 30 minutes (a run takes a few; the default limit is 6 hours).
 name: CI
 
 # `push` only on main: a branch with an open pull request is already checked by the
@@ -15,6 +17,13 @@ on:
   push:
     branches: [main]
   pull_request:
+
+# A new push to a pull request cancels its run still going. On main, each commit has its own
+# group (its SHA): a group also drops a waiting run when another arrives, and every merge must
+# be checked.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -25,8 +34,11 @@ env:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Installs the toolchain and components named in rust-toolchain.toml.
       - name: Install Rust (rust-toolchain.toml)
@@ -47,8 +59,11 @@ jobs:
   # Builds and tests with the minimum supported Rust version (`rust-version` in Cargo.toml).
   msrv:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # rustup is preinstalled on the runner: no third-party action needed.
       - name: Install Rust 1.88
@@ -70,8 +85,11 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install && rustc --version
