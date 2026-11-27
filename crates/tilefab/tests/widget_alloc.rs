@@ -1,6 +1,7 @@
 //! Drawing `LineWidget`s and a `LineEditor` in the frames of an inline `Terminal` allocates
 //! nothing: a warm frame that updates the widgets and draws them, with the prompt line and its
-//! hint, stays allocation-free (see `terminal_alloc.rs` for the `Terminal` side alone).
+//! hint, a history search (Ctrl+R) or the completion menu, stays allocation-free (see
+//! `terminal_alloc.rs` for the `Terminal` side alone).
 //!
 //! A separate test binary, because the counting allocator is global to the whole binary:
 //! it holds this single test, so no other test thread allocates during the measurement.
@@ -11,8 +12,9 @@ use std::alloc::System;
 
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 use tilefab::{
-    Backend, Color, EditorCommand, EditorConfig, Entry, History, Line, LineEditor, LineWidget,
-    Position, Size, Style, Terminal, TerminalOptions, Viewport, WallTime,
+    Backend, Candidate, Color, Completer, Completions, EditorCommand, EditorConfig, Entry, History,
+    Line, LineEditor, LineWidget, Position, Rect, Size, Style, Terminal, TerminalOptions, Viewport,
+    WallTime,
 };
 
 // `stats_alloc` holds the `unsafe` code, which this project forbids in its own sources.
@@ -40,22 +42,56 @@ fn task(name: &str) -> LineWidget {
     .expect("valid task line")
 }
 
+/// Six candidates, more than the menu rows: the menu shows `(+N more)`.
+struct Commands;
+
+impl Completer for Commands {
+    fn complete(&self, line: &str, cursor: usize) -> Completions {
+        let start = line[..cursor].rfind(' ').map_or(0, |space| space + 1);
+        let candidates = ["start", "stop", "status", "list", "lisp", "日本"]
+            .into_iter()
+            .map(|name| Candidate::new(name).description("a command"))
+            .collect();
+        Completions { start, candidates }
+    }
+}
+
+/// An editor with `typed` typed, after `history` entries.
+fn editor_with(history: &[&str], typed: &str) -> LineEditor {
+    let mut entries = History::new(10);
+    for entry in history {
+        entries.add(entry);
+    }
+    let mut editor = LineEditor::new(EditorConfig::default().menu_max_rows(2))
+        .with_history(entries)
+        .with_completer(Commands);
+    for c in typed.chars() {
+        let _ = editor.execute(EditorCommand::InsertChar(c));
+    }
+    editor
+}
+
 #[test]
 fn drawing_line_widgets_in_frames_allocates_nothing() {
     let backend = Backend::with_fixed(Vec::new(), Size::new(120, 20), Position::new(0, 0));
     let mut terminal = Terminal::with_options(
         backend,
-        TerminalOptions::default().viewport(Viewport::Inline(4)),
+        TerminalOptions::default().viewport(Viewport::Inline(6)),
     )
     .expect("in-memory terminal");
     let mut tasks = [task("alpha"), task("beta"), task("a much longer task name")];
-    // A prompt line with a hint from the history: `start a` + dim `lpha`.
-    let mut history = History::new(10);
-    history.add("start alpha");
-    let mut editor = LineEditor::new(EditorConfig::default()).with_history(history);
-    for c in "start a".chars() {
-        let _ = editor.execute(EditorCommand::InsertChar(c));
+    // In turn: a prompt line with a hint from the history (`start a` + dim `lpha`), a
+    // history search, and the completion menu.
+    let mut editors = [
+        editor_with(&["start alpha"], "start a"),
+        editor_with(&["start alpha", "list"], ""),
+        editor_with(&[], "s"),
+    ];
+    let _ = editors[1].execute(EditorCommand::ReverseSearch);
+    for c in "alp".chars() {
+        let _ = editors[1].execute(EditorCommand::InsertChar(c));
     }
+    let _ = editors[2].execute(EditorCommand::Complete);
     let prompt = Line::from("> ");
     let mut frame = |i: u16, terminal: &mut Terminal<Vec<u8>>, tasks: &mut [LineWidget]| {
         for (offset, task) in (0..).step_by(7).zip(tasks.iter_mut()) {
@@ -89,8 +125,11 @@ fn drawing_line_widgets_in_frames_allocates_nothing() {
                 for (task, row) in tasks.iter().zip(area.rows()) {
                     frame.render_widget(task, row);
                 }
-                let last = area.rows().last().unwrap_or(area);
-                if let Some(cursor) = editor.render(last, frame.buffer_mut(), &prompt) {
+                // The prompt row and the rows of the menu, below the tasks.
+                let used = u16::try_from(tasks.len()).unwrap();
+                let rest = Rect::new(area.x, area.y + used, area.width, area.height - used);
+                let editor = &mut editors[usize::from(i % 3)];
+                if let Some(cursor) = editor.render(rest, frame.buffer_mut(), &prompt) {
                     frame.set_cursor_position(cursor);
                 }
             })

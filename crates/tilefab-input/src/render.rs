@@ -6,7 +6,7 @@
 use std::ops::Range;
 
 use tilefab_core::buffer::grapheme_width;
-use tilefab_core::{Buffer, Line, Modifier, Position, Rect, Style};
+use tilefab_core::{Buffer, Line, Modifier, Position, Rect, Span, Style};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// The symbol drawn where text is hidden by the horizontal scroll.
@@ -83,6 +83,51 @@ impl Default for EditorStyles {
     }
 }
 
+/// The prompt drawn before the line: the application's, or the one of a history search,
+/// made of borrowed parts so that drawing it allocates nothing.
+#[derive(Clone, Copy)]
+pub(crate) enum Prompt<'a> {
+    /// The prompt the application gives to `LineEditor::render`.
+    Line(&'a Line<'a>),
+    /// Parts written one after the other, unstyled: `(search) `, the query, `: `.
+    Parts([&'a str; 3]),
+}
+
+impl Prompt<'_> {
+    /// Width in columns, measured like [`Line::width`].
+    fn width(&self) -> usize {
+        match self {
+            Self::Line(line) => line.width(),
+            Self::Parts(parts) => parts.iter().map(|part| Span::raw(*part).width()).sum(),
+        }
+    }
+
+    /// Draw the prompt on the first row of `area`, truncated like [`Line::render_to`].
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        match self {
+            Self::Line(line) => line.render_to(area, buf),
+            Self::Parts(parts) => {
+                let area = buf.area().intersection(area);
+                let (mut x, mut remaining) = (area.x, usize::from(area.width));
+                for part in parts {
+                    if remaining == 0 {
+                        break;
+                    }
+                    let (next, _) = buf.set_stringn(x, area.y, part, remaining, Style::new());
+                    let written = usize::from(next - x);
+                    remaining -= written;
+                    x = next;
+                    // Cut inside this part: the next one would come where the omitted
+                    // character belongs.
+                    if written < Span::raw(*part).width() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// What to draw on the prompt row.
 pub(crate) struct LineView<'a> {
     /// The text of the line.
@@ -100,7 +145,7 @@ pub(crate) struct LineView<'a> {
 pub(crate) fn draw_line(
     buf: &mut Buffer,
     row: Rect,
-    prompt: &Line<'_>,
+    prompt: Prompt<'_>,
     line: &LineView<'_>,
     scroll: &mut usize,
     margin: u16,
@@ -109,7 +154,7 @@ pub(crate) fn draw_line(
     // The prompt never scrolls; when the row is too narrow, it is truncated first so
     // that the line keeps two columns.
     let prompt_width = prompt.width().min(usize::from(row.width.saturating_sub(2)));
-    prompt.render_to(Rect::new(row.x, row.y, to_u16(prompt_width), 1), buf);
+    prompt.render(Rect::new(row.x, row.y, to_u16(prompt_width), 1), buf);
     let text_x = row.x + to_u16(prompt_width);
     let width = usize::from(row.width) - prompt_width;
 
@@ -227,7 +272,15 @@ mod tests {
         let styles = EditorStyles::default();
         let prompt = Line::from("> ");
         let area = buf.area();
-        let position = draw_line(&mut buf, area, &prompt, &view, scroll, 4, &styles);
+        let position = draw_line(
+            &mut buf,
+            area,
+            Prompt::Line(&prompt),
+            &view,
+            scroll,
+            4,
+            &styles,
+        );
         assert_eq!(position.y, 0);
         (buf.lines().concat(), position.x)
     }
@@ -323,7 +376,7 @@ mod tests {
         let position = draw_line(
             &mut buf,
             area,
-            &Line::from("> "),
+            Prompt::Line(&Line::from("> ")),
             &view,
             &mut scroll,
             4,
@@ -347,7 +400,15 @@ mod tests {
         };
         let styles = EditorStyles::default();
         let area = buf.area();
-        let _ = draw_line(&mut buf, area, &Line::from(""), &view, &mut 0, 4, &styles);
+        let _ = draw_line(
+            &mut buf,
+            area,
+            Prompt::Line(&Line::from("")),
+            &view,
+            &mut 0,
+            4,
+            &styles,
+        );
         let underlined = Modifier::UNDERLINED;
         let modifiers: Vec<Modifier> = (0..4).map(|x| modifier(&buf, x)).collect();
         assert_eq!(
@@ -384,7 +445,7 @@ mod tests {
         let position = draw_line(
             &mut buf,
             row,
-            &Line::from("> "),
+            Prompt::Line(&Line::from("> ")),
             &view,
             &mut scroll,
             4,

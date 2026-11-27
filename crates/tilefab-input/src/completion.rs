@@ -1,6 +1,7 @@
 //! Completion: the [`Completer`] trait, the candidates, and the menu drawn below the prompt.
 
 use std::collections::HashSet;
+use std::fmt::Write as _;
 
 use tilefab_core::buffer::grapheme_width;
 use tilefab_core::{Buffer, Rect, Style};
@@ -295,9 +296,13 @@ pub(crate) fn draw_menu(menu: &mut Menu, area: Rect, buf: &mut Buffer, styles: &
             } else {
                 Style::new()
             };
-            // The selection is shown over the whole label width.
-            let padded = format!("{:<pad$}", candidate.label(), pad = room);
-            let _ = buf.set_stringn(area.x + to_u16(x), y, &padded, room, style);
+            // The selection is shown over the whole label width: spaces after the label,
+            // counted in columns (a wide character takes two).
+            let start = area.x + to_u16(x);
+            let (mut next, _) = buf.set_stringn(start, y, candidate.label(), room, style);
+            while usize::from(next - start) < room {
+                next = buf.set_stringn(next, y, " ", 1, style).0;
+            }
             if layout.described
                 && let Some(description) = &candidate.description
             {
@@ -315,11 +320,14 @@ pub(crate) fn draw_menu(menu: &mut Menu, area: Rect, buf: &mut Buffer, styles: &
     }
     let hidden = menu.candidates.len() - shown;
     if hidden > 0 {
-        let counter = format!(" (+{hidden} more)");
-        let counter_width = text_width(&counter).min(width);
+        // On the stack: the menu is drawn at every frame.
+        let mut counter = StackText::default();
+        let _ = write!(counter, " (+{hidden} more)");
+        let counter = counter.as_str();
+        let counter_width = text_width(counter).min(width);
         let x = area.x + to_u16(width - counter_width);
         let y = area.y + to_u16(visible - 1);
-        let _ = buf.set_stringn(x, y, &counter, counter_width, styles.menu_description);
+        let _ = buf.set_stringn(x, y, counter, counter_width, styles.menu_description);
     }
 }
 
@@ -327,6 +335,30 @@ pub(crate) fn draw_menu(menu: &mut Menu, area: Rect, buf: &mut Buffer, styles: &
 pub(crate) fn rows_needed(menu: &Menu, width: u16, max_rows: u16) -> u16 {
     let rows = layout(&menu.candidates, usize::from(width)).rows;
     to_u16(rows).min(max_rows)
+}
+
+/// A short text written on the stack, `(+N more)` (at most 29 bytes for a `usize`).
+#[derive(Default)]
+struct StackText {
+    bytes: [u8; 32],
+    len: usize,
+}
+
+impl StackText {
+    fn as_str(&self) -> &str {
+        // Only whole `&str` are copied in (see `write_str`).
+        std::str::from_utf8(&self.bytes[..self.len]).unwrap_or_default()
+    }
+}
+
+impl std::fmt::Write for StackText {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        let end = self.len + text.len();
+        let room = self.bytes.get_mut(self.len..end).ok_or(std::fmt::Error)?;
+        room.copy_from_slice(text.as_bytes());
+        self.len = end;
+        Ok(())
+    }
 }
 
 /// Display width of `text`.
@@ -341,6 +373,8 @@ fn to_u16(count: usize) -> u16 {
 
 #[cfg(test)]
 mod tests {
+    use tilefab_core::Color;
+
     use super::*;
 
     fn candidates(names: &[&str]) -> Vec<Candidate> {
@@ -359,6 +393,19 @@ mod tests {
             top: 0,
             rows: names.len(),
         }
+    }
+
+    #[test]
+    fn the_selection_covers_the_label_width_in_columns() {
+        // `e` + a combining acute accent: two characters, one column.
+        let mut menu = menu(&["e\u{301}", "abcd"], 0);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+        let selected = Style::new().fg(Color::Red);
+        let styles = EditorStyles::default().menu_selected(selected);
+        let area = buf.area();
+        draw_menu(&mut menu, area, &mut buf, &styles);
+        let red: Vec<bool> = (0..4).map(|x| buf.get(x, 0).fg == Color::Red).collect();
+        assert_eq!(red, [true; 4], "the whole label width of 4 columns");
     }
 
     #[test]

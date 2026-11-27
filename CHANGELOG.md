@@ -125,7 +125,10 @@ break the API).
   matched. The lines not written in full are queued again (one may show twice), and the next
   `draw` clears and redraws the viewport, as after a resize.
 - `tilefab-term`: a frame that changed a text modifier (bold, dim…) allocated.
-- `tilefab-input`: `LineEditor::render` allocated at every frame.
+- `tilefab-input`: `LineEditor::render` allocated at every frame; during a history search
+  (Ctrl+R) or with the completion menu open, it still did (the search prompt, each visible
+  candidate, the `(+N more)` counter). The selected candidate was also padded in
+  characters, not columns: a label with a combining mark was highlighted one column short.
 - `tilefab-input`: a completion menu drawn down to the last row a `Rect` can reach
   (`u16::MAX - 1`) panicked with an overflow in debug builds.
 - `tilefab-input`: the case-insensitive history search (Ctrl+R) compared the query from every
