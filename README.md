@@ -108,7 +108,7 @@ The prompt uses the line editor of `tilefab-input`: readline-style Emacs keys, U
 | Esc | hide the hint; back to the typed line while browsing the history |
 | Enter (Ctrl+J, Ctrl+M) | run the line |
 
-**History.** Lines run at the prompt are saved, each one once (the latest wins), up to 1000. A line that starts with a space is not saved. The file is `$TILEFAB_HISTORY` if set, else `$XDG_STATE_HOME/tilefab/history`, else `~/.local/state/tilefab/history`; it is private to the user (mode `0600`). `TILEFAB_HISTORY= cargo run` runs without a history file. The headless mode has no history.
+**History.** Lines run at the prompt are saved, each one once (the latest wins), up to 1000. A line that starts with a space is not saved. The file is `$TILEFAB_HISTORY` if set, else `$XDG_STATE_HOME/tilefab/history`, else `~/.local/state/tilefab/history`; on Windows, `%LOCALAPPDATA%\tilefab\history` replaces the last two. On Unix, it is private to the user (mode `0600`). `TILEFAB_HISTORY= cargo run` runs without a history file. The headless mode has no history.
 
 **Search.** Ctrl+R replaces the prompt with `(search) query: ` and shows the newest entry that contains what is typed (case-insensitive unless the query has an upper-case letter), the match underlined. Ctrl+R / Ctrl+S go to older / newer matches; `(failing search)` means there is no other match. Enter runs the match; Esc or an arrow key keeps it in the line to edit it; Ctrl+G or Ctrl+C cancels.
 

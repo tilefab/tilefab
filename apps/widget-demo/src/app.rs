@@ -299,20 +299,32 @@ impl Completer for CommandCompleter {
 }
 
 /// Where the history is kept, given a way to read environment variables: `$TILEFAB_HISTORY`
-/// if set (empty: no history file), else `$XDG_STATE_HOME/tilefab/history` (an absolute
-/// path only, as the XDG specification requires), else `$HOME/.local/state/tilefab/history`;
-/// `None` when none of them is available.
+/// if set (empty: no history file), else, on Windows, `%LOCALAPPDATA%\tilefab\history`, and
+/// on the other systems `$XDG_STATE_HOME/tilefab/history`, else
+/// `$HOME/.local/state/tilefab/history`; `None` when none of them is available. A relative
+/// `LOCALAPPDATA` or `XDG_STATE_HOME` is ignored (the XDG specification requires an absolute
+/// path).
 pub fn history_path(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    history_path_on(cfg!(windows), var)
+}
+
+/// [`history_path`] for Windows (`windows`) or for the other systems, so that the tests check
+/// both on every system.
+fn history_path_on(windows: bool, var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     if let Some(path) = var("TILEFAB_HISTORY") {
         return (!path.is_empty()).then(|| PathBuf::from(path));
     }
-    if let Some(state) = var("XDG_STATE_HOME").map(PathBuf::from)
-        && state.is_absolute()
-    {
+    let absolute = |name| var(name).map(PathBuf::from).filter(|dir| dir.is_absolute());
+    if windows {
+        // `HOME` is not a Windows variable (Git Bash sets one, `cmd` does not): the file would
+        // change with the shell.
+        return absolute("LOCALAPPDATA").map(|dir| dir.join("tilefab").join("history"));
+    }
+    if let Some(state) = absolute("XDG_STATE_HOME") {
         return Some(state.join("tilefab").join("history"));
     }
     var("HOME").filter(|home| !home.is_empty()).map(|home| {
-        // One component at a time: the separators are the system's (`\\` on Windows).
+        // One component at a time: the separators are the system's.
         [".local", "state", "tilefab", "history"]
             .iter()
             .fold(PathBuf::from(home), |path, part| path.join(part))
@@ -953,21 +965,24 @@ mod tests {
         assert!(app.editor.extra_rows(100) > 0);
     }
 
+    /// An absolute path on this system: `/state` has no drive, so it is relative on Windows.
+    #[cfg(windows)]
+    const ABSOLUTE: &str = r"C:\state";
+    #[cfg(not(windows))]
+    const ABSOLUTE: &str = "/state";
+
+    /// A way to read environment variables that only knows `vars`.
+    fn env<'a>(vars: &'a [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
+        move |name| {
+            vars.iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| OsString::from(v))
+        }
+    }
+
     #[test]
     fn the_history_path_follows_tilefab_history_then_xdg_then_home() {
-        // An absolute path on this system: `/state` has no drive, so it is relative on Windows.
-        #[cfg(windows)]
-        const STATE: &str = r"C:\state";
-        #[cfg(not(windows))]
-        const STATE: &str = "/state";
-        let env = |vars: &'static [(&'static str, &'static str)]| {
-            move |name: &str| {
-                vars.iter()
-                    .find(|(n, _)| *n == name)
-                    .map(|(_, v)| OsString::from(v))
-            }
-        };
-        let path = |vars| history_path(env(vars));
+        let path = |vars| history_path_on(false, env(vars));
         assert_eq!(
             path(&[("TILEFAB_HISTORY", "/tmp/h"), ("HOME", "/home/u")]),
             Some(PathBuf::from("/tmp/h"))
@@ -975,15 +990,50 @@ mod tests {
         // An empty value disables the file.
         assert_eq!(path(&[("TILEFAB_HISTORY", ""), ("HOME", "/home/u")]), None);
         assert_eq!(
-            path(&[("XDG_STATE_HOME", STATE), ("HOME", "/home/u")]),
-            Some(PathBuf::from(STATE).join("tilefab").join("history"))
+            path(&[("XDG_STATE_HOME", ABSOLUTE), ("HOME", "/home/u")]),
+            Some(PathBuf::from(ABSOLUTE).join("tilefab").join("history"))
         );
         // A relative XDG_STATE_HOME is ignored.
         assert_eq!(
             path(&[("XDG_STATE_HOME", "state"), ("HOME", "/home/u")]),
             Some(PathBuf::from("/home/u/.local/state/tilefab/history"))
         );
+        // LOCALAPPDATA is for Windows only.
+        assert_eq!(
+            path(&[("LOCALAPPDATA", ABSOLUTE), ("HOME", "/home/u")]),
+            Some(PathBuf::from("/home/u/.local/state/tilefab/history"))
+        );
         assert_eq!(path(&[]), None);
+    }
+
+    #[test]
+    fn on_windows_the_history_path_follows_tilefab_history_then_localappdata() {
+        let path = |vars| history_path_on(true, env(vars));
+        assert_eq!(
+            path(&[("TILEFAB_HISTORY", "h"), ("LOCALAPPDATA", ABSOLUTE)]),
+            Some(PathBuf::from("h"))
+        );
+        assert_eq!(
+            path(&[("TILEFAB_HISTORY", ""), ("LOCALAPPDATA", ABSOLUTE)]),
+            None
+        );
+        assert_eq!(
+            path(&[("LOCALAPPDATA", ABSOLUTE), ("HOME", "/home/u")]),
+            Some(PathBuf::from(ABSOLUTE).join("tilefab").join("history"))
+        );
+        // Neither XDG_STATE_HOME nor HOME: they depend on the shell on Windows.
+        assert_eq!(
+            path(&[("XDG_STATE_HOME", ABSOLUTE), ("HOME", "/home/u")]),
+            None
+        );
+        // A relative LOCALAPPDATA is ignored, an empty one too.
+        assert_eq!(path(&[("LOCALAPPDATA", "local")]), None);
+        assert_eq!(path(&[("LOCALAPPDATA", "")]), None);
+        // The real system decides which rules apply.
+        assert_eq!(
+            history_path(env(&[("LOCALAPPDATA", ABSOLUTE)])).is_some(),
+            cfg!(windows)
+        );
     }
 
     #[test]

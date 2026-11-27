@@ -124,6 +124,9 @@ break the API).
   lists them. The barriers `B0`–`B9` are space `-` `:` `|` `[` `]` `(` `)` `{` `}`, and the
   default composition is `N B0 B4 T2 B5 B0 S B0 I B0 P B0 L`.
 - `TILEFAB_SCROLL_MODE=screen|region|fallback` chooses the scroll mode of the inline terminal.
+- On Windows, the history file is `%LOCALAPPDATA%\tilefab\history` (after `TILEFAB_HISTORY`):
+  `HOME`, often unset there, left the demo without a history file, and `XDG_STATE_HOME` and
+  `HOME` changed with the shell.
 - On Windows, closing the console, logging off or shutting down quit through the clean-up.
 
 ## 0.1.0 (not released yet)
