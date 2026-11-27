@@ -3,7 +3,7 @@
 use tilefab_core::{Alignment, Buffer, Color, Modifier, Rect, Style, Widget};
 
 use crate::entry::text_width;
-use crate::{Entry, LineWidget, WallTime};
+use crate::{Entry, LineWidget, Rank, WallTime};
 
 fn entries(texts: &[&str]) -> Vec<Entry> {
     texts.iter().copied().map(Entry::new).collect()
@@ -80,7 +80,7 @@ fn the_example_at_several_widths() {
 #[test]
 fn the_symbol_changes_with_set_symbol() {
     let mut widget = example();
-    widget.set_symbol(0, 3).unwrap();
+    widget.set_symbol(Rank(0), 3).unwrap();
     assert_row(&widget, 29, "[05.123] 🟢 Downloading crate");
 }
 
@@ -91,7 +91,7 @@ fn symbols_narrower_than_the_widest_are_left_justified() {
         .barriers(entries(&["|"]))
         .build()
         .unwrap();
-    widget.set_symbol(0, 1).unwrap();
+    widget.set_symbol(Rank(0), 1).unwrap();
     assert_row(&widget, 5, "x |");
 }
 
@@ -294,9 +294,9 @@ fn names_change_width_and_the_line_is_laid_out_again() {
         .unwrap();
     widget.set_log("log");
     assert_row(&widget, 12, "alpha|log");
-    widget.set_name(0, 1).unwrap();
+    widget.set_name(Rank(0), 1).unwrap();
     assert_row(&widget, 12, "be|log");
-    widget.set_name(0, 0).unwrap();
+    widget.set_name(Rank(0), 0).unwrap();
     assert_row(&widget, 12, "alpha|log");
     // Narrower: L at 2 first, then the name shrinks.
     assert_row(&widget, 8, "alpha|l…");
@@ -342,7 +342,7 @@ fn every_value_has_its_style() {
         .log_style(green)
         .build()
         .unwrap();
-    widget.set_symbol(0, 1).unwrap();
+    widget.set_symbol(Rank(0), 1).unwrap();
     widget.set_progress(50.0).unwrap();
     widget.set_log("z");
     // x_|ok  nMM-DDHH:MM  50%  0u/ 0u#.z
@@ -422,9 +422,9 @@ fn a_draw_is_the_same_after_an_invalid_setter_call() {
         .unwrap();
     widget.set_progress(30.0).unwrap();
     let before = draw(&widget, 60);
-    assert!(widget.set_symbol(0, 2).is_err());
-    assert!(widget.set_symbol(1, 0).is_err());
-    assert!(widget.set_name(0, 9).is_err());
+    assert!(widget.set_symbol(Rank(0), 2).is_err());
+    assert!(widget.set_symbol(Rank(1), 0).is_err());
+    assert!(widget.set_name(Rank(0), 9).is_err());
     assert!(widget.set_keyword(1).is_err());
     assert!(widget.set_progress(f64::NAN).is_err());
     assert!(
@@ -633,7 +633,7 @@ fn a_paint_over_a_symbol_a_date_and_a_time() {
         .symbols(symbols())
         .build()
         .unwrap();
-    dynamic.set_symbol(0, 1).unwrap();
+    dynamic.set_symbol(Rank(0), 1).unwrap();
     assert_eq!(
         cells(&draw(&dynamic, 1), 0, 1),
         [(Color::Yellow, Color::Blue, false)]

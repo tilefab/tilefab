@@ -16,7 +16,10 @@ break the API).
   `LineWidget::builder(…)…build()`, which returns a `BuildError` or warnings; updated by
   setters that return an `UpdateError` and keep the previous value. New types: `Entry`,
   `WallTime`, `LineWidgetBuilder`, `BuildError`, `UpdateError`, `Warning`, `ListName`,
-  `TokenProblem`, `EntryProblem`, `TimeField`.
+  `TokenProblem`, `EntryProblem`, `TimeField`, `Rank`.
+- `tilefab-widget`: `LineWidget::set_symbol` and `set_name` take the rank of the component as
+  a `Rank` (`set_name(Rank(0), 1)`), no longer as a second `usize` that could be swapped with
+  the index of the entry without an error.
 - `Block`, `Borders`, `BorderType`, `Padding`, `Clear`, `List`, `ListItem`, `ListState`,
   `Paragraph`, `Wrap`, `ProgressBar` and `ProgressLine` are removed, from `tilefab-widget` and
   from the re-exports of `tilefab` (feature `widget`), which now re-exports the new types.

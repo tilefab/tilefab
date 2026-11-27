@@ -11,7 +11,8 @@ use tilefab::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers
 
 use tilefab::{
     Alignment, Backend, BuildError, Color, Constraint, Entry, Layout, Line, LineWidget, Modifier,
-    Rect, Style, Stylize, Terminal, TerminalGuard, WallTime, grapheme_width, install_panic_hook,
+    Rank, Rect, Style, Stylize, Terminal, TerminalGuard, WallTime, grapheme_width,
+    install_panic_hook,
 };
 
 const TEXT: &str = "This is a long paragraph, wrapped to the width of the window by a small \
@@ -111,7 +112,7 @@ fn animate(widgets: &mut Widgets, elapsed: Duration) -> Result<(), tilefab::Upda
         _ => 2,
     };
     widgets.build.set_time(now)?;
-    widgets.build.set_symbol(0, state)?;
+    widgets.build.set_symbol(Rank(0), state)?;
     widgets.build.set_keyword(state)?;
     widgets.build.set_log(STEPS[step]);
     widgets.download.set_progress(ratio * 100.0)?;

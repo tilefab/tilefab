@@ -2,7 +2,7 @@
 //! composition, and how a task drives its widget (state, progress, value, step, time).
 
 use tilefab::{
-    BuildError, Color, Entry, LineWidget, Modifier, Style, WallTime, Warning, grapheme_width,
+    BuildError, Color, Entry, LineWidget, Modifier, Rank, Style, WallTime, Warning, grapheme_width,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -165,7 +165,7 @@ pub fn update(widget: &mut LineWidget, ratio: f64, step: &str, total_mb: f64) {
     // Each setter fails only when the composition lacks its component (or has a fixed one):
     // nothing to show then.
     widget.set_progress(ratio * 100.0).ok();
-    widget.set_symbol(0, state).ok();
+    widget.set_symbol(Rank(0), state).ok();
     widget.set_keyword(state).ok();
     // The arguments follow the shape of `V` exactly (from the widget, not from the
     // composition text, whose paint may contain `/`), so this cannot fail.
