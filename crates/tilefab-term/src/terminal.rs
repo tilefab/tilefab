@@ -6,7 +6,9 @@
 //! and renders each `draw` into a second one. At the end of each `draw`, compute the difference
 //! (`Buffer::diff`), send only those cells to the backend, and make the new buffer
 //! `previous`. All rendering for a frame is wrapped in **a single** synchronized update. The
-//! buffers are kept from one frame to the next: once warmed up, a frame allocates nothing.
+//! buffers are kept from one frame to the next: once warmed up, a frame allocates nothing,
+//! except once per symbol longer than a cell holds inline (22 bytes, some emoji sequences)
+//! that the application writes.
 //!
 //! # Two viewports
 //!

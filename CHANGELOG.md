@@ -125,6 +125,9 @@ break the API).
   matched. The lines not written in full are queued again (one may show twice), and the next
   `draw` clears and redraws the viewport, as after a resize.
 - `tilefab-term`: a frame that changed a text modifier (bold, dim…) allocated.
+- `tilefab-core`: a symbol longer than a cell holds inline (22 bytes, such as a family emoji
+  joined by ZWJ) was copied with an allocation each time its cell was, about five times per
+  frame; its copies now share it (`Arc<str>`), and only writing it allocates.
 - `tilefab-input`: `LineEditor::render` allocated at every frame; during a history search
   (Ctrl+R) or with the completion menu open, it still did (the search prompt, each visible
   candidate, the `(+N more)` counter). The selected candidate was also padded in

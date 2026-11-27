@@ -20,6 +20,8 @@
 //! continuation copied elsewhere. [`Buffer::normalize_wide`] repairs it, and `Terminal`
 //! calls it on every frame: the screen never holds a cell the diff does not know about.
 
+use std::sync::Arc;
+
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -49,7 +51,8 @@ fn clipped(area: Rect) -> Rect {
 }
 
 /// Bytes a symbol holds without a heap allocation: enough for nearly every grapheme
-/// (accented letters, CJK, most emoji). Longer ones (some emoji sequences) use the heap.
+/// (accented letters, CJK, most emoji). Longer ones (some emoji sequences, such as a family
+/// joined by ZWJ) use the heap: writing one allocates once, copying its cell does not.
 const INLINE_SYMBOL: usize = 22;
 
 /// A cell's symbol, stored in the cell itself when it is short.
@@ -61,8 +64,9 @@ const INLINE_SYMBOL: usize = 22;
 enum Symbol {
     /// The first `len` bytes of `bytes`, valid UTF-8.
     Inline { len: u8, bytes: [u8; INLINE_SYMBOL] },
-    /// Longer than `INLINE_SYMBOL` bytes.
-    Heap(Box<str>),
+    /// Longer than `INLINE_SYMBOL` bytes, shared by its copies: copying a cell never
+    /// allocates (only writing such a symbol does).
+    Heap(Arc<str>),
 }
 
 impl Symbol {
