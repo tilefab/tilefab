@@ -61,6 +61,9 @@ break the API).
 - `tilefab` (feature `widget`) re-exports the constants of `tilefab-widget` too: `MAX_ENTRIES`,
   `MAX_NAMES`, `MAX_VALUE_DECIMALS` and `DEFAULT_TARGET_WIDTH`, to check lists and values
   against the limits of `LineWidget` without depending on `tilefab-widget`.
+- `tilefab-core` (and `tilefab`): `str_width`, the display width of a string, the width
+  `Buffer::set_string` gives it. The layers and the demo measured text with copies of that
+  rule; they all use this one now.
 - `tilefab-input`: `History::file` returns the file the history appends to, `None` when it is
   in memory only.
 

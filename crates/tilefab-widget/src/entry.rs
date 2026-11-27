@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use tilefab_core::{Style, grapheme_width};
+use tilefab_core::{Style, str_width};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// One entry of a list given to the builder (symbols, barriers, keywords, names, units, the
@@ -52,7 +52,7 @@ impl Entry {
         if self.text.chars().any(char::is_control) {
             return Err(EntryProblem::ControlCharacter);
         }
-        match text_width(&self.text) {
+        match str_width(&self.text) {
             0 => Err(EntryProblem::Empty),
             width => Ok(width),
         }
@@ -75,12 +75,6 @@ impl Entry {
             _ => Err(EntryProblem::NotOneColumn),
         }
     }
-}
-
-/// Width of `text` in columns, with the rule of [`tilefab_core::Buffer`]: the sum of the
-/// [`grapheme_width`] of its graphemes.
-pub(crate) fn text_width(text: &str) -> usize {
-    text.graphemes(true).map(grapheme_width).sum()
 }
 
 /// What is wrong with an [`Entry`].
@@ -111,7 +105,7 @@ impl fmt::Display for EntryProblem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tilefab_core::Color;
+    use tilefab_core::{Color, grapheme_width};
 
     #[test]
     fn constructors_keep_text_and_style() {
@@ -119,15 +113,6 @@ mod tests {
         assert_eq!(Entry::new("a").style(), Style::default());
         let entry = Entry::styled("ab", style);
         assert_eq!((entry.text(), entry.style()), ("ab", style));
-    }
-
-    #[test]
-    fn text_width_follows_the_buffer() {
-        assert_eq!(text_width("abc"), 3);
-        assert_eq!(text_width("界"), 2);
-        assert_eq!(text_width("🔴"), grapheme_width("🔴"));
-        assert_eq!(text_width("e\u{301}"), 1);
-        assert_eq!(text_width(""), 0);
     }
 
     #[test]

@@ -412,7 +412,7 @@ fn queue_output<W: Write>(terminal: &mut Terminal<W>, app: &mut App) {
             rows.len() - newest.len()
         );
     }
-    let height = u16::try_from(newest.len()).unwrap_or(u16::MAX);
+    let height = tilefab::convert::saturating_u16(newest.len());
     terminal.insert_before(height, |buf| wrap::render(newest, buf));
     app.wrapped.clear();
 }

@@ -8,12 +8,13 @@ use crate::composition::Paint;
 
 use crate::builder::{ListName, Warning};
 use crate::entry::Entry;
-use crate::entry::text_width;
 use crate::format::{
     ELLIPSIS, StackText, done_cells, sanitize_into, truncate, write_number, write_progress,
 };
 use crate::layout::{self, Item};
 use crate::time::{TimeField, WallTime, write_date, write_time};
+use tilefab_core::convert::saturating_u16;
+use tilefab_core::str_width;
 
 /// Nominal width of an elastic `I`.
 pub(crate) const ELASTIC_ILLUSTRATION_WIDTH: usize = 10;
@@ -524,7 +525,7 @@ impl Widget for &LineWidget {
             let last = i + 1 == plan.kept;
             self.draw(buf, x, area.y, width, i, last);
             // The widths add up to at most `area.width`.
-            x = x.saturating_add(u16::try_from(width).unwrap_or(u16::MAX));
+            x = x.saturating_add(saturating_u16(width));
         }
     }
 }
@@ -670,10 +671,10 @@ impl LineWidget {
         let unit_style = |unit: &Measured| unit.entry.style().patch(paint.second());
         let unit = |index: Option<usize>| index.map(|i| &self.units[i]);
         let unit_width = |index| unit(index).map_or(0, |u: &Measured| u.width);
-        let mut compact = text_width(&text.number) + unit_width(text.unit);
+        let mut compact = str_width(&text.number) + unit_width(text.unit);
         let has_total = self.value.is_some_and(|shape| shape.total);
         if has_total {
-            compact += 1 + text_width(&text.total) + unit_width(text.total_unit);
+            compact += 1 + str_width(&text.total) + unit_width(text.total_unit);
         }
         let mut x = pad(buf, x, y, width.saturating_sub(compact), numbers);
         x = put(buf, x, y, &text.number, usize::MAX, numbers);

@@ -6,6 +6,7 @@
 use std::ops::Range;
 
 use tilefab_core::buffer::grapheme_width;
+use tilefab_core::convert::saturating_u16;
 use tilefab_core::{Buffer, Line, Modifier, Position, Rect, Span, Style};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -154,8 +155,11 @@ pub(crate) fn draw_line(
     // The prompt never scrolls; when the row is too narrow, it is truncated first so
     // that the line keeps two columns.
     let prompt_width = prompt.width().min(usize::from(row.width.saturating_sub(2)));
-    prompt.render(Rect::new(row.x, row.y, to_u16(prompt_width), 1), buf);
-    let text_x = row.x + to_u16(prompt_width);
+    prompt.render(
+        Rect::new(row.x, row.y, saturating_u16(prompt_width), 1),
+        buf,
+    );
+    let text_x = row.x + saturating_u16(prompt_width);
     let width = usize::from(row.width) - prompt_width;
 
     // Width of the line and column of the cursor: a first pass over the graphemes, a second
@@ -186,7 +190,12 @@ pub(crate) fn draw_line(
             Some(range) if range.contains(&start) => styles.search_match,
             _ => Style::new(),
         };
-        buf.write_grapheme(text_x + to_u16(col - offset), row.y, grapheme, style);
+        buf.write_grapheme(
+            text_x + saturating_u16(col - offset),
+            row.y,
+            grapheme,
+            style,
+        );
     }
 
     let cursor_x = cursor_col - offset;
@@ -196,7 +205,13 @@ pub(crate) fn draw_line(
         && line.cursor == line.text.len()
     {
         let x = total - offset;
-        buf.set_stringn(text_x + to_u16(x), row.y, hint, width - x, styles.hint);
+        buf.set_stringn(
+            text_x + saturating_u16(x),
+            row.y,
+            hint,
+            width - x,
+            styles.hint,
+        );
     }
     // Below 3 columns, an indicator would hide the only visible text.
     let indicators = width >= 3;
@@ -207,13 +222,13 @@ pub(crate) fn draw_line(
     // the right indicator is never under the cursor.
     if indicators && total > offset + width {
         buf.write_grapheme(
-            text_x + to_u16(width - 1),
+            text_x + saturating_u16(width - 1),
             row.y,
             INDICATOR,
             styles.indicator,
         );
     }
-    Position::new(text_x + to_u16(cursor_x), row.y)
+    Position::new(text_x + saturating_u16(cursor_x), row.y)
 }
 
 /// The scroll offset (first visible column) for a line of `total` columns with the cursor
@@ -247,12 +262,6 @@ fn scroll_offset(
     // `lowest <= highest`: the margins take at most half of the width, and `right` never
     // goes past the end of the line.
     previous.clamp(lowest, highest)
-}
-
-/// A column count that fits the buffer (always the case: the buffer is at most
-/// `u16::MAX` wide).
-fn to_u16(columns: usize) -> u16 {
-    u16::try_from(columns).unwrap_or(u16::MAX)
 }
 
 #[cfg(test)]
@@ -366,7 +375,7 @@ mod tests {
         for cursor in (0..=text.len()).step_by(3) {
             let (row, x) = draw(&text, cursor, 9, &mut scroll);
             // Every visible "漢" is whole: the row is 9 columns wide.
-            let columns: usize = row.graphemes(true).map(grapheme_width).sum();
+            let columns = tilefab_core::str_width(&row);
             assert_eq!(columns, 9, "{row:?}");
             assert!(usize::from(x) < 9);
         }

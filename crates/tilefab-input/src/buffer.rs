@@ -124,6 +124,11 @@ impl LineBuffer {
 
 /// `text` without control characters: `\r\n`, `\r`, `\n` and `\t` become one space each,
 /// the other control characters are removed.
+///
+/// The rule of the line editor, for a text typed or pasted into one line: a line break or a
+/// tab separates words, the other control characters have no visible form. The line widget
+/// (`tilefab-widget`, its log) replaces every control character with a space instead: it
+/// shows a text as it came, column for column.
 pub(crate) fn sanitize(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();

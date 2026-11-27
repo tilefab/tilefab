@@ -3,6 +3,7 @@
 
 use tilefab::{
     BuildError, Color, Entry, LineWidget, Modifier, Rank, Style, WallTime, Warning, grapheme_width,
+    str_width,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -70,7 +71,8 @@ fn units() -> [Entry; 4] {
 }
 
 /// `name` as shown: its control characters become spaces (the widget refuses them in its
-/// entries, and a name read from stdin may hold some).
+/// entries, and a name read from stdin may hold some), the rule the widget applies to its
+/// log.
 fn shown(name: &str) -> String {
     name.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
@@ -79,7 +81,7 @@ fn shown(name: &str) -> String {
 
 /// Width of `name` as shown, in columns.
 fn name_width(name: &str) -> usize {
-    shown(name).graphemes(true).map(grapheme_width).sum()
+    str_width(&shown(name))
 }
 
 /// The name column shared by the tasks, so that what follows the names lines up: as wide as
