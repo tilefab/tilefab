@@ -274,7 +274,9 @@ pub(crate) fn draw_menu(menu: &mut Menu, area: Rect, buf: &mut Buffer, styles: &
 
     let column_width = layout.label_width + GAP;
     let mut shown = 0;
-    for (y, row) in (area.y..).zip(menu.top..menu.top + visible) {
+    // A bounded range: `(area.y..)` would be advanced once more after the last row, and
+    // overflow when that row is the last one possible.
+    for (y, row) in (area.top()..area.bottom()).zip(menu.top..menu.top + visible) {
         for column in 0..layout.columns {
             let index = column * layout.rows + row;
             let Some(candidate) = menu.candidates.get(index) else {
@@ -357,6 +359,18 @@ mod tests {
             top: 0,
             rows: names.len(),
         }
+    }
+
+    #[test]
+    fn a_menu_down_to_the_last_possible_row() {
+        let mut menu = menu(&["alpha", "beta", "gamma"], 2);
+        // The bottom of the area is the last row a `Rect` can reach.
+        let mut buf = Buffer::empty(Rect::new(0, u16::MAX - 3, 10, 3));
+        let area = buf.area();
+        assert_eq!(area.bottom(), u16::MAX);
+        draw_menu(&mut menu, area, &mut buf, &EditorStyles::default());
+        let lines: Vec<String> = buf.lines().iter().map(|l| l.trim_end().into()).collect();
+        assert_eq!(lines, ["alpha", "beta", "gamma"]);
     }
 
     fn draw(menu: &mut Menu, width: u16, height: u16) -> Vec<String> {
