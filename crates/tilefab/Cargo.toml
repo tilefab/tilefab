@@ -21,6 +21,9 @@ default = ["widget", "input"]
 widget = ["dep:tilefab-widget"]
 # The prompt line editor (`LineEditor`).
 input = ["dep:tilefab-input"]
+# Hooks for tests of the terminal layer (`Backend::with_fixed`, `Terminal::backend_mut`…):
+# see the `testing` feature of `tilefab-term`. Enable it in dev-dependencies only.
+testing = ["tilefab-term/testing"]
 
 [dependencies]
 # Public dependency: `LineEditor::handle_key` and `KeyBinding` take crossterm types, so it is
@@ -34,6 +37,8 @@ tilefab-widget = { workspace = true, optional = true }
 
 [dev-dependencies]
 stats_alloc.workspace = true
+# The allocation tests and the `cell_alloc` example draw on a test backend.
+tilefab-term = { workspace = true, features = ["testing"] }
 
 [[example]]
 name = "fullscreen"

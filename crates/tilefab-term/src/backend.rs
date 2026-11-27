@@ -205,6 +205,7 @@ enum Source {
     Terminal,
     /// Fixed values, adjustable with `set_fixed_size` and `set_fixed_cursor`. A `None` cursor
     /// simulates a terminal that does not reply to the position query.
+    #[cfg(any(test, feature = "testing"))]
     Fixed {
         size: Size,
         cursor: Option<Position>,
@@ -242,6 +243,10 @@ impl<W: Write> Backend<W> {
     }
 
     /// Test backend: fixed size and cursor position, no terminal required.
+    ///
+    /// With the `testing` feature only, like the other methods for tests
+    /// (`set_fixed_size`, `set_fixed_cursor`, `fail_cursor_queries`, `writer_mut`).
+    #[cfg(any(test, feature = "testing"))]
     pub fn with_fixed(writer: W, size: Size, cursor: Position) -> Self {
         Self {
             writer,
@@ -254,6 +259,7 @@ impl<W: Write> Backend<W> {
     }
 
     /// Change the simulated size (no effect on a backend connected to the real terminal).
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_fixed_size(&mut self, new_size: Size) {
         if let Source::Fixed { size, .. } = &mut self.source {
             *size = new_size;
@@ -261,6 +267,7 @@ impl<W: Write> Backend<W> {
     }
 
     /// Change the simulated cursor position (no effect on a real terminal).
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_fixed_cursor(&mut self, new_cursor: Position) {
         if let Source::Fixed { cursor, .. } = &mut self.source {
             *cursor = Some(new_cursor);
@@ -269,6 +276,7 @@ impl<W: Write> Backend<W> {
 
     /// Make the simulated cursor query fail, as with a terminal that does not reply in time
     /// (no effect on a real terminal). `set_fixed_cursor` makes it succeed again.
+    #[cfg(any(test, feature = "testing"))]
     pub fn fail_cursor_queries(&mut self) {
         if let Source::Fixed { cursor, .. } = &mut self.source {
             *cursor = None;
@@ -286,6 +294,7 @@ impl<W: Write> Backend<W> {
                 let (width, height) = crossterm::terminal::size()?;
                 Ok(Size::new(width, height))
             }
+            #[cfg(any(test, feature = "testing"))]
             Source::Fixed { size, .. } => Ok(size),
         }
     }
@@ -306,6 +315,7 @@ impl<W: Write> Backend<W> {
                 let (x, y) = crossterm::cursor::position()?;
                 Ok(Position::new(x, y))
             }
+            #[cfg(any(test, feature = "testing"))]
             Source::Fixed { cursor, .. } => cursor.ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::TimedOut,
@@ -320,7 +330,10 @@ impl<W: Write> Backend<W> {
         &self.writer
     }
 
-    /// Write access to the underlying stream.
+    /// Write access to the underlying stream (tests take the emitted bytes here). With the
+    /// `testing` feature only: bytes written there bypass the synchronized update and the
+    /// state the terminal keeps of the screen.
+    #[cfg(any(test, feature = "testing"))]
     pub fn writer_mut(&mut self) -> &mut W {
         &mut self.writer
     }

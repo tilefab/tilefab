@@ -10,6 +10,13 @@ keywords.workspace = true
 categories.workspace = true
 publish.workspace = true
 
+[features]
+# Hooks for tests, off by default: a backend with a fixed size and cursor
+# (`Backend::with_fixed`…), and write access to the stream and the backend (`writer_mut`,
+# `Terminal::backend_mut`), which would bypass what `Terminal` knows of the screen. Enable it
+# in dev-dependencies only.
+testing = []
+
 [dependencies]
 crossterm.workspace = true
 tilefab-core.workspace = true

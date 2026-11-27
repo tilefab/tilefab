@@ -257,7 +257,11 @@ impl<W: Write> Terminal<W> {
         &self.backend
     }
 
-    /// Mutable access to the backend.
+    /// Mutable access to the backend, for tests (`testing` feature): to change the size of a
+    /// test backend, or take the bytes it received. Writing to the terminal through it would
+    /// bypass what `Terminal` knows of the screen (a cursor moved there is not moved back
+    /// by the next `draw`), hence no access outside tests.
+    #[cfg(any(test, feature = "testing"))]
     pub fn backend_mut(&mut self) -> &mut Backend<W> {
         &mut self.backend
     }
