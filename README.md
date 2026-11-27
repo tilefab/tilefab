@@ -22,7 +22,7 @@ beta  [05.123] 🟠 ██████████████████░░
 cargo run
 ```
 
-Installed from a clone (not on crates.io yet): `cargo install --path apps/widget-demo`, then `widget-demo`. To use the library in a project, depend on the [`tilefab`](crates/tilefab/README.md) crate only; the `tilefab-*` crates are its internal layers.
+Installed from a clone (not on crates.io yet): `cargo install --path apps/widget-demo`, then `widget-demo`. To hand a built binary to someone else, use `tools/dist.sh` (`target/dist/release/widget-demo`): a plain release build holds paths under your home directory (the panic locations of the dependencies), and therefore your user name; the script rewrites them, then checks that none is left. To use the library in a project, depend on the [`tilefab`](crates/tilefab/README.md) crate only; the `tilefab-*` crates are its internal layers.
 
 Outside a terminal (stdin or stdout redirected), the tool switches to **degraded mode**: no UI, commands are read line by line from stdin and logs are written to stderr. When stdin ends, it waits for the started tasks to finish.
 
