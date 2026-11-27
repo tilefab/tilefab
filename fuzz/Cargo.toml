@@ -13,6 +13,11 @@ cargo-fuzz = true
 # Its own workspace: not a member of the one in the parent directory.
 [workspace]
 
+# Not inherited from the parent workspace (`[workspace.lints]`), which this crate is not part
+# of: the same rule, no `unsafe` code in the project's sources.
+[lints.rust]
+unsafe_code = "forbid"
+
 [dependencies]
 arbitrary = { version = "1.5.0", features = ["derive"] }
 libfuzzer-sys = "0.4.13"
