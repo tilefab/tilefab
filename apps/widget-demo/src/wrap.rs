@@ -5,10 +5,16 @@
 use tilefab::{Buffer, Line, Rect, Span, grapheme_width};
 use unicode_segmentation::UnicodeSegmentation;
 
+/// Shown instead of a grapheme wider than the terminal (a wide character in a 1-column
+/// terminal): the replacement character, one column wide.
+pub const TOO_WIDE: &str = "\u{FFFD}";
+
 /// Cut `lines` into rows at most `width` columns wide, keeping the style of each span and
 /// line. An empty line stays one empty row; a grapheme wider than `width` (a wide character
-/// in a 1-column terminal) cannot be shown and is dropped. With `width` 0, no row.
+/// in a 1-column terminal) cannot be shown and is replaced with [`TOO_WIDE`], so that the
+/// loss is visible. With `width` 0, no row.
 pub fn wrap(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
+    debug_assert_eq!(grapheme_width(TOO_WIDE), 1);
     let width = usize::from(width);
     if width == 0 {
         return Vec::new();
@@ -25,10 +31,10 @@ pub fn wrap(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
         for span in &line.spans {
             let mut piece = String::new();
             for grapheme in span.content.graphemes(true) {
-                let columns = grapheme_width(grapheme);
-                if columns > width {
-                    continue;
-                }
+                let (grapheme, columns) = match grapheme_width(grapheme) {
+                    columns if columns > width => (TOO_WIDE, 1),
+                    columns => (grapheme, columns),
+                };
                 if used + columns > width {
                     if !piece.is_empty() {
                         row.spans
@@ -87,8 +93,12 @@ mod tests {
     fn wide_characters_are_never_split() {
         let rows = wrap(vec![Line::from("a日本語")], 4);
         assert_eq!(texts(&rows), ["a日", "本語"]);
-        // Too wide for one column: dropped.
-        assert_eq!(texts(&wrap(vec![Line::from("a日b")], 1)), ["a", "b"]);
+        // Too wide for one column: replaced, on its own row like any other grapheme.
+        assert_eq!(
+            texts(&wrap(vec![Line::from("a日b")], 1)),
+            ["a", TOO_WIDE, "b"]
+        );
+        assert_eq!(texts(&wrap(vec![Line::from("日")], 1)), [TOO_WIDE]);
     }
 
     #[test]
