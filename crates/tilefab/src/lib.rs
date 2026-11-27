@@ -31,6 +31,7 @@ pub use tilefab_term::{
 };
 #[cfg(feature = "widget")]
 pub use tilefab_widget::{
-    BuildError, Entry, EntryProblem, LineWidget, LineWidgetBuilder, ListName, TimeField,
-    TokenProblem, UpdateError, ValueShape, WallTime, Warning,
+    BuildError, DEFAULT_TARGET_WIDTH, Entry, EntryProblem, LineWidget, LineWidgetBuilder, ListName,
+    MAX_ENTRIES, MAX_NAMES, MAX_VALUE_DECIMALS, TimeField, TokenProblem, UpdateError, ValueShape,
+    WallTime, Warning,
 };

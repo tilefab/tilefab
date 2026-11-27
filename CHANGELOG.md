@@ -49,6 +49,9 @@ break the API).
 - `tilefab-widget`: `LineWidget::value_shape` returns the shape of `V` (new type
   `ValueShape`: `size`, `unit`, `total`), the arguments `set_value` accepts, without parsing
   the composition again.
+- `tilefab` (feature `widget`) re-exports the constants of `tilefab-widget` too: `MAX_ENTRIES`,
+  `MAX_NAMES`, `MAX_VALUE_DECIMALS` and `DEFAULT_TARGET_WIDTH`, to check lists and values
+  against the limits of `LineWidget` without depending on `tilefab-widget`.
 - `tilefab-input`: `History::file` returns the file the history appends to, `None` when it is
   in memory only.
 
