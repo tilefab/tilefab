@@ -43,15 +43,22 @@ const KEYBOARD_POLL: Duration = Duration::from_millis(50);
 /// The application terminal: buffered output sends each frame in a single `write`.
 type AppTerminal = Terminal<BufWriter<Stdout>>;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     // color-eyre installs its own panic hook (readable report); it must be installed BEFORE
     // the library's hook, which restores the terminal and then delegates to color-eyre.
     color_eyre::install()?;
 
+    // The tasks, the ticker and the signal listener run on the threads of the runtime. The
+    // UI loop is synchronous (terminal writes, the cursor position query after a resize,
+    // the history file): it runs on this thread, outside the runtime, and waits for its
+    // events with `blocking_recv`, so that its blocking calls stall no task. The context is
+    // entered for the whole program, since the loop starts tasks (`tokio::spawn`).
+    let runtime = tokio::runtime::Runtime::new()?;
+    let _context = runtime.enter();
+
     // Without a terminal on both sides, the UI cannot run: use headless mode.
     if !stdin().is_terminal() || !stdout().is_terminal() {
-        return headless::run(None).await;
+        return runtime.block_on(headless::run(None));
     }
 
     // Fatal: a panic in a task or a thread must not leave the UI running.
@@ -80,7 +87,7 @@ async fn main() -> Result<()> {
         Err(error) => {
             drop(guard);
             let reason = format!("cannot start the inline UI ({error}): using headless mode");
-            return headless::run(Some(&reason)).await;
+            return runtime.block_on(headless::run(Some(&reason)));
         }
     };
 
@@ -94,7 +101,7 @@ async fn main() -> Result<()> {
     }
 
     let history = app::history_path(|name| std::env::var_os(name));
-    let result = run(&mut terminal, tx, rx, &dropped_logs, history).await;
+    let result = run(&mut terminal, tx, rx, &dropped_logs, history);
 
     // Cleanup runs even if the loop failed: clear the viewport and move the cursor to
     // its start. The shell resumes just below the logs, which remain in scrollback.
@@ -318,10 +325,13 @@ fn spawn_signal_listener(_tx: Sender<AppEvent>) -> Result<()> {
 /// only once per burst), then apply the new lines above the viewport,
 /// its new height, and its content **in a single frame**.
 ///
+/// Synchronous, on the main thread, outside the runtime (see `main`): `blocking_recv`
+/// panics on a thread of the runtime, but the context must be entered to start the tasks.
+///
 /// The burst that requests quitting is drawn too, before leaving: its lines (the echo of
 /// `quit`, logs received in the same burst) are written above the viewport, which the
 /// cleanup then clears, instead of being dropped.
-async fn run<W: Write>(
+fn run<W: Write>(
     terminal: &mut Terminal<W>,
     tx: Sender<AppEvent>,
     mut rx: Receiver<AppEvent>,
@@ -334,7 +344,7 @@ async fn run<W: Write>(
     }
     terminal.draw(|frame| ui::draw(frame, &mut app))?;
 
-    while let Some(event) = rx.recv().await {
+    while let Some(event) = rx.blocking_recv() {
         app.handle_event(event);
         while let Ok(event) = rx.try_recv() {
             app.handle_event(event);
@@ -559,14 +569,9 @@ mod tests {
         let (tx, rx) = mpsc::channel(16);
         tx.try_send(AppEvent::InputFailed("tty gone".into()))
             .unwrap();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
         // On this thread, so that the log is captured; `run` returns: the application quits.
         let logs = logging::capture(|| {
-            runtime
-                .block_on(run(&mut terminal, tx, rx, &DroppedLogs::default(), None))
-                .unwrap();
+            run(&mut terminal, tx, rx, &DroppedLogs::default(), None).unwrap();
         });
         assert_eq!(logs, ["[ERROR] keyboard input failed (tty gone): quitting"]);
     }
@@ -614,8 +619,8 @@ mod tests {
         assert_eq!(app.dropped_output, 0);
     }
 
-    #[tokio::test]
-    async fn the_burst_that_quits_is_written_before_leaving() {
+    #[test]
+    fn the_burst_that_quits_is_written_before_leaving() {
         use tilefab::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
         let backend = Backend::with_fixed(Vec::new(), Size::new(30, 10), Position::new(0, 0));
@@ -627,17 +632,14 @@ mod tests {
         let (tx, rx) = mpsc::channel(16);
         // One burst: a log line, then `quit` typed and submitted.
         let key = |code| AppEvent::Key(KeyEvent::new(code, KeyModifiers::NONE));
-        tx.send(AppEvent::Log("[INFO] last-log".into()))
-            .await
+        tx.try_send(AppEvent::Log("[INFO] last-log".into()))
             .unwrap();
         for c in "quit".chars() {
-            tx.send(key(KeyCode::Char(c))).await.unwrap();
+            tx.try_send(key(KeyCode::Char(c))).unwrap();
         }
-        tx.send(key(KeyCode::Enter)).await.unwrap();
+        tx.try_send(key(KeyCode::Enter)).unwrap();
 
-        run(&mut terminal, tx, rx, &DroppedLogs::default(), None)
-            .await
-            .unwrap();
+        run(&mut terminal, tx, rx, &DroppedLogs::default(), None).unwrap();
         let written =
             String::from_utf8(std::mem::take(terminal.backend_mut().writer_mut())).unwrap();
         // No space in the searched text: the diff skips unchanged (blank) cells.
