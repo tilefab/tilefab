@@ -1,3 +1,6 @@
-pyte
-pillow
-numpy
+# Python packages of the pty scripts of tools/ (see README.md), pinned to the versions they
+# were checked with; wcwidth comes with pyte. Update them on purpose, then run the scripts.
+numpy==2.0.2
+pillow==11.3.0
+pyte==0.8.2
+wcwidth==0.9.4

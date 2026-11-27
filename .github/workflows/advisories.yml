@@ -1,0 +1,46 @@
+# Weekly check of the RustSec advisories: an advisory published on a dependency already in
+# Cargo.lock (or fuzz/Cargo.lock) would otherwise go unnoticed until the next push. The CI
+# workflow (ci.yml) runs every cargo-deny check on each pull request; this one only reads the
+# advisory database again. A failure is shown in the Actions tab, and GitHub notifies the
+# user who last changed the `cron` line. GitHub disables a schedule after 60 days without
+# activity in the repository: the Actions tab then offers to enable it again.
+#
+# Pinned like ci.yml: actions by commit SHA, cargo-deny by version, `--locked`.
+name: Advisories
+
+on:
+  schedule:
+    # Mondays at 06:17 UTC (not on the hour, when the scheduled runs of GitHub pile up).
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  advisories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # cargo-deny reads the dependency graph through `cargo metadata`.
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install && rustc --version
+
+      # Fixed version: deny.toml is checked against it (update with ci.yml).
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2.90.7
+        with:
+          tool: cargo-deny@0.21.0
+
+      - name: Workspace
+        run: cargo deny --locked check advisories
+
+      - name: Fuzz crate
+        run: cargo deny --locked --manifest-path fuzz/Cargo.toml check advisories
