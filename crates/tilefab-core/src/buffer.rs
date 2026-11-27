@@ -14,6 +14,11 @@
 //! The backend never prints a continuation: the terminal already covered it when printing
 //! the head. Writing over either half of a wide character replaces the other half
 //! with a space, so half an emoji is never left on screen.
+//!
+//! Cells changed in place ([`Buffer::get_mut`], [`Buffer::content_mut`]) can break this
+//! pairing: a wide symbol set with [`Cell::set_symbol`] before an ordinary cell, or a
+//! continuation copied elsewhere. [`Buffer::normalize_wide`] repairs it, and `Terminal`
+//! calls it on every frame: the screen never holds a cell the diff does not know about.
 
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -287,10 +292,11 @@ impl Buffer {
     /// Cells in row-major order, to change in place: a slice, so that their number (tied to
     /// the area) cannot change.
     ///
-    /// The invariant of [`Cell`] is the caller's job here: a wide character written with
-    /// [`Cell::set_symbol`] must be followed by its continuation, which only
+    /// The pairing of wide characters is the caller's job here: a wide character written
+    /// with [`Cell::set_symbol`] must be followed by its continuation, which only
     /// [`Buffer::write_grapheme`] creates; write wide characters with it (or
-    /// [`Buffer::set_string`]) instead.
+    /// [`Buffer::set_string`]) instead. A broken pair is shown as spaces (see
+    /// [`Buffer::normalize_wide`]).
     pub fn content_mut(&mut self) -> &mut [Cell] {
         &mut self.content
     }
@@ -406,7 +412,8 @@ impl Buffer {
         &self.content[self.index_of(x, y)]
     }
 
-    /// Mutable access to the cell at `(x, y)`.
+    /// Mutable access to the cell at `(x, y)`. The same remark as for [`Buffer::content_mut`]
+    /// applies to wide characters.
     ///
     /// # Panics
     ///
@@ -523,10 +530,36 @@ impl Buffer {
         }
     }
 
+    /// Repair the pairing of wide characters (see the module documentation), in place and
+    /// without allocating: a wide head not followed by its continuation (or in the last
+    /// column, where it does not fit) becomes a space, and so does a continuation that does
+    /// not follow a wide head. Styles are kept. A buffer written only through
+    /// [`Buffer::set_string`], [`Buffer::write_grapheme`] or [`Buffer::filled`] is unchanged.
+    pub fn normalize_wide(&mut self) {
+        let width = usize::from(self.area.width);
+        if width == 0 {
+            return;
+        }
+        for row in self.content.chunks_mut(width) {
+            let mut x = 0;
+            while x < row.len() {
+                if row[x].width() == 2 && row.get(x + 1).is_some_and(Cell::is_continuation) {
+                    x += 2;
+                    continue;
+                }
+                if row[x].is_continuation() || row[x].width() == 2 {
+                    row[x].symbol = Symbol::SPACE;
+                }
+                x += 1;
+            }
+        }
+    }
+
     /// Cells to rewrite to go from `previous` to `self`, in screen order.
     ///
     /// Both buffers must cover the same area. Continuations are never
-    /// returned: writing a wide character's head is enough for the terminal.
+    /// returned: writing a wide character's head is enough for the terminal. This needs the
+    /// pairing of wide characters to hold in `self` ([`Buffer::normalize_wide`]).
     ///
     /// There is no need to “redraw neighbors” when replacing a wide character with a
     /// narrow one (or vice versa): a continuation has an empty symbol, so it always differs
@@ -905,6 +938,39 @@ mod tests {
         let mut next = prev.clone();
         next.set_style(Rect::new(1, 0, 1, 1), Style::new().fg(Color::Red));
         assert_eq!(diff_positions(&next, &prev), [(1, 0, "b".to_string())]);
+    }
+
+    #[test]
+    fn normalize_wide_turns_broken_pairs_into_spaces() {
+        let red = Style::new().fg(Color::Red);
+        let mut buf = Buffer::with_lines(["ab😀cd界e"]);
+        let continuation = buf.get(3, 0).clone();
+        // A wide head set in place before an ordinary cell: no continuation.
+        buf.get_mut(0, 0).set_symbol("界").set_style(red);
+        // A continuation copied after an ordinary cell, and one in the first column.
+        *buf.get_mut(5, 0) = continuation.clone();
+        let mut row2 = Buffer::with_lines(["xy"]);
+        *row2.get_mut(0, 0) = continuation;
+        // In the last column (8): a wide head that does not fit.
+        let last = buf.area().width - 1;
+        buf.get_mut(last, 0).set_symbol("界");
+
+        buf.normalize_wide();
+        row2.normalize_wide();
+        let symbols: Vec<&str> = buf.content().iter().map(Cell::symbol).collect();
+        assert_eq!(symbols, [" ", "b", "😀", "", "c", " ", "界", "", " "]);
+        assert_eq!(buf.get(0, 0).fg, Color::Red, "the style is kept");
+        assert_eq!(row2.get(0, 0).symbol(), " ");
+    }
+
+    #[test]
+    fn normalize_wide_keeps_a_buffer_written_by_set_string() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 7, 2));
+        buf.set_string(0, 0, "a😀界b", Style::new());
+        buf.set_string(1, 1, "界x😀", Style::new());
+        let before = buf.clone();
+        buf.normalize_wide();
+        assert_eq!(buf, before);
     }
 
     #[test]

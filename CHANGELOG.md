@@ -93,6 +93,12 @@ break the API).
   (now head and continuation pairs); a `Rect` written literally past `u16::MAX` made
   `Buffer` overflow (the area is clipped like `Rect::new`).
 - `tilefab-term`: the initial placement of an inline viewport overflowed at extreme sizes.
+- `tilefab-term`: a wide character set in place without its continuation
+  (`buffer.get_mut(x, y).set_symbol("界")`), or a continuation copied elsewhere, left the
+  screen different from what the next frames believed: the head covered a cell the diff
+  thought visible, or the diff skipped a cell to erase. `Terminal` now repairs such pairs on
+  every frame and on inserted lines, as spaces, with the new `Buffer::normalize_wide`
+  (`tilefab-core`).
 - `tilefab-term`: a frame interrupted by a write error or a panic left the synchronized update
   open (frozen display) and maybe a scroll region set; the terminal restoration also closes
   both now.

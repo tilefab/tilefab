@@ -321,6 +321,8 @@ impl<W: Write> Terminal<W> {
             );
             return;
         }
+        // Cells changed in place may break the pairing of wide characters.
+        self.insert.normalize_wide();
         // Lines kept pending by a `draw` on a screen with no rows were queued at the width
         // known before it, which that `draw` may have changed: bring them to the current
         // width (truncated or padded, as `commit` would; it also replaces a wide character
@@ -425,6 +427,9 @@ impl<W: Write> Terminal<W> {
         let mut replaced = false;
         render_checked(render, &mut frame, &mut replaced);
         let wanted_cursor = frame.cursor_position;
+        // The diff needs the pairing of wide characters, which cells changed in place may
+        // break (a head without its continuation, a continuation copied elsewhere).
+        self.next.normalize_wide();
 
         let mut changed = false;
         self.backend.draw(
@@ -709,6 +714,8 @@ impl<W: Write> Terminal<W> {
             };
             render(&mut frame);
             wanted_cursor = frame.cursor_position;
+            // As in fullscreen: the diff needs the pairing of wide characters.
+            self.next.normalize_wide();
             self.target.content_mut()[usize::from(lines) * width..]
                 .clone_from_slice(self.next.content());
         }
@@ -890,6 +897,38 @@ mod tests {
         take(&mut term);
         term.draw(render).unwrap();
         assert_eq!(take(&mut term), "");
+    }
+
+    #[test]
+    fn a_wide_symbol_set_in_place_without_its_continuation_is_drawn_as_a_space() {
+        let mut term = terminal(4, 1);
+        term.draw(|f| f.render_widget("abcd", f.area())).unwrap();
+        take(&mut term);
+        // `set_symbol` on the head only: printed as is, it would cover the `b` the diff
+        // believes on screen.
+        term.draw(|f| {
+            f.render_widget("abcd", f.area());
+            f.buffer_mut().get_mut(0, 0).set_symbol("界");
+        })
+        .unwrap();
+        assert_eq!(take(&mut term), "\x1b[?2026h\x1b[1;1H \x1b[?2026l");
+        assert_eq!(term.buffer().get(1, 0).symbol(), "b");
+    }
+
+    #[test]
+    fn a_continuation_copied_elsewhere_is_drawn_as_a_space() {
+        let mut term = terminal(4, 1);
+        term.draw(|f| f.render_widget("界cd", f.area())).unwrap();
+        take(&mut term);
+        // The diff skips a continuation: without the repair, the `d` would stay on screen
+        // while the terminal believes it erased.
+        term.draw(|f| {
+            f.render_widget("界cd", f.area());
+            let continuation = f.buffer_mut().get(1, 0).clone();
+            *f.buffer_mut().get_mut(3, 0) = continuation;
+        })
+        .unwrap();
+        assert_eq!(take(&mut term), "\x1b[?2026h\x1b[1;4H \x1b[?2026l");
     }
 
     #[test]
@@ -1136,6 +1175,17 @@ mod tests {
             !take(&mut term).contains('#'),
             "pending lines written twice"
         );
+    }
+
+    #[test]
+    fn inserted_lines_with_a_broken_wide_pair_are_repaired() {
+        let mut term = inline_terminal(3, 1);
+        term.insert_before(1, |buf| {
+            buf.set_string(0, 0, "abc", Style::default());
+            buf.get_mut(0, 0).set_symbol("界");
+        });
+        assert_eq!(term.pending[0].symbol(), " ");
+        assert_eq!(term.pending[1].symbol(), "b");
     }
 
     #[test]
