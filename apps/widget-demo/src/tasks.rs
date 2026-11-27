@@ -26,12 +26,12 @@ pub const STEPS: &[&str] = &[
 
 /// The step reached at `ratio` (0.0–1.0).
 pub fn step(ratio: f64) -> &'static str {
-    // `ratio` is in 0..=1: the index is below `STEPS.len()` once capped.
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         clippy::cast_precision_loss,
-        reason = "a small index in 0..STEPS.len()"
+        reason = "`ratio` clamped to 0..=1 times the length of a short list: a non-negative \
+                  value at most that length, exact in f64, capped to the last index"
     )]
     let index = (ratio.clamp(0.0, 1.0) * STEPS.len() as f64) as usize;
     STEPS[index.min(STEPS.len() - 1)]
