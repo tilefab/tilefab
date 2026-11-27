@@ -45,5 +45,7 @@ done
 step cargo fmt --check --manifest-path fuzz/Cargo.toml
 step cargo clippy --locked --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings -W clippy::pedantic
 step cargo deny --locked check
+# The fuzz crate has its own Cargo.lock: libfuzzer-sys builds C++ (libFuzzer) in its build.rs.
+step cargo deny --locked --manifest-path fuzz/Cargo.toml check
 
 printf '\nAll checks passed.\n'

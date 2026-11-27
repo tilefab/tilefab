@@ -192,7 +192,10 @@ cargo clippy --release --all-targets --all-features -- -D warnings
 cargo test --profile ci       # release build with overflow checks: the debug-only `panic` command is absent
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 cargo deny check                # advisories, bans, licenses (see deny.toml), sources
+cargo deny --manifest-path fuzz/Cargo.toml check   # the same for the fuzz crate (own Cargo.lock)
 ```
+
+The workflow `.github/workflows/advisories.yml` checks the RustSec advisories again every Monday, for both lock files, so that an advisory published on a dependency already locked does not wait for the next push; it can also be started by hand from the Actions tab.
 
 The Rust toolchain is pinned in `rust-toolchain.toml` (rustc, rustfmt and clippy): local runs and CI use the same version, so a new stable release cannot break CI with new clippy lints on its own. To move to a new version, change `channel` there, run `rustup install` then `tools/ci.sh`, and fix what the new lints report.
 

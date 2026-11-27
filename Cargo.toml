@@ -53,7 +53,15 @@ tokio = "1.54.1"
 # Without the default `attributes` feature: `#[instrument]` is not used, and its
 # proc-macro crate (`tracing-attributes`) would only add build time.
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
-tracing-subscriber = "0.3.23"
+# The default features but `ansi` (nu-ansi-term): the logs are written without colors
+# (`with_ansi(false)`). `tracing-log` stays: mio (under crossterm) logs through `log`, and it
+# sends those records to the subscriber.
+tracing-subscriber = { version = "0.3.23", default-features = false, features = [
+    "fmt",
+    "smallvec",
+    "std",
+    "tracing-log",
+] }
 unicode-segmentation = "1.13"
 unicode-width = "0.2"
 

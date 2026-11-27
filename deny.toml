@@ -1,5 +1,5 @@
 # cargo-deny configuration: `cargo deny check` runs every section below
-# (advisories, bans, licenses, sources).
+# (advisories, bans, licenses, sources), for the workspace and for the fuzz crate.
 
 [graph]
 all-features = true
@@ -31,6 +31,13 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.8
+
+# The fuzz crate (`cargo deny --manifest-path fuzz/Cargo.toml check`, same file): libFuzzer,
+# built by libfuzzer-sys, is part of LLVM and under its former license, NCSA. The workspace
+# run warns that this exception is not encountered, the fuzz run that Zlib is not.
+[[licenses.exceptions]]
+crate = "libfuzzer-sys"
+allow = ["NCSA"]
 
 [licenses.private]
 # The workspace crates are not published (`publish = false`): skip checking their
