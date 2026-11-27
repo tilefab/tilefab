@@ -21,10 +21,12 @@
 //!
 //! A token may end with a *paint*, which changes the style of that component only: a `.`, then
 //! at least one of, in this order, a foreground color, `:` and a background color, `*` for
-//! bold (`B1.R`, `N.W+:B*`, `P.*`, `L.:B`; `S.` and `S.*R` are refused). Colors: `K` black,
-//! `R` red, `G` green, `Y` yellow, `B` blue, `M` magenta, `C` cyan, `W` white, `+` for the
-//! bright version. `I` and `V` take a second part after `/`, with the same rule, for their
-//! todo cells and their units (`I.C/K+`, `V5U/.W/K+`); other components take only one.
+//! bold (`B1.R`, `N.W+:B*`, `P.*`, `L.:B`; `S.` and `S.*R` are refused). Colors: the eight
+//! ANSI colors, `K` black, `R` red, `G` green, `Y` yellow, `B` blue, `M` magenta, `C` cyan,
+//! `W` white (ANSI color 7, a light gray: [`Color::Gray`]), `+` for the bright version (`K+`
+//! dark gray, `W+` bright white: [`Color::White`]). `I` and `V` take a second part after `/`,
+//! with the same rule, for their todo cells and their units (`I.C/K+`, `V5U/.W/K+`); other
+//! components take only one.
 //!
 //! The look of `I` picks its two characters: `B` (bar) `█`/`░`, `L` (line) `━`/`─`, `D` (dots)
 //! `●`/`·`, `S` (squares) `■`/`□`, `O` (circles) `●`/`○`, `R` (diamonds) `◆`/`◇`, `G`
@@ -228,7 +230,8 @@ impl fmt::Display for Token {
     }
 }
 
-/// The colors of a paint: letter, normal color, bright color (with `+`).
+/// The colors of a paint: letter, normal color, bright color (with `+`). The letters follow
+/// the ANSI names: `W`, ANSI "white", is color 7, a light gray (`Color::Gray`).
 const COLORS: [(char, Color, Color); 8] = [
     ('K', Color::Black, Color::DarkGray),
     ('R', Color::Red, Color::LightRed),

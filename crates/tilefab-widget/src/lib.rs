@@ -24,9 +24,11 @@
 //! A token may end with a *paint*, laid over the styles given to the builder for that
 //! component only: `.`, then at least one of, in this order, a foreground color, `:` and a
 //! background color, `*` for bold. Colors: `K` black, `R` red, `G` green, `Y` yellow, `B` blue,
-//! `M` magenta, `C` cyan, `W` white, followed by `+` for the bright version. `I` and `V` take
-//! a second part after `/`, with the same rule, for their todo cells and their units. For instance `B1.K+` (a gray barrier),
-//! `N.W+:B*` (a bright white bold name on blue), `I20L.G/K+` (a green line on a gray track).
+//! `M` magenta, `C` cyan, `W` white (ANSI color 7, a light gray), followed by `+` for the bright
+//! version (`K+` dark gray, `W+` bright white). `I` and `V` take a second part after `/`, with
+//! the same rule, for their todo cells and their units. For instance `B1.K+` (a dark gray
+//! barrier), `N.W+:B*` (a bright white bold name on blue), `I20L.G/K+` (a green line on a dark
+//! gray track).
 //! The library has no default colors: they come from the entries and the `*_style` methods.
 //! The dynamic components are changed by the setters (`set_symbol`, `set_keyword`,
 //! `set_name`, `set_progress`, `set_value`, `set_time`, `set_log`); the repeatable ones are

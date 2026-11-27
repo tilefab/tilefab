@@ -589,11 +589,14 @@ fn the_two_parts_of_the_illustration_and_the_value() {
         .build()
         .unwrap();
     value.set_value(1.0, Some(0), Some((2.0, Some(0)))).unwrap();
-    // `1M/2M`: numbers and `/` white, units bold.
+    // `1M/2M`: numbers and `/` in `W`, light gray (ANSI white), units bold.
     let buf = draw(&value, 5);
-    let white = (Color::Gray, Color::Reset, false);
+    let light_gray = (Color::Gray, Color::Reset, false);
     let unit = (Color::Reset, Color::Reset, true);
-    assert_eq!(cells(&buf, 0, 5), [white, unit, white, white, unit]);
+    assert_eq!(
+        cells(&buf, 0, 5),
+        [light_gray, unit, light_gray, light_gray, unit]
+    );
 }
 
 #[test]
