@@ -162,7 +162,7 @@ A single UI loop owns the `Terminal`; nothing else writes to stdout.
 
 `tilefab-widget` and `tilefab-input` do no input/output, so they are tested without a terminal, and neither depends on `tilefab-term`. `cargo test`, `cargo clippy`… at the root apply to the whole workspace.
 
-Rendering flow: `Frame` (current buffer) → diff with the previous buffer → `Backend` (`MoveTo` only on jumps, minimal style changes) → stdout, all inside a **single** synchronized-update block (`ESC[?2026h` … `ESC[?2026l`).
+Rendering flow: `Frame` (current buffer) → diff with the previous buffer → `Backend` (`MoveTo` only on jumps, minimal style changes) → stdout, all inside a **single** synchronized-update block (`ESC[?2026h` … `ESC[?2026l`). A frame that changes nothing writes nothing, not even an empty block: an idle application sends no bytes.
 
 Notable choices:
 

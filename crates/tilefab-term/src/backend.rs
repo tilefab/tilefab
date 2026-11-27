@@ -21,7 +21,9 @@
 //!
 //! [`Backend::begin_sync`] and [`Backend::end_sync`] surround a group of writes that the
 //! terminal displays **all at once** (private mode 2026). Terminals that do not support it
-//! ignore the sequence. The caller (`Terminal`) places them: one block per frame.
+//! ignore the sequence. The caller (`Terminal`) places them: one block per frame. The
+//! opening is written with the first write of the group: a group without writes (a frame
+//! that changes nothing) writes nothing at all.
 //!
 //! # Buffered output
 //!
@@ -214,8 +216,19 @@ enum Source {
 pub struct Backend<W: Write> {
     writer: W,
     source: Source,
-    /// A synchronized update was begun and not ended yet (see [`Backend::abort_sync`]).
-    in_sync: bool,
+    /// Where the synchronized update stands (see [`Backend::begin_sync`]).
+    sync: SyncState,
+}
+
+/// The state of the synchronized update of a [`Backend`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncState {
+    /// No update begun.
+    Off,
+    /// Begun, but nothing written yet: the opening waits for the first write.
+    Requested,
+    /// Opening written, closing not yet.
+    Open,
 }
 
 impl<W: Write> Backend<W> {
@@ -224,7 +237,7 @@ impl<W: Write> Backend<W> {
         Self {
             writer,
             source: Source::Terminal,
-            in_sync: false,
+            sync: SyncState::Off,
         }
     }
 
@@ -236,7 +249,7 @@ impl<W: Write> Backend<W> {
                 size,
                 cursor: Some(cursor),
             },
-            in_sync: false,
+            sync: SyncState::Off,
         }
     }
 
@@ -337,17 +350,17 @@ impl<W: Write> Backend<W> {
             }
             // Move only if the cell is not immediately after the previous one.
             if next != Some((x, y)) {
-                queue!(self.writer, MoveTo(x, y))?;
+                queue!(self.out()?, MoveTo(x, y))?;
             }
             self.apply_style(&mut pen, cell)?;
             // Never a raw control character: it could be an escape sequence.
-            queue!(self.writer, Print(cell.symbol()))?;
+            queue!(self.out()?, Print(cell.symbol()))?;
             // The cursor advances by the symbol's width (2 for a wide character).
             next = Some((x.saturating_add(saturating_u16(cell.width().max(1))), y));
         }
 
         if pen != Pen::DEFAULT {
-            queue!(self.writer, SetGraphicRendition(SGR_RESET))?;
+            queue!(self.out()?, SetGraphicRendition(SGR_RESET))?;
         }
         Ok(())
     }
@@ -357,23 +370,23 @@ impl<W: Write> Backend<W> {
         if cell.modifier != pen.modifier {
             // A modifier needs removing: reset fully, then start from the default style.
             if !(pen.modifier - cell.modifier).is_empty() {
-                queue!(self.writer, SetGraphicRendition(SGR_RESET))?;
+                queue!(self.out()?, SetGraphicRendition(SGR_RESET))?;
                 *pen = Pen::DEFAULT;
             }
             // Only modifiers to add remain.
             for (flag, code) in ATTRIBUTES {
                 if cell.modifier.contains(flag) && !pen.modifier.contains(flag) {
-                    queue!(self.writer, SetGraphicRendition(code))?;
+                    queue!(self.out()?, SetGraphicRendition(code))?;
                 }
             }
             pen.modifier = cell.modifier;
         }
         if cell.fg != pen.fg {
-            queue!(self.writer, SetForegroundColor(to_crossterm(cell.fg)))?;
+            queue!(self.out()?, SetForegroundColor(to_crossterm(cell.fg)))?;
             pen.fg = cell.fg;
         }
         if cell.bg != pen.bg {
-            queue!(self.writer, SetBackgroundColor(to_crossterm(cell.bg)))?;
+            queue!(self.out()?, SetBackgroundColor(to_crossterm(cell.bg)))?;
             pen.bg = cell.bg;
         }
         Ok(())
@@ -381,13 +394,18 @@ impl<W: Write> Backend<W> {
 
     /// Begin a synchronized update: the terminal keeps the display unchanged until `end_sync`.
     ///
+    /// The opening (`ESC[?2026h`) is written just before the first write that follows, and
+    /// `end_sync` closes only an update that was opened: without writes in between, nothing
+    /// is written (an idle application that draws unchanged frames sends no bytes).
+    ///
     /// # Errors
     ///
-    /// Returns an error if writing to the underlying stream fails.
+    /// Never fails: the signature is that of the other writes.
     pub fn begin_sync(&mut self) -> io::Result<()> {
-        // Set first: even a partly written opening must be closed.
-        self.in_sync = true;
-        queue!(self.writer, BeginSynchronizedUpdate)
+        if self.sync == SyncState::Off {
+            self.sync = SyncState::Requested;
+        }
+        Ok(())
     }
 
     /// End the synchronized update: the terminal displays everything at once.
@@ -396,9 +414,21 @@ impl<W: Write> Backend<W> {
     ///
     /// Returns an error if writing to the underlying stream fails.
     pub fn end_sync(&mut self) -> io::Result<()> {
-        queue!(self.writer, EndSynchronizedUpdate)?;
-        self.in_sync = false;
+        if self.sync == SyncState::Open {
+            queue!(self.writer, EndSynchronizedUpdate)?;
+        }
+        self.sync = SyncState::Off;
         Ok(())
+    }
+
+    /// The writer, after the opening of a synchronized update begun and not written yet.
+    fn out(&mut self) -> io::Result<&mut W> {
+        if self.sync == SyncState::Requested {
+            // Set first: even a partly written opening must be closed.
+            self.sync = SyncState::Open;
+            queue!(self.writer, BeginSynchronizedUpdate)?;
+        }
+        Ok(&mut self.writer)
     }
 
     /// Close a frame interrupted by an error or a panic, on a best-effort basis (errors are
@@ -407,7 +437,7 @@ impl<W: Write> Backend<W> {
     /// frozen. `ESC[r` moves the cursor to the top-left corner: it is saved before (`ESC 7`)
     /// and restored after (`ESC 8`). Nothing is written when no update is open.
     pub fn abort_sync(&mut self) {
-        if std::mem::replace(&mut self.in_sync, false) {
+        if std::mem::replace(&mut self.sync, SyncState::Off) == SyncState::Open {
             let _ = queue!(
                 self.writer,
                 SavePosition,
@@ -425,7 +455,7 @@ impl<W: Write> Backend<W> {
     ///
     /// Returns an error if writing to the underlying stream fails.
     pub fn hide_cursor(&mut self) -> io::Result<()> {
-        queue!(self.writer, Hide)
+        queue!(self.out()?, Hide)
     }
 
     /// Show the terminal cursor.
@@ -434,7 +464,7 @@ impl<W: Write> Backend<W> {
     ///
     /// Returns an error if writing to the underlying stream fails.
     pub fn show_cursor(&mut self) -> io::Result<()> {
-        queue!(self.writer, Show)
+        queue!(self.out()?, Show)
     }
 
     /// Position the cursor (column `x`, row `y`, zero-based screen coordinates).
@@ -443,7 +473,7 @@ impl<W: Write> Backend<W> {
     ///
     /// Returns an error if writing to the underlying stream fails.
     pub fn set_cursor_position(&mut self, x: u16, y: u16) -> io::Result<()> {
-        queue!(self.writer, MoveTo(x, y))
+        queue!(self.out()?, MoveTo(x, y))
     }
 
     /// Clear part of the screen. Does not move the cursor.
@@ -457,7 +487,7 @@ impl<W: Write> Backend<W> {
             ClearType::AfterCursor => CtClearType::FromCursorDown,
             ClearType::CurrentLine => CtClearType::CurrentLine,
         };
-        queue!(self.writer, Clear(what))
+        queue!(self.out()?, Clear(what))
     }
 
     /// Move the cursor down `n` rows; at the bottom of the screen, content scrolls upward.
@@ -470,7 +500,7 @@ impl<W: Write> Backend<W> {
     /// Returns an error if writing to the underlying stream fails.
     pub fn append_lines(&mut self, n: u16) -> io::Result<()> {
         for _ in 0..n {
-            self.writer.write_all(b"\n")?;
+            self.out()?.write_all(b"\n")?;
         }
         Ok(())
     }
@@ -492,7 +522,7 @@ impl<W: Write> Backend<W> {
             return Ok(());
         }
         queue!(
-            self.writer,
+            self.out()?,
             SetScrollRegion { top, bottom },
             ScrollUp(n),
             ResetScrollRegion
@@ -510,7 +540,7 @@ impl<W: Write> Backend<W> {
             return Ok(());
         }
         queue!(
-            self.writer,
+            self.out()?,
             SetScrollRegion { top, bottom },
             ScrollDown(n),
             ResetScrollRegion
@@ -555,13 +585,25 @@ mod tests {
     }
 
     #[test]
-    fn empty_frame_is_only_the_sync_frame() {
+    fn an_empty_synchronized_update_writes_nothing() {
         let mut b = backend();
         b.begin_sync().unwrap();
         b.draw(std::iter::empty()).unwrap();
         b.end_sync().unwrap();
-        // Private mode 2026: `ESC[?2026h` opens, `ESC[?2026l` closes.
-        assert_eq!(out(&b), "\x1b[?2026h\x1b[?2026l");
+        assert_eq!(out(&b), "");
+        b.abort_sync();
+        assert_eq!(out(&b), "", "nothing to close");
+    }
+
+    #[test]
+    fn the_opening_comes_with_the_first_write() {
+        let mut b = backend();
+        b.begin_sync().unwrap();
+        b.set_cursor_position(0, 0).unwrap();
+        b.append_lines(1).unwrap();
+        b.end_sync().unwrap();
+        // Private mode 2026: `ESC[?2026h` opens, `ESC[?2026l` closes; one of each.
+        assert_eq!(out(&b), "\x1b[?2026h\x1b[1;1H\n\x1b[?2026l");
     }
 
     #[test]

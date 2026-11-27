@@ -67,7 +67,8 @@ impl Rig {
 
     /// A full commit: height = `view.len()`, `logs` inserted above, `view` drawn
     /// (the last line is the prompt, where the cursor is placed). Return statistics for the
-    /// resulting synchronized block: there must be **exactly one**.
+    /// resulting synchronized block: there must be **exactly one**, or none at all when the
+    /// commit writes nothing (empty statistics then).
     fn commit(&mut self, logs: &[&str], view: &[&str]) -> BlockStats {
         let before = self.sim.blocks.len();
         self.term.set_height(saturating_u16(view.len()));
@@ -91,6 +92,10 @@ impl Rig {
             })
             .unwrap();
         self.pump();
+        if self.last.is_empty() {
+            assert_eq!(self.sim.blocks.len(), before);
+            return BlockStats::default();
+        }
         assert_eq!(
             self.sim.blocks.len(),
             before + 1,
@@ -297,14 +302,14 @@ fn lines_with_room_below_push_the_viewport_down() {
 }
 
 #[test]
-fn nothing_changed_emits_only_the_sync_frame() {
+fn nothing_changed_emits_nothing() {
     let mut rig = at_bottom(ScrollMode::Region);
     let stats = rig.commit(&[], &["alpha 50%", "beta 20%", "gamma 5%", ">"]);
     assert_eq!(stats, BlockStats::default());
 }
 
 #[test]
-fn an_unchanged_frame_writes_nothing_but_the_sync_markers() {
+fn an_unchanged_frame_writes_nothing() {
     // Viewport at the bottom (row 6) and at the top (row 0, too high for a scroll region),
     // in both modes: no scrolling, so nothing to clear or rewrite, and no cursor move.
     let view = ["alpha 50%", "beta 20%", "gamma 5%", ">"];
@@ -315,7 +320,7 @@ fn an_unchanged_frame_writes_nothing_but_the_sync_markers() {
             rig.commit(&[], &view);
             assert_eq!(
                 String::from_utf8_lossy(&rig.last),
-                "\x1b[?2026h\x1b[?2026l",
+                "",
                 "mode {mode:?}, prefill {prefill}"
             );
         }
