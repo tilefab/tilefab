@@ -300,15 +300,39 @@ impl LineWidget {
     }
 }
 
+/// The rank of a dynamic `S` or `N` in the composition: `Rank(0)` for the first one, in
+/// composition order (ranks count the dynamic components of that letter only).
+///
+/// A type of its own, so that it cannot be swapped with the index of the entry to show:
+///
+/// ```
+/// # use tilefab_widget::{LineWidget, Rank, UpdateError};
+/// # fn show(widget: &mut LineWidget) -> Result<(), UpdateError> {
+/// // The name of index 1 in the first `N`.
+/// widget.set_name(Rank(0), 1)
+/// # }
+/// ```
+///
+/// The arguments swapped do not compile:
+///
+/// ```compile_fail
+/// # use tilefab_widget::{LineWidget, Rank, UpdateError};
+/// # fn show(widget: &mut LineWidget) -> Result<(), UpdateError> {
+/// widget.set_name(1, Rank(0))
+/// # }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct Rank(pub usize);
+
 /// The setters: each one checks its arguments first and changes nothing on error.
 impl LineWidget {
-    /// Show entry `index` of the `symbols` list in the dynamic `S` of rank `rank` (ranks count
-    /// the dynamic `S` only, from 0, in composition order).
+    /// Show entry `index` of the `symbols` list in the dynamic `S` of rank `rank` (see
+    /// [`Rank`]).
     ///
     /// # Errors
     ///
     /// [`UpdateError::RankOutOfRange`] or [`UpdateError::IndexOutOfList`].
-    pub fn set_symbol(&mut self, rank: usize, index: usize) -> Result<(), UpdateError> {
+    pub fn set_symbol(&mut self, rank: Rank, index: usize) -> Result<(), UpdateError> {
         let index = self.checked_index(ListName::Symbols, index)?;
         let slot = rank_slot(&mut self.state.symbols, 'S', rank)?;
         *slot = index;
@@ -333,14 +357,14 @@ impl LineWidget {
         Ok(())
     }
 
-    /// Show entry `index` of the `names` list in the dynamic `N` of rank `rank` (ranks count
-    /// the dynamic `N` only). The width of the name changes with it: the whole line is laid out
-    /// again at the next draw.
+    /// Show entry `index` of the `names` list in the dynamic `N` of rank `rank` (see
+    /// [`Rank`]). The width of the name changes with it: the whole line is laid out again at
+    /// the next draw.
     ///
     /// # Errors
     ///
     /// [`UpdateError::RankOutOfRange`] or [`UpdateError::IndexOutOfList`].
-    pub fn set_name(&mut self, rank: usize, index: usize) -> Result<(), UpdateError> {
+    pub fn set_name(&mut self, rank: Rank, index: usize) -> Result<(), UpdateError> {
         let index = self.checked_index(ListName::Names, index)?;
         let slot = rank_slot(&mut self.state.names, 'N', rank)?;
         *slot = index;
@@ -706,7 +730,7 @@ fn fitted(
 }
 
 /// The entry of rank `rank` in `slots`, the dynamic `component`s.
-fn rank_slot(slots: &mut [u8], component: char, rank: usize) -> Result<&mut u8, UpdateError> {
+fn rank_slot(slots: &mut [u8], component: char, Rank(rank): Rank) -> Result<&mut u8, UpdateError> {
     let count = slots.len();
     slots.get_mut(rank).ok_or(UpdateError::RankOutOfRange {
         component,
@@ -844,10 +868,10 @@ mod tests {
     #[test]
     fn symbols_by_rank() {
         let mut widget = full();
-        widget.set_symbol(1, 2).unwrap();
+        widget.set_symbol(Rank(1), 2).unwrap();
         assert_eq!(widget.state.symbols, [0, 2]);
         assert_eq!(
-            widget.set_symbol(2, 0),
+            widget.set_symbol(Rank(2), 0),
             Err(UpdateError::RankOutOfRange {
                 component: 'S',
                 rank: 2,
@@ -855,7 +879,7 @@ mod tests {
             })
         );
         assert_eq!(
-            widget.set_symbol(0, 3),
+            widget.set_symbol(Rank(0), 3),
             Err(UpdateError::IndexOutOfList {
                 list: ListName::Symbols,
                 index: 3,
@@ -892,14 +916,14 @@ mod tests {
     #[test]
     fn names_by_rank() {
         let mut widget = full();
-        widget.set_name(1, 2).unwrap();
+        widget.set_name(Rank(1), 2).unwrap();
         assert_eq!(widget.state.names, [0, 2]);
         assert!(matches!(
-            widget.set_name(2, 0),
+            widget.set_name(Rank(2), 0),
             Err(UpdateError::RankOutOfRange { component: 'N', .. })
         ));
         assert!(matches!(
-            widget.set_name(0, 3),
+            widget.set_name(Rank(0), 3),
             Err(UpdateError::IndexOutOfList {
                 list: ListName::Names,
                 ..

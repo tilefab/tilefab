@@ -47,7 +47,7 @@
 //!
 //! ```
 //! use tilefab_core::{Buffer, Color, Rect, Style, Widget};
-//! use tilefab_widget::{Entry, LineWidget, WallTime};
+//! use tilefab_widget::{Entry, LineWidget, Rank, WallTime};
 //!
 //! let mut widget = LineWidget::builder("B0 T2 B1 B2 S B2 L")
 //!     .barriers([Entry::new("["), Entry::new("]"), Entry::new(" "), Entry::new("-")])
@@ -69,7 +69,7 @@
 //! assert_eq!(buf.lines()[0].trim_end(), "[05.123] 🔴 Downloading crate");
 //!
 //! // Narrower: the log is truncated, then dropped; the barrier before it stays.
-//! widget.set_symbol(0, 1)?;
+//! widget.set_symbol(Rank(0), 1)?;
 //! let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
 //! (&widget).render(buf.area(), &mut buf);
 //! assert_eq!(buf.lines()[0], "[05.123] 🟢 Downloa…");
@@ -105,7 +105,7 @@ pub use builder::{
 };
 pub use entry::{Entry, EntryProblem};
 pub use time::{TimeField, WallTime};
-pub use widget::{LineWidget, UpdateError, ValueShape};
+pub use widget::{LineWidget, Rank, UpdateError, ValueShape};
 
 // The widget can move to another thread or task, and be shared between threads.
 const _: () = {

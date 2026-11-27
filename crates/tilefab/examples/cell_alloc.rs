@@ -28,8 +28,8 @@ use std::time::{Duration, Instant};
 
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 use tilefab::{
-    Backend, Buffer, Entry, LineWidget, Position, Rect, Size, Style, Terminal, TerminalOptions,
-    Viewport, WallTime, Widget,
+    Backend, Buffer, Entry, LineWidget, Position, Rank, Rect, Size, Style, Terminal,
+    TerminalOptions, Viewport, WallTime, Widget,
 };
 
 // The system allocator, counting allocations: `stats_alloc` holds the `unsafe` code,
@@ -106,7 +106,7 @@ fn animate(widget: &mut LineWidget, i: u32, offset: u32) {
     widget.set_time(time).expect("valid time");
     widget.set_progress(f64::from(step)).expect("finite");
     widget
-        .set_symbol(0, usize::try_from(step / 34).unwrap_or(0))
+        .set_symbol(Rank(0), usize::try_from(step / 34).unwrap_or(0))
         .expect("valid symbol");
     widget.set_log(STEPS[usize::try_from(step / 25).unwrap_or(0)]);
 }

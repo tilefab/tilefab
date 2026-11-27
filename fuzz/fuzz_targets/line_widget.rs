@@ -11,7 +11,7 @@ use arbitrary::Arbitrary;
 use common::{Piece, check_buffer, text};
 use libfuzzer_sys::fuzz_target;
 use tilefab_core::{Alignment, Buffer, Cell, Rect, Widget};
-use tilefab_widget::{Entry, LineWidget, WallTime};
+use tilefab_widget::{Entry, LineWidget, Rank, WallTime};
 
 /// Tokens of the grammar, valid or nearly so, that random bytes would rarely produce.
 const TOKENS: &[&str] = &[
@@ -81,9 +81,11 @@ fn composition(input: &Input) -> String {
 fn call(widget: &mut LineWidget, call: &Call) {
     // Errors are expected: only panics are bugs.
     let _ = match call {
-        Call::Symbol(rank, index) => widget.set_symbol(usize::from(*rank), usize::from(*index)),
+        Call::Symbol(rank, index) => {
+            widget.set_symbol(Rank(usize::from(*rank)), usize::from(*index))
+        }
         Call::Keyword(index) => widget.set_keyword(usize::from(*index)),
-        Call::Name(rank, index) => widget.set_name(usize::from(*rank), usize::from(*index)),
+        Call::Name(rank, index) => widget.set_name(Rank(usize::from(*rank)), usize::from(*index)),
         Call::Progress(value) => widget.set_progress(*value),
         Call::Value(value, unit, total) => widget.set_value(
             *value,

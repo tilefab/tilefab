@@ -13,7 +13,7 @@ use std::alloc::System;
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 use tilefab::{
     Backend, Candidate, Color, Completer, Completions, Constraint, EditorCommand, EditorConfig,
-    Entry, History, Layout, Line, LineEditor, LineWidget, Position, Size, Style, Terminal,
+    Entry, History, Layout, Line, LineEditor, LineWidget, Position, Rank, Size, Style, Terminal,
     TerminalOptions, Viewport, WallTime,
 };
 
@@ -98,9 +98,9 @@ fn drawing_line_widgets_in_frames_allocates_nothing() {
             let step = (i + offset) % 100;
             let index = usize::from(step % 2);
             task.set_progress(f64::from(step)).unwrap();
-            task.set_symbol(0, index).unwrap();
+            task.set_symbol(Rank(0), index).unwrap();
             task.set_keyword(index).unwrap();
-            task.set_name(0, index).unwrap();
+            task.set_name(Rank(0), index).unwrap();
             task.set_value(f64::from(step) * 1.5, Some(index), Some((150.0, Some(1))))
                 .unwrap();
             task.set_time(WallTime {
