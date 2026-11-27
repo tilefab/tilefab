@@ -245,7 +245,7 @@ cargo +nightly fuzz run line_widget -- -max_total_time=60   # or buffer_set_stri
 cargo +nightly fuzz run line_widget artifacts/line_widget/crash-…   # replay a crash
 ```
 
-The corpus and the crashes stay local (`fuzz/corpus/`, `fuzz/artifacts/`). `tools/ci.sh` only checks that the targets build and pass clippy.
+The corpus and the crashes stay local (`fuzz/corpus/`, `fuzz/artifacts/`). `tools/ci.sh` only checks that the targets build and pass clippy; the workflow `.github/workflows/fuzz.yml` runs each target for 60 seconds every Monday (or by hand from the Actions tab), and keeps the input of a crash as an artifact of the run.
 
 The frame commit tests (`crates/tilefab-term/src/inline_tests.rs`) replay the emitted bytes in a small terminal simulator (`crates/tilefab-term/src/sim.rs`): they cover every case of the placement rule, both scroll modes, lines inserted in batches and resizing.
 
