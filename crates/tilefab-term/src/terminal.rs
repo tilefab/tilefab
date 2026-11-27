@@ -74,6 +74,36 @@ use tilefab_core::widget::{StatefulWidget, Widget};
 /// many rows.
 pub const MAX_PENDING_LINES: usize = 1_000;
 
+/// Most columns a `Terminal` draws: a wider screen is drawn in its first `MAX_SCREEN_WIDTH`
+/// columns, the others are left as they are. The size of the screen comes from the terminal
+/// (`TIOCGWINSZ`), which anyone can set to 65535 × 65535: the buffers, 40 bytes per cell,
+/// would not fit in memory. The limits are above the largest real terminals (an 8K screen
+/// with a tiny font has about 1900 columns and 540 rows).
+pub const MAX_SCREEN_WIDTH: u16 = 2048;
+
+/// Most rows a `Terminal` draws: in fullscreen, a taller screen is drawn in its first
+/// `MAX_SCREEN_HEIGHT` rows; an inline viewport is at most that tall (see
+/// [`MAX_SCREEN_WIDTH`]).
+pub const MAX_SCREEN_HEIGHT: u16 = 1024;
+
+/// The screen as `Terminal` uses it: the width capped to [`MAX_SCREEN_WIDTH`], and in
+/// fullscreen the height to [`MAX_SCREEN_HEIGHT`]. An inline viewport keeps the real height,
+/// which its placement needs (it is capped itself, see [`max_viewport_height`]).
+fn capped(size: Size, viewport: Viewport) -> Size {
+    let height = if matches!(viewport, Viewport::Fullscreen) {
+        size.height.min(MAX_SCREEN_HEIGHT)
+    } else {
+        size.height
+    };
+    Size::new(size.width.min(MAX_SCREEN_WIDTH), height)
+}
+
+/// The tallest inline viewport on `screen`: its height, capped to [`MAX_SCREEN_HEIGHT`], and
+/// at least 1.
+fn max_viewport_height(screen: Size) -> u16 {
+    screen.height.clamp(1, MAX_SCREEN_HEIGHT)
+}
+
 /// View of the current buffer passed to the rendering function of `Terminal::draw`.
 #[derive(Debug)]
 pub struct Frame<'a> {
@@ -183,7 +213,7 @@ impl<W: Write> Terminal<W> {
     ///
     /// Returns an error if the screen size cannot be read, the cursor position query fails (inline mode), or writing to the terminal fails.
     pub fn with_options(mut backend: Backend<W>, options: TerminalOptions) -> io::Result<Self> {
-        let screen = backend.size()?;
+        let screen = capped(backend.size()?, options.viewport);
         match options.viewport {
             Viewport::Fullscreen => {
                 let area = Rect::new(0, 0, screen.width, screen.height);
@@ -209,7 +239,7 @@ impl<W: Write> Terminal<W> {
             }
             Viewport::Inline(height) => {
                 let cursor = backend.cursor_position()?;
-                let height = height.clamp(1, screen.height.max(1));
+                let height = height.clamp(1, max_viewport_height(screen));
                 let (append, top) = initial_placement(screen, cursor, height);
 
                 let reserve = |backend: &mut Backend<W>| -> io::Result<()> {
@@ -284,7 +314,7 @@ impl<W: Write> Terminal<W> {
     /// inserted lines and the redraw. No effect in fullscreen mode.
     pub fn set_height(&mut self, height: u16) {
         if matches!(self.viewport, Viewport::Inline(_)) {
-            self.wanted_height = height.clamp(1, self.screen.height.max(1));
+            self.wanted_height = height.clamp(1, max_viewport_height(self.screen));
         }
     }
 
@@ -409,7 +439,7 @@ impl<W: Write> Terminal<W> {
 
     /// Return whether `render` replaced the frame buffer (see [`replaced_frame_result`]).
     fn draw_fullscreen(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> io::Result<bool> {
-        let size = self.backend.size()?;
+        let size = capped(self.backend.size()?, self.viewport);
         // Start the synchronized block: everything that follows will appear at once.
         self.backend.begin_sync()?;
         if size != self.screen || self.damaged {
@@ -459,7 +489,7 @@ impl<W: Write> Terminal<W> {
     fn draw_inline(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> io::Result<bool> {
         // Query the terminal (size, cursor position) **before** opening the synchronized
         // block: the reply arrives on input, not in our output stream.
-        let size = self.backend.size()?;
+        let size = capped(self.backend.size()?, self.viewport);
         // A screen with no rows (a pty whose height is set to 0) has no room for the
         // viewport: write nothing at all. No cursor query, and above all no erase: the
         // terminal may still display its rows, logs included. Only the size is noted (for
@@ -484,7 +514,9 @@ impl<W: Write> Terminal<W> {
         }
 
         let screen_height = self.screen.height;
-        let new_height = self.wanted_height.clamp(1, screen_height.max(1));
+        let new_height = self
+            .wanted_height
+            .clamp(1, max_viewport_height(self.screen));
         // How many inserted lines fit on screen with the viewport: apply larger batches
         // in chunks.
         let per_chunk = usize::from(screen_height.saturating_sub(new_height));
@@ -594,7 +626,7 @@ impl<W: Write> Terminal<W> {
             .saturating_sub(self.area.y)
             .min(self.area.height.saturating_sub(1));
         // Never a screen with no rows here (see `draw_inline`).
-        let height = self.wanted_height.clamp(1, size.height.max(1));
+        let height = self.wanted_height.clamp(1, max_viewport_height(size));
         self.wanted_height = height;
         let top = cursor
             .y
@@ -1507,8 +1539,49 @@ mod tests {
                 area.bottom() <= size.height,
                 "{size:?} {cursor:?} {height}: {area:?}"
             );
-            assert_eq!(area.height, height.min(size.height), "{size:?} {cursor:?}");
+            // A viewport is at most `MAX_SCREEN_HEIGHT` rows tall.
+            let expected = height.min(size.height).min(MAX_SCREEN_HEIGHT);
+            assert_eq!(area.height, expected, "{size:?} {cursor:?}");
         }
+    }
+
+    #[test]
+    fn a_huge_screen_is_drawn_in_its_capped_part() {
+        let huge = Size::new(u16::MAX, u16::MAX);
+        // Fullscreen: both dimensions capped, from the start and after a resize.
+        let backend = Backend::with_fixed(Vec::new(), huge, Position::new(0, 0));
+        let mut term = Terminal::new(backend).unwrap();
+        assert_eq!(
+            term.area(),
+            Rect::new(0, 0, MAX_SCREEN_WIDTH, MAX_SCREEN_HEIGHT)
+        );
+        term.backend_mut().set_fixed_size(Size::new(80, 24));
+        term.draw(|_| {}).unwrap();
+        term.backend_mut().set_fixed_size(huge);
+        term.draw(|f| {
+            assert_eq!(
+                f.area(),
+                Rect::new(0, 0, MAX_SCREEN_WIDTH, MAX_SCREEN_HEIGHT)
+            );
+        })
+        .unwrap();
+        assert_eq!(term.buffer().area(), term.area());
+
+        // Inline: the width capped, the real height kept for the placement, and the viewport
+        // at most `MAX_SCREEN_HEIGHT` rows.
+        let backend = Backend::with_fixed(Vec::new(), huge, Position::new(0, 0));
+        let mut term = Terminal::with_options(
+            backend,
+            TerminalOptions::default().viewport(Viewport::Inline(u16::MAX)),
+        )
+        .unwrap();
+        assert_eq!(term.area().width, MAX_SCREEN_WIDTH);
+        assert_eq!(term.area().height, MAX_SCREEN_HEIGHT);
+        term.set_height(u16::MAX);
+        term.insert_before(1, |buf| assert_eq!(buf.area().width, MAX_SCREEN_WIDTH));
+        term.draw(|f| assert_eq!(f.area().height, MAX_SCREEN_HEIGHT))
+            .unwrap();
+        assert!(term.area().bottom() <= huge.height);
     }
 
     /// A writer that fails once, when its output would pass `fail_at` bytes, then works.

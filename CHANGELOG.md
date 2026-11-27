@@ -102,6 +102,11 @@ break the API).
   (now head and continuation pairs); a `Rect` written literally past `u16::MAX` made
   `Buffer` overflow (the area is clipped like `Rect::new`).
 - `tilefab-term`: the initial placement of an inline viewport overflowed at extreme sizes.
+- `tilefab-term`: a screen reported as huge (a pty set to 65535 × 65535, which anyone can do)
+  made the buffers allocate width × height cells of 40 bytes, and the process abort. A
+  `Terminal` now draws at most `MAX_SCREEN_WIDTH` × `MAX_SCREEN_HEIGHT` cells (2048 × 1024,
+  new constants, also in `tilefab`), and an inline viewport is at most `MAX_SCREEN_HEIGHT`
+  rows tall.
 - `tilefab-term`: a wide character set in place without its continuation
   (`buffer.get_mut(x, y).set_symbol("界")`), or a continuation copied elsewhere, left the
   screen different from what the next frames believed: the head covered a cell the diff

@@ -26,8 +26,9 @@ pub use tilefab_input::{
     EditorStyles, Hinter, History, HistoryHinter, KeyBinding, Keymap, LineEditor,
 };
 pub use tilefab_term::{
-    Backend, ClearType, Frame, MAX_PENDING_LINES, ScrollMode, Terminal, TerminalGuard,
-    TerminalOptions, Viewport, install_fatal_panic_hook, install_panic_hook, restore, viewport,
+    Backend, ClearType, Frame, MAX_PENDING_LINES, MAX_SCREEN_HEIGHT, MAX_SCREEN_WIDTH, ScrollMode,
+    Terminal, TerminalGuard, TerminalOptions, Viewport, install_fatal_panic_hook,
+    install_panic_hook, restore, viewport,
 };
 #[cfg(feature = "widget")]
 pub use tilefab_widget::{
