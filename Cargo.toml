@@ -83,6 +83,9 @@ allow_attributes_without_reason = "warn"
 # thin LTO across crates; in exchange, a release build links in about 12 s instead of 1 s.
 # Symbols are kept (Cargo's default only strips the debug info), so a backtrace shows
 # function names: `strip = true` would shrink the demo binary from 1.8 MB to 1.4 MB.
+# The binary holds the paths of the dependencies under the Cargo home (panic locations):
+# `tools/dist.sh` builds one to distribute with those paths rewritten (`trim-paths`, which
+# would do it from here, is not stable yet).
 [profile.release]
 lto = "thin"
 codegen-units = 1
