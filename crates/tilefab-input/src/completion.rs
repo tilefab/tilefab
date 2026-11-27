@@ -396,6 +396,31 @@ mod tests {
     }
 
     #[test]
+    fn the_selection_covers_the_label_width_away_from_the_first_column() {
+        // The menu starts at column 3, and the selected label, `dd` (2 columns, padded to
+        // the 4 of `cccc`), is in the second column of candidates: the padding is measured
+        // from where the label starts.
+        let mut menu = menu(&["a", "bb", "cccc", "dd"], 3);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 2));
+        let selected = Style::new().fg(Color::Red);
+        let styles = EditorStyles::default().menu_selected(selected);
+        draw_menu(&mut menu, Rect::new(3, 0, 17, 2), &mut buf, &styles);
+        let red: Vec<u16> = (0..20)
+            .filter(|&x| buf.get(x, 1).fg == Color::Red)
+            .collect();
+        let label = (0..20).find(|&x| buf.get(x, 1).symbol() == "d").unwrap();
+        assert!(
+            label > 3,
+            "the selected label is not in the second column: {label}"
+        );
+        assert_eq!(
+            red,
+            (label..label + 4).collect::<Vec<_>>(),
+            "the label width, 4 columns"
+        );
+    }
+
+    #[test]
     fn the_selection_covers_the_label_width_in_columns() {
         // `e` + a combining acute accent: two characters, one column.
         let mut menu = menu(&["e\u{301}", "abcd"], 0);
