@@ -230,7 +230,7 @@ cargo mutants -p tilefab-widget -j 4   # the line widget
 cargo mutants -p tilefab-input -j 4    # the line editor and its history
 ```
 
-On the line widget and the line editor, every mutant is caught by the tests (none is marked as equivalent). The timeouts are mutants that loop forever: the tests catch them too.
+On the line widget and the line editor, every mutant is caught by the tests (checked on 27 November 2026: 448 mutants for the widget, 639 for the editor). One more is excluded in `.cargo/mutants.toml`, with its reason: it computes the same value as the code, so no test can catch it. The timeouts are mutants that loop forever: the tests catch them too.
 
 Fuzzing with libFuzzer (`fuzz/`, a crate outside the workspace; once: `rustup toolchain install nightly --profile minimal && cargo install --locked cargo-fuzz`). Four targets, each checking invariants rather than only the absence of a panic:
 

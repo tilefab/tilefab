@@ -1,0 +1,9 @@
+# cargo-mutants configuration (see README.md, "Mutation testing").
+
+# Equivalent mutants: the mutated code computes the same thing, so no test can catch them.
+# Each one is named exactly, with why it is equivalent.
+exclude_re = [
+    # `libc::O_NONBLOCK | libc::O_NOFOLLOW` (history.rs): two distinct bits, whose OR and
+    # XOR are the same value.
+    "replace \\| with \\^ in open_regular",
+]

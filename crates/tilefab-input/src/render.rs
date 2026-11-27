@@ -259,6 +259,27 @@ fn to_u16(columns: usize) -> u16 {
 mod tests {
     use super::*;
 
+    /// The cells of row 0 of `buf`, as text (a continuation adds nothing).
+    fn row(buf: &Buffer) -> String {
+        buf.lines()[0].clone()
+    }
+
+    #[test]
+    fn a_prompt_in_parts_stays_in_its_area() {
+        // `(search) query: ` in 5 columns of a wider buffer: nothing past the 5th column.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+        Prompt::Parts(["(se", "query", ": "]).render(Rect::new(0, 0, 5, 1), &mut buf);
+        assert_eq!(row(&buf).trim_end(), "(sequ");
+    }
+
+    #[test]
+    fn a_part_cut_in_the_middle_ends_the_prompt() {
+        // `界` does not fit in the last column: `:` must not take its place.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 1));
+        Prompt::Parts(["ab", "界", ":"]).render(Rect::new(0, 0, 3, 1), &mut buf);
+        assert_eq!(row(&buf).trim_end(), "ab");
+    }
+
     /// Draw `text` with the cursor at byte `cursor` in a `width`-column row with the
     /// prompt `"> "`, starting from `scroll`; return the row and the cursor column.
     fn draw(text: &str, cursor: usize, width: u16, scroll: &mut usize) -> (String, u16) {
