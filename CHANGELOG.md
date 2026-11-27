@@ -115,6 +115,11 @@ break the API).
   task started / finished lines; it is now escaped.
 - Demo: a failure of the keyboard reader left the application running in raw mode without
   input; it now quits through the normal clean-up.
+- Demo: only the first termination signal was handled: with the UI loop stuck (a terminal
+  that reads nothing), the next ones were ignored, and only `kill -9` stopped the demo,
+  leaving the terminal in raw mode. A second signal now ends it at once, raw mode disabled.
+  A demo that quits on a signal exits with 128 + its number (it exited with 0); on
+  Windows, with `STATUS_CONTROL_C_EXIT`.
 - Demo: a stdin line had no length limit in headless mode; a line longer than the prompt
   (4096 bytes) is refused whole.
 - Demo: the lines waiting while the terminal had no columns were kept without bound.

@@ -211,7 +211,7 @@ End to end, in a pty with a terminal emulator (local only, not part of the CI; o
 cargo build --examples && cargo build
 tools/.venv/bin/python tools/check_inline.py   # height cycle 1 → 5 → 1 with logs: a single synchronized block per commit,
                                                # no ESC[J / ESC[2J, no log lost or duplicated, prompt not moving
-tools/.venv/bin/python tools/check_app.py      # Unicode input, burst of 5 tasks, resize, zero width, zero height, line editor (history, completion menu, search, paste), signals, panic, degraded mode
+tools/.venv/bin/python tools/check_app.py      # Unicode input, burst of 5 tasks, resize, zero width, zero height, line editor (history, completion menu, search, paste), signals (and a second signal on a stuck UI), panic, degraded mode
 ```
 
 The same scenarios on the release build (no overflow checks, no `debug_assert!`; `panic` must then be an unknown command): `cargo build --release && tools/.venv/bin/python tools/check_app.py --release`.
@@ -262,6 +262,7 @@ The frame commit tests (`crates/tilefab-term/src/inline_tests.rs`) replay the em
 - **Emoji width**: computed with `unicode-width`; some terminals display complex sequences differently (emoji with modifiers, flags), which can shift the cursor.
 - **After a panic**, the viewport content (bars, prompt) stays on screen above the error report; the terminal itself is restored.
 - **Degraded mode**: no task lines; Ctrl+C there is the standard SIGINT signal (immediate stop).
+- **Signals** (`kill` from another process: SIGTERM, SIGINT, SIGHUP): the first one quits through the normal clean-up, with exit code 128 + the signal number (143 for SIGTERM). If the UI is stuck (a terminal that reads nothing), a second signal ends the application at once: raw mode is disabled, the rest of the restoration is tried for half a second.
 - **Windows**: untested (`Release` events and rendering in Windows Terminal to be checked).
 
 ## License

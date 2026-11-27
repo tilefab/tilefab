@@ -12,6 +12,7 @@ mod wrap;
 
 use std::io::{BufWriter, IsTerminal, Stdout, Write, stdin, stdout};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 
 use color_eyre::Result;
@@ -97,8 +98,15 @@ async fn main() -> Result<()> {
 
     // Cleanup runs even if the loop failed: clear the viewport and move the cursor to
     // its start. The shell resumes just below the logs, which remain in scrollback.
-    let cleanup = terminal.clear().map_err(Into::into);
-    result.and(cleanup)
+    let cleanup: Result<()> = terminal.clear().map_err(Into::into);
+    result.and(cleanup)?;
+    // Quit on a signal: exit with its code, once the terminal is restored.
+    if let Some(code) = SIGNALS.exit_code() {
+        drop(terminal);
+        drop(guard);
+        std::process::exit(code);
+    }
+    Ok(())
 }
 
 /// The scroll mode named by `TILEFAB_SCROLL_MODE` (`screen`, the default, `region` or
@@ -186,11 +194,68 @@ fn spawn_ticker(tx: Sender<AppEvent>) {
     });
 }
 
+/// Termination signals received. The first one quits through the normal cleanup, and the
+/// process then exits with its code; a next one ends the process at once.
+struct Signals(AtomicI32);
+
+impl Signals {
+    /// Record a signal asking to exit with `code` (not 0): true for the first one.
+    fn first(&self, code: i32) -> bool {
+        self.0
+            .compare_exchange(0, code, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    /// The exit code of the first signal, if one was received.
+    fn exit_code(&self) -> Option<i32> {
+        Some(self.0.load(Ordering::SeqCst)).filter(|&code| code != 0)
+    }
+}
+
+static SIGNALS: Signals = Signals(AtomicI32::new(0));
+
+/// How long a forced exit waits for the restoration of the terminal (see [`force_exit`]).
+const FORCED_RESTORE_WAIT: Duration = Duration::from_millis(500);
+
+/// A termination signal asking to exit with `code`: quit through the normal cleanup the
+/// first time, end the process at once the next times.
+fn on_signal(tx: &Sender<AppEvent>, code: i32) {
+    if SIGNALS.first(code) {
+        // In a task of its own: with a full queue (UI loop stuck), waiting for room here
+        // would keep the next signal from being seen.
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            // Waits for room if needed: the request to quit must not be lost.
+            let _ = tx.send(AppEvent::Quit).await;
+        });
+    } else {
+        force_exit(code);
+    }
+}
+
+/// A signal after the first one: the UI loop did not quit, stuck on a write to a terminal
+/// that reads nothing, or waiting for the answer to a query. Restore what can be, and exit
+/// with `code` at once.
+fn force_exit(code: i32) -> ! {
+    // Raw mode first: an `ioctl`, no write to stdout, which the stuck loop may hold.
+    let _ = tilefab::crossterm::terminal::disable_raw_mode();
+    // The rest of the restoration writes to stdout: in a thread, for a bounded time.
+    let (done, wait) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tilefab::restore();
+        let _ = done.send(());
+    });
+    let _ = wait.recv_timeout(FORCED_RESTORE_WAIT);
+    std::process::exit(code);
+}
+
 /// Turn termination signals into [`AppEvent::Quit`], so that a `kill <pid>` goes
 /// through the normal cleanup (viewport cleared, raw mode disabled by the guard)
-/// instead of leaving the shell in raw mode. In raw mode Ctrl+C arrives as a key,
-/// so `SIGINT` only comes from another process. The handlers are registered here,
-/// before the task starts, so that a registration error stops the program.
+/// instead of leaving the shell in raw mode; the process then exits with the usual code,
+/// 128 + the signal number. A second signal ends it at once (see [`force_exit`]). In raw
+/// mode Ctrl+C arrives as a key, so `SIGINT` only comes from another process. The handlers
+/// are registered here, before the task starts, so that a registration error stops the
+/// program.
 #[cfg(unix)]
 fn spawn_signal_listener(tx: Sender<AppEvent>) -> Result<()> {
     use tokio::signal::unix::{SignalKind, signal};
@@ -199,36 +264,42 @@ fn spawn_signal_listener(tx: Sender<AppEvent>) -> Result<()> {
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut hangup = signal(SignalKind::hangup())?;
     tokio::spawn(async move {
-        tokio::select! {
-            _ = terminate.recv() => {}
-            _ = interrupt.recv() => {}
-            _ = hangup.recv() => {}
+        loop {
+            let kind = tokio::select! {
+                Some(()) = terminate.recv() => SignalKind::terminate(),
+                Some(()) = interrupt.recv() => SignalKind::interrupt(),
+                Some(()) = hangup.recv() => SignalKind::hangup(),
+                else => return,
+            };
+            on_signal(&tx, 128 + kind.as_raw_value());
         }
-        // Waits for room if needed: the request to quit must not be lost.
-        let _ = tx.send(AppEvent::Quit).await;
     });
     Ok(())
 }
 
 /// Windows variant of the signal listener: closing the console window, logging off and
 /// shutting down (`CTRL_CLOSE_EVENT`, `CTRL_LOGOFF_EVENT`, `CTRL_SHUTDOWN_EVENT`) quit through
-/// the normal cleanup. Ctrl+C arrives as a key in raw mode, as on Unix. Not built by the CI
-/// (no Windows job).
+/// the normal cleanup, with the exit code Windows gives a process ended that way
+/// (`STATUS_CONTROL_C_EXIT`); a second event ends it at once. Ctrl+C arrives as a key in
+/// raw mode, as on Unix.
 #[cfg(windows)]
 fn spawn_signal_listener(tx: Sender<AppEvent>) -> Result<()> {
     use tokio::signal::windows::{ctrl_close, ctrl_logoff, ctrl_shutdown};
 
+    const STATUS_CONTROL_C_EXIT: i32 = 0xC000_013A_u32.cast_signed();
     let mut close = ctrl_close()?;
     let mut logoff = ctrl_logoff()?;
     let mut shutdown = ctrl_shutdown()?;
     tokio::spawn(async move {
-        tokio::select! {
-            _ = close.recv() => {}
-            _ = logoff.recv() => {}
-            _ = shutdown.recv() => {}
+        loop {
+            tokio::select! {
+                Some(()) = close.recv() => {}
+                Some(()) = logoff.recv() => {}
+                Some(()) = shutdown.recv() => {}
+                else => return,
+            }
+            on_signal(&tx, STATUS_CONTROL_C_EXIT);
         }
-        // Waits for room if needed: the request to quit must not be lost.
-        let _ = tx.send(AppEvent::Quit).await;
     });
     Ok(())
 }
@@ -420,6 +491,15 @@ mod tests {
             !written.contains("r0004"),
             "an old row kept instead of a new one"
         );
+    }
+
+    #[test]
+    fn only_the_first_signal_quits_through_the_cleanup() {
+        let signals = Signals(AtomicI32::new(0));
+        assert_eq!(signals.exit_code(), None);
+        assert!(signals.first(143), "the first signal");
+        assert!(!signals.first(130), "a second signal");
+        assert_eq!(signals.exit_code(), Some(143), "the code of the first one");
     }
 
     #[test]
