@@ -30,6 +30,12 @@ break the API).
   completer holding an `Rc` or a `RefCell` must switch to `Arc` or `Mutex`.
 - `ScrollMode`, `Viewport` (`tilefab-term`) and `Constraint` (`tilefab-core`) are
   `#[non_exhaustive]`, like the other enums that may grow: a `match` on them needs a `_` arm.
+- `tilefab-term`: the hooks for tests need the new `testing` feature (also on `tilefab`):
+  `Backend::with_fixed`, `set_fixed_size`, `set_fixed_cursor`, `fail_cursor_queries`,
+  `writer_mut`, and `Terminal::backend_mut`. Writing through them bypassed what `Terminal`
+  knows of the screen (a cursor moved with `backend_mut` was not moved back by the next
+  `draw`). Enable the feature in `[dev-dependencies]`; `Backend::writer` and
+  `Terminal::backend` (read-only) stay.
 
 ### Added
 
