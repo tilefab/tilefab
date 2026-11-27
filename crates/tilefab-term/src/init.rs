@@ -178,7 +178,8 @@ pub fn install_panic_hook() {
 /// without this exit the UI would keep drawing on a terminal already put back in line mode.
 /// Destructors (including `TerminalGuard`'s) do not run, and a `catch_unwind` cannot stop
 /// the panic: buffered data that only a destructor would write (a `BufWriter` log file, for
-/// instance) is lost.
+/// instance) is lost. From the restoration to the exit, the hook holds the lock of stdout:
+/// the other threads cannot write to the terminal any more.
 pub fn install_fatal_panic_hook() {
     install(true);
 }
@@ -187,15 +188,21 @@ pub fn install_fatal_panic_hook() {
 fn install(fatal: bool) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        // Hold stdout for the whole hook, and until the exit when fatal: a thread still
+        // drawing (the UI loop, while a task panics) waits at its next write, instead of
+        // writing between the restoration and the report, or reopening a synchronized
+        // update that the shell would inherit. The lock is reentrant: the panicking thread
+        // may already hold it. What another thread had written before stays in front.
+        let mut out = io::stdout().lock();
         let was_fullscreen = ALTERNATE_SCREEN.load(Ordering::SeqCst);
-        let _ = restore();
+        let _ = restore_to(&mut out);
         if !was_fullscreen {
             // Normal screen: start a new line so the report does not begin in the middle
             // of the viewport (the terminal is no longer in raw mode; `\n` is enough).
-            let _ = writeln!(io::stdout());
+            let _ = writeln!(out);
         }
         previous(info);
-        let _ = io::stdout().flush();
+        let _ = out.flush();
         if fatal {
             std::process::exit(101);
         }
