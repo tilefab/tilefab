@@ -59,11 +59,17 @@ const INLINE_SYMBOL: usize = 22;
 ///
 /// Same size as a `String`, but creating or copying a short symbol never allocates: a
 /// frame clones and compares thousands of cells. The representation is canonical (inline
-/// whenever it fits, unused bytes zeroed), so the derived equality compares contents.
+/// whenever it fits, unused bytes zeroed), so the derived equality compares contents. An
+/// inline symbol also keeps its width, measured once when it is created: the diff, the
+/// backend and the handling of wide characters read it for every cell of every frame.
 #[derive(Clone, PartialEq, Eq)]
 enum Symbol {
-    /// The first `len` bytes of `bytes`, valid UTF-8.
-    Inline { len: u8, bytes: [u8; INLINE_SYMBOL] },
+    /// The first `len` bytes of `bytes`, valid UTF-8, `width` columns wide: both packed in
+    /// `packed` (see [`Symbol::pack`]), so that the symbol stays the size of a `String`.
+    Inline {
+        packed: u8,
+        bytes: [u8; INLINE_SYMBOL],
+    },
     /// Longer than `INLINE_SYMBOL` bytes, shared by its copies: copying a cell never
     /// allocates (only writing such a symbol does).
     Heap(Arc<str>),
@@ -72,62 +78,95 @@ enum Symbol {
 impl Symbol {
     /// A continuation (second half of a wide character).
     const EMPTY: Self = Self::Inline {
-        len: 0,
+        packed: Self::pack(0, 0),
         bytes: [0; INLINE_SYMBOL],
     };
     /// A space, the default symbol.
     const SPACE: Self = {
         let mut bytes = [0; INLINE_SYMBOL];
         bytes[0] = b' ';
-        Self::Inline { len: 1, bytes }
+        Self::Inline {
+            packed: Self::pack(1, 1),
+            bytes,
+        }
     };
 
-    fn new(symbol: &str) -> Self {
-        if let Ok(len) = u8::try_from(symbol.len())
-            && symbol.len() <= INLINE_SYMBOL
-        {
+    /// `len` (at most `INLINE_SYMBOL`, 5 bits) and `width` (0 to 2) in one byte.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "`len <= INLINE_SYMBOL < 32` and `width <= 2`: both fit in a byte"
+    )]
+    const fn pack(len: usize, width: usize) -> u8 {
+        (len | width << 5) as u8
+    }
+
+    /// `symbol`, `width` columns wide (its width, as measured by the caller).
+    fn with_width(symbol: &str, width: usize) -> Self {
+        if symbol.len() <= INLINE_SYMBOL {
             let mut bytes = [0; INLINE_SYMBOL];
             bytes[..symbol.len()].copy_from_slice(symbol.as_bytes());
-            Self::Inline { len, bytes }
+            Self::Inline {
+                packed: Self::pack(symbol.len(), width),
+                bytes,
+            }
         } else {
             Self::Heap(symbol.into())
+        }
+    }
+
+    /// `grapheme` (a single grapheme) as a symbol, measured once: `None` if it is not
+    /// printable (a control character, or zero columns wide); a grapheme wider than two
+    /// columns is shown as a space (see [`Cell`]). The symbol's width is [`grapheme_width`]
+    /// of `grapheme`.
+    fn measure(grapheme: &str) -> Option<Self> {
+        // Fast path for the most common case, a single ASCII character.
+        if let &[byte] = grapheme.as_bytes() {
+            return (byte == b' ' || byte.is_ascii_graphic())
+                .then(|| Self::with_width(grapheme, 1));
+        }
+        if grapheme.chars().any(char::is_control) {
+            return None;
+        }
+        match grapheme.width() {
+            0 => None,
+            width @ (1 | 2) => Some(Self::with_width(grapheme, width)),
+            _ => Some(Self::SPACE),
         }
     }
 
     /// The first grapheme of `symbol` if it is printable and one or two columns wide,
     /// otherwise a space (see [`Cell`]). Never a continuation.
     fn printable(symbol: &str) -> Self {
-        // Fast path for the most common case, a single ASCII character.
-        if let &[byte] = symbol.as_bytes() {
-            return if byte == b' ' || byte.is_ascii_graphic() {
-                Self::new(symbol)
-            } else {
-                Self::SPACE
-            };
-        }
-        match symbol.graphemes(true).next() {
-            Some(grapheme)
-                if !grapheme.chars().any(char::is_control) && matches!(grapheme.width(), 1 | 2) =>
-            {
-                Self::new(grapheme)
-            }
-            _ => Self::SPACE,
-        }
+        let first = if symbol.len() == 1 {
+            Some(symbol)
+        } else {
+            symbol.graphemes(true).next()
+        };
+        first.and_then(Self::measure).unwrap_or(Self::SPACE)
     }
 
     fn as_str(&self) -> &str {
         match self {
             // Always valid: the bytes come from a `&str` cut at its end. Without `unsafe`
             // (forbidden in this project), the check is redone; it is cheap on 22 bytes.
-            Self::Inline { len, bytes } => {
-                std::str::from_utf8(&bytes[..usize::from(*len)]).unwrap_or_default()
+            Self::Inline { packed, bytes } => {
+                std::str::from_utf8(&bytes[..usize::from(packed & 0x1f)]).unwrap_or_default()
             }
             Self::Heap(symbol) => symbol,
         }
     }
 
+    /// Number of columns: stored when inline; measured again for a (rare) long symbol, a
+    /// printable grapheme one or two columns wide.
+    fn width(&self) -> usize {
+        match self {
+            Self::Inline { packed, .. } => usize::from(packed >> 5),
+            Self::Heap(symbol) => symbol.width(),
+        }
+    }
+
     fn is_empty(&self) -> bool {
-        matches!(self, Self::Inline { len: 0, .. })
+        matches!(self, Self::Inline { packed: 0, .. })
     }
 }
 
@@ -244,7 +283,7 @@ impl Cell {
     /// character.
     #[must_use]
     pub fn width(&self) -> usize {
-        self.symbol().width()
+        self.symbol.width()
     }
 }
 
@@ -470,17 +509,17 @@ impl Buffer {
         let mut x = x;
         let mut remaining = max_width.min((area.right() - x) as usize);
         for grapheme in string.graphemes(true) {
-            let width = grapheme_width(grapheme);
-            if width == 0 {
+            // Measured once: the symbol keeps its width.
+            let Some(symbol) = Symbol::measure(grapheme) else {
                 continue;
-            }
+            };
+            let width = symbol.width();
             if width > remaining {
                 break;
             }
-            // The same width as measured: `grapheme` is a single grapheme.
-            let written = self.write_grapheme(x, y, grapheme, style);
-            x += saturating_u16(written);
-            remaining -= written;
+            self.write_symbol(x, y, symbol, style);
+            x += saturating_u16(width);
+            remaining -= width;
         }
         (x, y)
     }
@@ -499,7 +538,15 @@ impl Buffer {
     /// If `(x, y)`, or `(x + 1, y)` for a wide grapheme, is outside the buffer.
     pub fn write_grapheme(&mut self, x: u16, y: u16, grapheme: &str, style: Style) -> usize {
         let symbol = Symbol::printable(grapheme);
-        let width = symbol.as_str().width();
+        let width = symbol.width();
+        self.write_symbol(x, y, symbol, style);
+        width
+    }
+
+    /// Write `symbol` at `(x, y)`, and for a wide one turn `(x + 1, y)` into its
+    /// continuation (see [`Buffer::write_grapheme`]).
+    fn write_symbol(&mut self, x: u16, y: u16, symbol: Symbol, style: Style) {
+        let width = symbol.width();
         // Overwriting half a wide character: the other half becomes a space.
         self.break_wide(x, y);
         if width == 2 {
@@ -517,7 +564,6 @@ impl Buffer {
             tail.bg = bg;
             tail.modifier = modifier;
         }
-        width
     }
 
     /// If `(x, y)` is part of a wide character, replace the *other* half with a space.
@@ -626,14 +672,37 @@ mod tests {
         assert_eq!(cell.width(), 1);
     }
 
+    proptest::proptest! {
+        #[test]
+        fn the_stored_width_is_the_measured_one(
+            text in "[a ~\u{7f}\u{1b}\u{301}\u{200d}é界😀👨👩\u{fe0f}\u{1f3fb}\u{a0}\u{ad}]{0,8}",
+        ) {
+            let measured = |cell: &Cell| -> usize {
+                unicode_width::UnicodeWidthStr::width(cell.symbol())
+            };
+            let cell = Cell::new(&text);
+            proptest::prop_assert_eq!(cell.width(), measured(&cell));
+            let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+            buf.set_string(0, 0, &text, Style::new());
+            for cell in buf.content() {
+                proptest::prop_assert_eq!(cell.width(), measured(cell), "{:?}", cell);
+            }
+        }
+    }
+
     #[test]
     fn short_symbols_are_inline_and_long_ones_round_trip_through_the_heap() {
         assert_eq!(std::mem::size_of::<Symbol>(), std::mem::size_of::<String>());
         assert!(matches!(Cell::default().symbol, Symbol::Inline { .. }));
         // 22 bytes: the longest inline symbol.
         let longest = "é".repeat(11);
-        assert!(matches!(Symbol::new(&longest), Symbol::Inline { .. }));
-        assert_eq!(Symbol::new(&longest).as_str(), longest);
+        assert!(matches!(Symbol::printable(&longest), Symbol::Inline { .. }));
+        assert_eq!(Symbol::printable(&longest).as_str(), "é");
+        assert!(matches!(
+            Symbol::with_width(&longest, 1),
+            Symbol::Inline { .. }
+        ));
+        assert_eq!(Symbol::with_width(&longest, 1).as_str(), longest);
         // A family emoji: 25 bytes, one grapheme.
         let family = "👨\u{200d}👩\u{200d}👧\u{200d}👦";
         assert!(family.len() > INLINE_SYMBOL);

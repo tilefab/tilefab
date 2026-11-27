@@ -125,6 +125,11 @@ break the API).
   matched. The lines not written in full are queued again (one may show twice), and the next
   `draw` clears and redraws the viewport, as after a resize.
 - `tilefab-term`: a frame that changed a text modifier (bold, dim…) allocated.
+- `tilefab-core`: each grapheme written was segmented and measured up to three times, and
+  `Cell::width` measured its symbol again at every call (the diff and the backend call it
+  for every cell): a cell now keeps its width, measured once. In release, a screen of CJK
+  and emoji is written about twice as fast, and the `cell_alloc` frames take 30 to 40 %
+  less time.
 - `tilefab-core`: a symbol longer than a cell holds inline (22 bytes, such as a family emoji
   joined by ZWJ) was copied with an allocation each time its cell was, about five times per
   frame; its copies now share it (`Arc<str>`), and only writing it allocates.
