@@ -18,8 +18,8 @@ use color_eyre::Result;
 use tilefab::crossterm::event::{self, EnableBracketedPaste, Event};
 use tilefab::crossterm::execute;
 use tilefab::{
-    Backend, Line, ScrollMode, Terminal, TerminalGuard, TerminalOptions, Viewport,
-    install_fatal_panic_hook,
+    Backend, Line, MAX_PENDING_LINES, ScrollMode, Terminal, TerminalGuard, TerminalOptions,
+    Viewport, install_fatal_panic_hook,
 };
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -317,8 +317,17 @@ fn queue_output<W: Write>(terminal: &mut Terminal<W>, app: &mut App) {
     // next `draw`, and wrapping at another width would truncate the lines.
     let width = terminal.area().width;
     let rows = wrap::wrap(std::mem::take(&mut app.output), width);
-    let height = u16::try_from(rows.len()).unwrap_or(u16::MAX);
-    terminal.insert_before(height, |buf| wrap::render(&rows, buf));
+    // The terminal keeps at most MAX_PENDING_LINES rows of one insert, the first ones: pass
+    // the newest (a narrow terminal can wrap the kept text into many more rows).
+    let newest = &rows[rows.len().saturating_sub(MAX_PENDING_LINES)..];
+    if newest.len() < rows.len() {
+        tracing::warn!(
+            "{} wrapped log row(s) dropped: at most {MAX_PENDING_LINES} are shown at once",
+            rows.len() - newest.len()
+        );
+    }
+    let height = u16::try_from(newest.len()).unwrap_or(u16::MAX);
+    terminal.insert_before(height, |buf| wrap::render(newest, buf));
 }
 
 #[cfg(test)]
@@ -382,6 +391,35 @@ mod tests {
         let written =
             String::from_utf8(std::mem::take(terminal.backend_mut().writer_mut())).unwrap();
         assert!(written.contains("kept"), "line not written: {written:?}");
+    }
+
+    #[test]
+    fn the_newest_rows_are_inserted_when_there_are_too_many() {
+        let backend = Backend::with_fixed(Vec::new(), Size::new(10, 10), Position::new(0, 0));
+        let mut terminal = Terminal::with_options(
+            backend,
+            TerminalOptions::default().viewport(Viewport::Inline(1)),
+        )
+        .unwrap();
+        terminal.draw(|_| {}).unwrap();
+        let (tx, _rx) = mpsc::channel(16);
+        let mut app = App::new(tx);
+        for n in 0..MAX_PENDING_LINES + 5 {
+            app.output.push(Line::from(format!("r{n:04}")));
+        }
+        std::mem::take(terminal.backend_mut().writer_mut());
+
+        queue_output(&mut terminal, &mut app);
+        terminal.draw(|_| {}).unwrap();
+        let written =
+            String::from_utf8(std::mem::take(terminal.backend_mut().writer_mut())).unwrap();
+        let last = format!("r{:04}", MAX_PENDING_LINES + 4);
+        assert!(written.contains(&last), "newest row lost");
+        assert!(written.contains("r0005"), "a kept row lost");
+        assert!(
+            !written.contains("r0004"),
+            "an old row kept instead of a new one"
+        );
     }
 
     #[test]

@@ -63,10 +63,10 @@ use tilefab_core::convert::saturating_u16;
 use tilefab_core::layout::{Position, Rect, Size};
 use tilefab_core::widget::{StatefulWidget, Widget};
 
-/// Maximum number of inserted lines kept pending from one inline `draw` to the next while
-/// they cannot be shown (viewport filling the screen, screen with no rows or columns):
-/// beyond that, `draw` drops the oldest. Lines queued between two draws are not limited:
-/// when there is room, a large batch is applied in full, in chunks.
+/// Maximum number of inserted lines kept pending until a `draw` can show them (viewport
+/// filling the screen, screen with no rows or columns, or simply no `draw` yet): beyond that,
+/// `insert_before` and `draw` drop the oldest. A single `insert_before` renders at most that
+/// many rows.
 pub const MAX_PENDING_LINES: usize = 1_000;
 
 /// View of the current buffer passed to the rendering function of `Terminal::draw`.
@@ -287,11 +287,27 @@ impl<W: Write> Terminal<W> {
     /// they are truncated or padded to the new width.
     /// No effect in fullscreen mode, nor while that width is 0: keep the lines and insert them
     /// once `self.area().width` is positive again.
+    ///
+    /// `height` is capped at [`MAX_PENDING_LINES`], the most lines kept pending: the buffer
+    /// then has that many rows, and the rows `render` would draw below them are lost (with a
+    /// warning). To keep the newest of a longer text, pass only its last `MAX_PENDING_LINES`
+    /// rows.
     pub fn insert_before(&mut self, height: u16, render: impl FnOnce(&mut Buffer)) {
         let width = usize::from(self.screen.width);
         if !matches!(self.viewport, Viewport::Inline(_)) || height == 0 || width == 0 {
             return;
         }
+        // Rendering more rows would allocate (and keep, as the capacity of `insert`) a buffer
+        // of `height` rows only to drop all but `MAX_PENDING_LINES` of them.
+        let max = saturating_u16(MAX_PENDING_LINES);
+        if height > max && !self.pending_overflowed {
+            self.pending_overflowed = true;
+            tracing::warn!(
+                "insert_before: {height} lines inserted at once, more than {MAX_PENDING_LINES}: \
+                 the last ones are dropped"
+            );
+        }
+        let height = height.min(max);
         self.insert
             .reset_to(Rect::new(0, 0, self.screen.width, height));
         let area = self.insert.area();
@@ -1117,6 +1133,16 @@ mod tests {
             !take(&mut term).contains('#'),
             "pending lines written twice"
         );
+    }
+
+    #[test]
+    fn a_tall_insert_renders_no_more_rows_than_are_kept() {
+        let mut term = inline_terminal(3, 1);
+        let mut rows = 0;
+        term.insert_before(u16::MAX, |buf| rows = buf.area().height);
+        assert_eq!(usize::from(rows), MAX_PENDING_LINES);
+        assert_eq!(term.pending.len(), MAX_PENDING_LINES * 10);
+        assert!(term.pending_overflowed, "the dropped rows are not reported");
     }
 
     #[test]
