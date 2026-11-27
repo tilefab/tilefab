@@ -11,10 +11,14 @@ pub(crate) const ELLIPSIS: &str = "…";
 
 /// Copy `text` into `out` (cleared first, its memory kept) with every control character
 /// replaced by one space, and return the width of the result.
+///
+/// The rule of the widget: a log line is shown as it came, each control character keeping
+/// its column. The line editor (`tilefab-input`) removes them from a typed line instead,
+/// except the line breaks and tabs, which become spaces.
 pub(crate) fn sanitize_into(text: &str, out: &mut String) -> usize {
     out.clear();
     out.extend(text.chars().map(|c| if c.is_control() { ' ' } else { c }));
-    crate::entry::text_width(out)
+    tilefab_core::str_width(out)
 }
 
 /// How a text is drawn in a given width (see [`truncate`]).
@@ -224,12 +228,12 @@ impl<const N: usize> Write for StackText<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entry::text_width;
     use proptest::prelude::*;
+    use tilefab_core::str_width;
 
     /// The text drawn by [`truncate`], padding included.
     fn fit(text: &str, width: usize) -> String {
-        let t = truncate(text, text_width(text), width);
+        let t = truncate(text, str_width(text), width);
         let mut out = t.prefix.to_owned();
         if t.ellipsis {
             out.push_str(ELLIPSIS);
@@ -275,7 +279,7 @@ mod tests {
     fn a_wide_character_that_does_not_fit_before_the_ellipsis() {
         // "a界b": the cut at 3 columns keeps "a", then `…`, then a space where "界" ended.
         assert_eq!(fit("a界b", 3), "a… ");
-        assert_eq!(text_width(&fit("a界b", 3)), 3);
+        assert_eq!(str_width(&fit("a界b", 3)), 3);
         assert_eq!(fit("a界b", 4), "a界b");
         assert_eq!(fit("a界bc", 4), "a界…");
         assert_eq!(fit("界界界", 2), "… ");
@@ -369,9 +373,9 @@ mod tests {
     proptest! {
         #[test]
         fn truncation_fills_exactly_the_width(text in "\\PC{0,12}", width in 0usize..16) {
-            let full = text_width(&text);
+            let full = str_width(&text);
             let t = truncate(&text, full, width);
-            let total = text_width(t.prefix) + usize::from(t.ellipsis) + t.pad;
+            let total = str_width(t.prefix) + usize::from(t.ellipsis) + t.pad;
             prop_assert_eq!(total, width);
             prop_assert_eq!(t.ellipsis, full > width && width > 0);
             if t.ellipsis {
@@ -397,7 +401,7 @@ mod tests {
         fn numbers_never_exceed_their_size(value in any::<f64>().prop_filter("finite", |v| v.is_finite()), size in 1usize..12, decimals in 0u8..=9) {
             let (text, width) = number(value, size, decimals);
             prop_assert!(width <= size);
-            prop_assert_eq!(text_width(&text), width);
+            prop_assert_eq!(str_width(&text), width);
         }
     }
 }

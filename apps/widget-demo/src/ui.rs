@@ -1,6 +1,7 @@
 //! Rendering the inline viewport: one row per task, drawn by its line widget, then the prompt
 //! and the completion menu.
 
+use tilefab::convert::saturating_u16;
 use tilefab::{Constraint, Frame, Layout, Line, Rect, Stylize};
 
 use crate::app::App;
@@ -11,8 +12,7 @@ const PROMPT: &str = "> ";
 /// Desired viewport height in a terminal `width` columns wide: one row per task, the prompt
 /// line, and the rows of the completion menu when it is open.
 pub fn viewport_height(app: &App, width: u16) -> u16 {
-    u16::try_from(app.tasks.len())
-        .unwrap_or(u16::MAX)
+    saturating_u16(app.tasks.len())
         .saturating_add(1)
         .saturating_add(app.editor.extra_rows(width))
 }

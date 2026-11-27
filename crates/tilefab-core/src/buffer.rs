@@ -44,6 +44,21 @@ pub fn grapheme_width(grapheme: &str) -> usize {
     }
 }
 
+/// Display width of `text` in columns: the sum of [`grapheme_width`] over its graphemes, the
+/// width [`Buffer::set_string`] gives it. Measure text with this rule only, so that what is
+/// laid out matches what is drawn.
+///
+/// ```
+/// use tilefab_core::str_width;
+///
+/// assert_eq!(str_width("a界e\u{301}"), 4); // 1 + 2 + 1 (`e` and its combining accent)
+/// assert_eq!(str_width("a\tb"), 2); // a control character takes no column
+/// ```
+#[must_use]
+pub fn str_width(text: &str) -> usize {
+    text.graphemes(true).map(grapheme_width).sum()
+}
+
 /// `area` clipped like [`Rect::new`]: its right and bottom edges do not exceed `u16::MAX`,
 /// so that every cell has coordinates.
 fn clipped(area: Rect) -> Rect {
@@ -687,6 +702,21 @@ mod tests {
             for cell in buf.content() {
                 proptest::prop_assert_eq!(cell.width(), measured(cell), "{:?}", cell);
             }
+        }
+    }
+
+    #[test]
+    fn str_width_is_the_width_set_string_gives() {
+        assert_eq!(str_width("abc"), 3);
+        assert_eq!(str_width("界"), 2);
+        assert_eq!(str_width("🔴"), grapheme_width("🔴"));
+        assert_eq!(str_width("e\u{301}"), 1);
+        assert_eq!(str_width(""), 0);
+        // The columns `set_string` advances by.
+        for text in ["a界b", "e\u{301}x", "a\u{1b}b", "😀🎉"] {
+            let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+            let (x, _) = buf.set_string(0, 0, text, Style::new());
+            assert_eq!(usize::from(x), str_width(text), "{text:?}");
         }
     }
 

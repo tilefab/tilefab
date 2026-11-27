@@ -13,7 +13,7 @@ pub mod style;
 pub mod text;
 pub mod widget;
 
-pub use buffer::{Buffer, Cell, grapheme_width};
+pub use buffer::{Buffer, Cell, grapheme_width, str_width};
 pub use layout::{Constraint, Direction, Layout, Margin, Position, Rect, Size};
 pub use style::{Color, Modifier, Style};
 pub use text::{Alignment, Line, Span, Stylize, Text};

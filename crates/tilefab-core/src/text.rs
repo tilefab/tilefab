@@ -17,9 +17,7 @@
 
 use std::borrow::Cow;
 
-use unicode_segmentation::UnicodeSegmentation;
-
-use super::buffer::{Buffer, grapheme_width};
+use super::buffer::{Buffer, str_width};
 use super::convert::saturating_u16;
 use super::layout::Rect;
 use super::style::{Color, Modifier, Style};
@@ -34,11 +32,6 @@ pub enum Alignment {
     Center,
     /// Right-aligned.
     Right,
-}
-
-/// Display width of a string, in columns.
-fn str_width(s: &str) -> usize {
-    s.graphemes(true).map(grapheme_width).sum()
 }
 
 // ----------------------------------------------------------------------------------- Span

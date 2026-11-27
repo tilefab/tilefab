@@ -18,7 +18,7 @@ pub use crossterm;
 pub use tilefab_core::{
     Alignment, Buffer, Cell, Color, Constraint, Direction, Layout, Line, Margin, Modifier,
     Position, Rect, Size, Span, StatefulWidget, Style, Stylize, Text, Widget, convert,
-    grapheme_width,
+    grapheme_width, str_width,
 };
 #[cfg(feature = "input")]
 pub use tilefab_input::{

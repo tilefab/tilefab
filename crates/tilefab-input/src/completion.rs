@@ -3,8 +3,8 @@
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
-use tilefab_core::buffer::grapheme_width;
-use tilefab_core::{Buffer, Rect, Style};
+use tilefab_core::convert::saturating_u16;
+use tilefab_core::{Buffer, Rect, Style, str_width};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::buffer;
@@ -232,7 +232,7 @@ const GAP: usize = 2;
 pub(crate) fn layout(candidates: &[Candidate], width: usize) -> MenuLayout {
     let label_width = candidates
         .iter()
-        .map(|c| text_width(c.label()))
+        .map(|c| str_width(c.label()))
         .max()
         .unwrap_or(0)
         .max(1);
@@ -298,7 +298,7 @@ pub(crate) fn draw_menu(menu: &mut Menu, area: Rect, buf: &mut Buffer, styles: &
             };
             // The selection is shown over the whole label width: spaces after the label,
             // counted in columns (a wide character takes two).
-            let start = area.x + to_u16(x);
+            let start = area.x + saturating_u16(x);
             let (mut next, _) = buf.set_stringn(start, y, candidate.label(), room, style);
             while usize::from(next - start) < room {
                 next = buf.set_stringn(next, y, " ", 1, style).0;
@@ -309,7 +309,7 @@ pub(crate) fn draw_menu(menu: &mut Menu, area: Rect, buf: &mut Buffer, styles: &
                 // `layout` describes only when `label_width + GAP < width`.
                 let x = layout.label_width + GAP;
                 let _ = buf.set_stringn(
-                    area.x + to_u16(x),
+                    area.x + saturating_u16(x),
                     y,
                     description,
                     width - x,
@@ -324,9 +324,9 @@ pub(crate) fn draw_menu(menu: &mut Menu, area: Rect, buf: &mut Buffer, styles: &
         let mut counter = StackText::default();
         let _ = write!(counter, " (+{hidden} more)");
         let counter = counter.as_str();
-        let counter_width = text_width(counter).min(width);
-        let x = area.x + to_u16(width - counter_width);
-        let y = area.y + to_u16(visible - 1);
+        let counter_width = str_width(counter).min(width);
+        let x = area.x + saturating_u16(width - counter_width);
+        let y = area.y + saturating_u16(visible - 1);
         let _ = buf.set_stringn(x, y, counter, counter_width, styles.menu_description);
     }
 }
@@ -334,7 +334,7 @@ pub(crate) fn draw_menu(menu: &mut Menu, area: Rect, buf: &mut Buffer, styles: &
 /// Number of rows `menu` needs in `width` columns, at most `max_rows`.
 pub(crate) fn rows_needed(menu: &Menu, width: u16, max_rows: u16) -> u16 {
     let rows = layout(&menu.candidates, usize::from(width)).rows;
-    to_u16(rows).min(max_rows)
+    saturating_u16(rows).min(max_rows)
 }
 
 /// A short text written on the stack, `(+N more)` (at most 29 bytes for a `usize`).
@@ -359,16 +359,6 @@ impl std::fmt::Write for StackText {
         self.len = end;
         Ok(())
     }
-}
-
-/// Display width of `text`.
-fn text_width(text: &str) -> usize {
-    text.graphemes(true).map(grapheme_width).sum()
-}
-
-/// A count that fits a buffer coordinate.
-fn to_u16(count: usize) -> u16 {
-    u16::try_from(count).unwrap_or(u16::MAX)
 }
 
 #[cfg(test)]

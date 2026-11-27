@@ -2,8 +2,8 @@
 
 use tilefab_core::{Alignment, Buffer, Color, Modifier, Rect, Style, Widget};
 
-use crate::entry::text_width;
 use crate::{Entry, LineWidget, Rank, WallTime};
+use tilefab_core::str_width;
 
 fn entries(texts: &[&str]) -> Vec<Entry> {
     texts.iter().copied().map(Entry::new).collect()
@@ -19,7 +19,7 @@ fn draw(widget: &LineWidget, width: u16) -> Buffer {
 /// Check that `widget` drawn in `width` columns gives `expected`, then spaces.
 #[track_caller]
 fn assert_row(widget: &LineWidget, width: u16, expected: &str) {
-    let pad = usize::from(width) - text_width(expected);
+    let pad = usize::from(width) - str_width(expected);
     let mut expected_buf = Buffer::empty(Rect::new(0, 0, width, 1));
     expected_buf.set_string(
         0,
