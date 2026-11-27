@@ -311,9 +311,12 @@ pub fn history_path(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     {
         return Some(state.join("tilefab").join("history"));
     }
-    var("HOME")
-        .filter(|home| !home.is_empty())
-        .map(|home| PathBuf::from(home).join(".local/state/tilefab/history"))
+    var("HOME").filter(|home| !home.is_empty()).map(|home| {
+        // One component at a time: the separators are the system's (`\\` on Windows).
+        [".local", "state", "tilefab", "history"]
+            .iter()
+            .fold(PathBuf::from(home), |path, part| path.join(part))
+    })
 }
 
 /// Most lines kept in `App::output` while they cannot be shown.
@@ -952,6 +955,11 @@ mod tests {
 
     #[test]
     fn the_history_path_follows_tilefab_history_then_xdg_then_home() {
+        // An absolute path on this system: `/state` has no drive, so it is relative on Windows.
+        #[cfg(windows)]
+        const STATE: &str = r"C:\state";
+        #[cfg(not(windows))]
+        const STATE: &str = "/state";
         let env = |vars: &'static [(&'static str, &'static str)]| {
             move |name: &str| {
                 vars.iter()
@@ -967,8 +975,8 @@ mod tests {
         // An empty value disables the file.
         assert_eq!(path(&[("TILEFAB_HISTORY", ""), ("HOME", "/home/u")]), None);
         assert_eq!(
-            path(&[("XDG_STATE_HOME", "/state"), ("HOME", "/home/u")]),
-            Some(PathBuf::from("/state/tilefab/history"))
+            path(&[("XDG_STATE_HOME", STATE), ("HOME", "/home/u")]),
+            Some(PathBuf::from(STATE).join("tilefab").join("history"))
         );
         // A relative XDG_STATE_HOME is ignored.
         assert_eq!(
