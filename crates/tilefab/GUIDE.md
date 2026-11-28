@@ -448,6 +448,12 @@ position is guessed. A `poll` with a short timeout releases the lock regularly.
 awaiting `recv`. A bounded channel protects memory, but then a log written from the UI loop
 itself must not wait for room (`try_send`), or the loop would wait for itself.
 
+**A panic in a thread.** In the example above, a panic in the worker only ends that thread:
+the hook restores the terminal and prints the report, then the loop goes on drawing on a
+terminal back in line mode (typed keys echoed, no more progress). A program with threads or
+tasks usually wants every panic to end it: call `tilefab::install_fatal_panic_hook()` before
+`init_*` (see *Panic hooks* in *Setting the terminal up*).
+
 ## A prompt with the line editor
 
 `LineEditor` (feature `input`, on by default) edits one line: readline-style keys (Emacs
