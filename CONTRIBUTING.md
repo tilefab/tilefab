@@ -35,8 +35,8 @@ In the demo, a single UI loop owns the `Terminal`; nothing else writes to stdout
 | `apps/widget-demo/src/headless.rs` | degraded mode without a TTY |
 | `apps/quickstart/src/main.rs` | the program of `crates/tilefab/QUICKSTART.md`; its test checks that the quickstart and both READMEs show it verbatim |
 | `crates/tilefab-*`, `crates/tilefab` | the library: see below |
-| `crates/tilefab/examples/` | `fullscreen.rs` (full screen), `inline.rs` (variable-height viewport) and `cell_alloc.rs` (allocations and time per frame: `cargo run --release --example cell_alloc`) |
-| `tools/` | pty harness (`pty_harness.py`), checks (`check_app.py`, `check_inline.py`), video recording and analysis (`record_check.sh`, `frames_check.py`) |
+| `crates/tilefab/examples/` | `fullscreen.rs` (full screen), `inline.rs` (variable-height viewport), `panic_report.rs` (a panic in the render function after a resize, for `check_default_terminal.py`) and `cell_alloc.rs` (allocations and time per frame: `cargo run --release --example cell_alloc`) |
+| `tools/` | pty harness (`pty_harness.py`), checks (`check_app.py`, `check_inline.py`, `check_default_terminal.py`), video recording and analysis (`record_check.sh`, `frames_check.py`) |
 
 ### The library: one Cargo workspace, one crate per layer
 
@@ -102,6 +102,8 @@ cargo build --examples && cargo build
 tools/.venv/bin/python tools/check_inline.py   # height cycle 1 → 5 → 1 with logs: a single synchronized block per commit,
                                                # no ESC[J / ESC[2J, no log lost or duplicated, prompt not moving
 tools/.venv/bin/python tools/check_app.py      # Unicode input, burst of 7 tasks (`MAX_TASKS`), resize, zero width, zero height, line editor (history, completion menu, search, paste), signals (and a second signal on a stuck UI), panic, degraded mode
+tools/.venv/bin/python tools/check_default_terminal.py  # init_inline / init_fullscreen: quickstart (quit with q, to the end), and a panic in the render
+                                                        # function after a resize: report kept on screen, line mode restored
 ```
 
 The same scenarios on the release build (no overflow checks, no `debug_assert!`; `panic` must then be an unknown command): `cargo build --release && tools/.venv/bin/python tools/check_app.py --release`.

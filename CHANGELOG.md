@@ -106,6 +106,8 @@ break the API).
 
 ### Fixed
 
+- `tilefab-term`: `DefaultTerminal::finish` reported only the error of clearing the viewport;
+  it now reports the error of restoring the terminal too (raw mode, cursor…).
 - `tilefab-term`: `Terminal::draw` wrote the scroll for the inserted lines, or after a resize
   the clearing of the screen, before calling `render`. A panic in `render` then left those
   bytes in the `BufWriter`, sent after the panic report: in fullscreen, `ESC[2J` erased the
