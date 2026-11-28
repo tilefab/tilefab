@@ -233,7 +233,8 @@ enum SyncState {
 }
 
 impl<W: Write> Backend<W> {
-    /// Backend connected to the real terminal: size and cursor position are queried from the system.
+    /// Backend connected to the real terminal: size and cursor position are queried from the
+    /// system.
     pub fn new(writer: W) -> Self {
         Self {
             writer,

@@ -58,10 +58,16 @@ LIBRARIES=(-p tilefab-core -p tilefab-term -p tilefab-widget -p tilefab-input -p
 # Until the first release, the crates are `publish = false`, with which cargo looks for the
 # workspace crates on crates.io instead of packaging them together: the check runs on a copy
 # of the tracked and new files, where the root `publish = false` becomes `publish = true`.
+# A tracked file deleted without `git rm` is still listed by `git ls-files --cached`: only
+# the paths that exist (or are links) are copied, as `cargo package` would see them.
 # It needs the network (the crates.io index). Remove the copy once `publish = false` is gone.
 package_copy=$(mktemp -d)
 trap 'rm -rf "$package_copy"' EXIT
-git ls-files -z --cached --others --exclude-standard | tar --null -T - -cf - | tar -xf - -C "$package_copy"
+git ls-files -z --cached --others --exclude-standard --deduplicate |
+    while IFS= read -r -d '' path; do
+        if [[ -e $path || -L $path ]]; then printf '%s\0' "$path"; fi
+    done |
+    tar --null -T - -cf - | tar -xf - -C "$package_copy"
 sed -i.orig 's/^publish = false$/publish = true/' "$package_copy/Cargo.toml"
 if ! grep -q '^publish = true$' "$package_copy/Cargo.toml"; then
     echo "error: no 'publish = false' line in the root Cargo.toml: update this step" >&2
