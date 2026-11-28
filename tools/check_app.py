@@ -9,7 +9,8 @@ release-only code paths (no overflow checks, no `debug_assert!`) are checked end
 
 Scenarios:
   * idle: single-line viewport (the prompt), Unicode input, long input;
-  * burst: 5 tasks launched at once, typing while tasks finish;
+  * burst: as many tasks as the demo runs at once (`MAX_TASKS`), launched at once, typing
+    while tasks finish;
   * resize: resizing while tasks run;
   * zero-width: the pty loses all its columns while a line is pending:
     no panic, and the line is shown once the width is back;
@@ -50,7 +51,15 @@ from pty_harness import SYNC_END, Term, outside_sync  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 BIN = ROOT / "target" / "debug" / "widget-demo"  # target/release/widget-demo with --release (see main)
-NAMES = ["alpha", "beta", "gamma", "delta", "epsilon"]
+# The most tasks the demo runs at once, read from its source so that the burst scenario
+# follows it.
+MAX_TASKS = int(
+    re.search(
+        r"pub const MAX_TASKS: usize = (\d+);",
+        (ROOT / "apps" / "widget-demo" / "src" / "main.rs").read_text(),
+    ).group(1)
+)
+NAMES = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota"][:MAX_TASKS]
 # Sequences sought in emitted bytes (outside f-strings: Python 3.9 forbids backslashes).
 CPR = b"\x1b[6n"  # cursor position query
 SYNC_BEGIN_SEQ = b"\x1b[?2026h"
@@ -140,6 +149,8 @@ def scenario_burst(rows: int, cols: int, prefill: int) -> list:
 
     for name in NAMES:
         term.send("start %s\r" % name)
+    # A task row starts with its name.
+    task_row = re.compile(r"^(%s)\s" % "|".join(NAMES))
     # Continuous observation: at each stable state (between blocks), the structure is consistent.
     deadline = time.monotonic() + 16.0
     seen_heights = set()
@@ -157,7 +168,7 @@ def scenario_burst(rows: int, cols: int, prefill: int) -> list:
         # Command echoes (“> start alpha”) are in the logs: the prompt is the last one.
         p = pr[-1]
         top = p
-        while top > 0 and re.match(r"^(alpha|beta|gamma|delta|epsilon)\s", lines[top - 1]):
+        while top > 0 and task_row.match(lines[top - 1]):
             top -= 1
         seen_heights.add(p - top + 1)
         prompt_rows.add(p)
@@ -175,8 +186,9 @@ def scenario_burst(rows: int, cols: int, prefill: int) -> list:
     for name in NAMES:
         check.ok(text.count('task "%s" started' % name) == 1, "\"%s started\": not exactly once" % name)
         check.ok(text.count('task "%s" finished' % name) == 1, "\"%s finished\": not exactly once" % name)
-    check.ok(seen_heights >= {1, 6}, "heights seen %r: expected 1 to 6" % sorted(seen_heights))
-    check.ok(max(seen_heights, default=0) <= 6, "viewport taller than MAX_TASKS + 1")
+    tallest = MAX_TASKS + 1
+    check.ok(seen_heights >= {1, tallest}, "heights seen %r: expected 1 to %d" % (sorted(seen_heights), tallest))
+    check.ok(max(seen_heights, default=0) <= tallest, "viewport taller than MAX_TASKS + 1")
     final = prompt_row(term)
     if prefill >= rows:
         check.ok(final == rest_prompt, "prompt moved after the tasks")
