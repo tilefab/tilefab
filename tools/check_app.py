@@ -395,22 +395,34 @@ def scenario_signals(rows: int, cols: int, prefill: int) -> list:
     return check.failures
 
 
+# `help` commands typed at once in `scenario_stuck`: about 390 KiB of output, for 1.5 KiB
+# of input.
+HELPS_TO_FILL_THE_PTY = 300
+
+
 def scenario_stuck(rows: int, cols: int, prefill: int) -> list:
     """A second signal ends the application even when its UI loop is stuck.
 
-    Nothing reads the pty: the running tasks fill its buffer, the next write of the UI
-    loop blocks, and the first signal (SIGTERM) cannot be handled. The second one (SIGINT)
-    ends the process at once, raw mode disabled, with its own code: 130, where the cleanup
-    of the first one would give 143 once the pty is read again. (The process cannot finish
-    exiting before then: closing a pty waits for its unread output.)
+    Nothing reads the pty: the output fills its buffer, the next write of the UI loop
+    blocks, and the first signal (SIGTERM) cannot be handled. The second one (SIGINT) ends
+    the process at once, raw mode disabled, with its own code: 130, where the cleanup of the
+    first one would give 143 once the pty is read again. (The process cannot finish exiting
+    before then: closing a pty waits for its unread output.)
+
+    The output comes from `help`, typed many times (about 1.3 KiB each): the buffer of a
+    pty is a few KiB on macOS but about 68 KiB on Linux, which the tasks alone (2.6 KiB/s
+    for at most 10 s) may not fill. The typed text stays below the 4 KiB input buffer.
     """
     check = Check()
     term = launch(rows, cols, prefill)
-    term.send("start a\rstart b\rstart c\rstart d\rstart e\r")
+    term.send("help\r" * HELPS_TO_FILL_THE_PTY)
     time.sleep(3.0)  # no pump: the pty buffer fills
     os.kill(term.pid, signal.SIGTERM)
     time.sleep(1.0)
-    check.ok(term.alive(), "inconclusive: the UI loop was not stuck (the first SIGTERM quit)")
+    if not term.alive():
+        check.ok(False, "inconclusive: the UI loop was not stuck (the first SIGTERM quit)")
+        term.close()
+        return check.failures
     os.kill(term.pid, signal.SIGINT)
     time.sleep(1.5)  # still no pump: reading would unblock the loop
     code = term.wait_exit(3.0)

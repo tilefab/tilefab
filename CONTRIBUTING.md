@@ -99,7 +99,7 @@ The minimum supported Rust version is **1.88** (`rust-version` in the root `Carg
 
 The CI job `platforms` runs clippy and the tests on Windows and macOS: the code under `cfg(windows)` is compiled nowhere else. Locally, the Windows code can at least be linted: `rustup target add x86_64-pc-windows-msvc && cargo clippy --target x86_64-pc-windows-msvc --all-targets --all-features -- -D warnings`.
 
-End to end, in a pty with a terminal emulator (local only, not part of the CI; once: `python3 -m venv tools/.venv && tools/.venv/bin/pip install -r tools/requirements.txt`):
+End to end, in a pty with a terminal emulator. The CI job `pty` (Linux) runs these three scripts on every push; locally, once: `python3 -m venv tools/.venv && tools/.venv/bin/pip install --require-hashes --only-binary=:all: -r tools/requirements-pty.txt` (pyte and wcwidth, pinned with the hash of their wheel), then `tools/.venv/bin/pip install -r tools/requirements.txt` for the video analysis (`frames_check.py`):
 
 ```sh
 cargo build --examples && cargo build

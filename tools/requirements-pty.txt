@@ -1,0 +1,11 @@
+# Python packages of the pty scripts of tools/ (pty_harness.py, check_inline.py, check_app.py,
+# check_default_terminal.py), also installed by the `pty` job of .github/workflows/ci.yml.
+# Pinned, with the hash of their wheel: install with
+#   pip install --require-hashes --only-binary=:all: -r tools/requirements-pty.txt
+# To update one: change the version, then take the new hash from
+#   pip download --no-deps --only-binary=:all: pyte==<version> && pip hash pyte-*.whl
+# and run the scripts. wcwidth is pyte's only dependency.
+pyte==0.8.2 \
+    --hash=sha256:85db42a35798a5aafa96ac4d8da78b090b2c933248819157fc0e6f78876a0135
+wcwidth==0.9.4 \
+    --hash=sha256:901eace6d2dd25ebb917d0ce5db18e5c537e1504c905cf32f0d006c12098b05d
