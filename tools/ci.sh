@@ -7,7 +7,7 @@
 # Requires cargo-deny 0.21.0, the version the CI installs (`cargo install --locked cargo-deny@0.21.0`).
 # Cargo commands run with `--locked`: a Cargo.lock out of sync with Cargo.toml fails instead of
 # being updated silently.
-# The pty scripts of tools/ (check_inline.py, check_app.py) and the fuzzing itself are not run
+# The pty scripts of tools/ (check_inline.py, check_app.py, check_default_terminal.py) and the fuzzing itself are not run
 # here: see CONTRIBUTING.md.
 
 set -euo pipefail

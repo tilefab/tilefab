@@ -13,7 +13,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Once;
 
 use crate::backend::Backend;
-use crate::init::{TerminalGuard, install_panic_hook};
+use crate::init::{TerminalGuard, install_panic_hook, restore};
 use crate::terminal::Terminal;
 use crate::viewport::{TerminalOptions, Viewport};
 
@@ -108,14 +108,18 @@ pub fn init_with_options(options: TerminalOptions) -> io::Result<DefaultTerminal
 
 impl DefaultTerminal {
     /// Clear the viewport (writing the log lines still pending first) and restore the
-    /// terminal, reporting a write error that a drop would ignore.
+    /// terminal, reporting the errors that a drop would ignore.
     ///
     /// # Errors
     ///
-    /// Returns an error if writing to the terminal fails; the terminal is restored anyway.
+    /// Returns the first error among clearing the viewport and restoring the terminal
+    /// (leaving raw mode, showing the cursor…); the restoration is attempted anyway.
     pub fn finish(mut self) -> io::Result<()> {
         self.finished = true;
-        self.terminal.clear()
+        let cleared = self.terminal.clear();
+        // The guard restores again when dropped: harmless, `restore` is idempotent.
+        let restored = restore();
+        cleared.and(restored)
     }
 }
 
