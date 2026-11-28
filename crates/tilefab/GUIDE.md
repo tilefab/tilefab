@@ -263,6 +263,19 @@ For instance `N.W+:B*` is a bright white bold name on blue, `I20L.G/K+` a green 
 gray track. Without paints, the styles come from the entries (`Entry::styled`) and the
 `*_style` methods of the builder.
 
+The terminal decides how the colors look, and `X` and `X+` may look the same:
+
+- **Bold text.** Many terminals show bold text in a normal color with the bright version
+  (VS Code: `terminal.integrated.drawBoldTextInBrightColors`, on by default; iTerm2: *Brighten
+  bold text*). `N.B*` and `N.B+*` then look the same, and so do `N.B` and `N.B+` when the name
+  entry is already bold.
+- **Minimum contrast.** On a light background, VS Code (`terminal.integrated.minimumContrastRatio`)
+  and iTerm2 (*Minimum contrast*) darken pale colors: bright yellow becomes almost the normal
+  yellow.
+
+To get distinct colors in every terminal, use no bold on the component and prefer colors that
+contrast with the background.
+
 ```rust
 use tilefab::{BuildError, Color, Entry, LineWidget, Rank, Style, UpdateError};
 
