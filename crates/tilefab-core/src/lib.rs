@@ -1,4 +1,5 @@
-//! Common base: cells, buffer, styles, geometry, styled text and the widget traits.
+//! Common base: cells, buffer, styles, geometry, styled text, line wrapping and the widget
+//! traits.
 //!
 //! The other crates of the workspace (`tilefab-term`, `tilefab-widget`, `tilefab-input`)
 //! build on this one, which depends on none of them and does no input/output (no crossterm).
@@ -12,6 +13,7 @@ pub mod layout;
 pub mod style;
 pub mod text;
 pub mod widget;
+pub mod wrap;
 
 pub use buffer::{Buffer, Cell, grapheme_width, str_width};
 pub use layout::{Constraint, Direction, Layout, Margin, Position, Rect, Size};

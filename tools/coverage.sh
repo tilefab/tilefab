@@ -7,7 +7,7 @@
 #
 # Requires cargo-llvm-cov and llvm-tools (once:
 # `rustup component add llvm-tools-preview && cargo install --locked cargo-llvm-cov`)
-# and, unless --unit, the Python venv of tools/ (see README.md).
+# and, unless --unit, the Python venv of tools/ (see CONTRIBUTING.md).
 #
 # main.rs, headless.rs and the signal handling run only in the real binary: unit tests
 # alone under-report them. The binaries built here are instrumented and replace the usual

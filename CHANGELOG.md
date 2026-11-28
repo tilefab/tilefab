@@ -42,6 +42,25 @@ break the API).
 
 ### Added
 
+- `tilefab::init_inline(height)`, `init_fullscreen()` and `init_with_options(options)` set the
+  terminal up in one call: they check that stdin and stdout are terminals (an
+  `io::ErrorKind::Unsupported` error otherwise), install the restoring panic hook once, enable
+  raw mode (and the alternate screen) and create the terminal on a buffered stdout. They return
+  a `DefaultTerminal`, which dereferences to `Terminal` and, when dropped, clears the viewport
+  and restores the terminal (not during a panic); `finish` does the same and reports errors.
+- `Terminal::insert_line` and `insert_lines` print text lines above the inline viewport,
+  wrapped at the screen width (at most `MAX_PENDING_LINES` rows per call, the newest kept).
+- `tilefab-core`: module `wrap` (`wrap_lines`, `wrap_lines_into`, `render_rows`, `TOO_WIDE`),
+  the wrapping of styled lines that the demo had on its own, re-exported as `tilefab::wrap`.
+- `tilefab::poll_key(timeout)` waits for a key press (releases skipped, other events dropped),
+  and `is_ctrl_c(&key)` recognizes Ctrl+C, which raw mode delivers as a key.
+- Documentation: `crates/tilefab/QUICKSTART.md` (a first program, step by step) and
+  `crates/tilefab/GUIDE.md` (every feature, with examples), shown on docs.rs as the
+  `tilefab::quickstart` and `tilefab::guide` modules and compiled as doctests. The `tilefab`
+  README shows the quickstart program; the demo manual moves to `apps/widget-demo/README.md`,
+  the architecture and the checks to `CONTRIBUTING.md`.
+- `apps/quickstart`: the quickstart program, never published; its test checks that the
+  quickstart and both READMEs show its code verbatim.
 - `tilefab-widget`: the look of the illustration is chosen in the composition, with a letter
   after its size: `B` bar `█░`, `L` line `━─`, `D` dots `●·`, `S` squares `■□`, `O` circles
   `●○`, `R` diamonds `◆◇`, `G` segments `▰▱`, `H` shaded blocks `▓░`, `V` vertical bars `┃│`,

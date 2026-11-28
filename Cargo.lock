@@ -407,6 +407,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "quickstart"
+version = "0.1.0"
+dependencies = [
+ "tilefab",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -588,6 +595,8 @@ dependencies = [
  "tilefab-input",
  "tilefab-term",
  "tilefab-widget",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

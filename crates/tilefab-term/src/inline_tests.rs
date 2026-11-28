@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 
 use super::sim::{BlockStats, Sim};
-use super::{Backend, ScrollMode, Terminal, TerminalOptions, Viewport};
+use super::{Backend, MAX_PENDING_LINES, ScrollMode, Terminal, TerminalOptions, Viewport};
 use tilefab_core::convert::saturating_u16;
 use tilefab_core::{Position, Rect, Size, Style};
 
@@ -936,4 +936,42 @@ proptest::proptest! {
     ) {
         run_scrollback(Sim::xterm(14, 9), mode, prefill, &ops)?;
     }
+}
+
+// --- insert_lines ---------------------------------------------------------------------------
+
+#[test]
+fn insert_lines_wraps_long_lines_at_the_screen_width() {
+    let mut rig = Rig::new(0, 1, ScrollMode::default());
+    let long = "abcdefghij".repeat(4);
+    rig.term.insert_lines([long.as_str(), "short"]);
+    rig.term.insert_line(String::from("last"));
+    rig.commit(&[], &["> "]);
+    let screen = rig.screen();
+    let rows: Vec<&str> = screen[..4].iter().map(|row| row.trim_end()).collect();
+    assert_eq!(rows, [&long[..30], &long[30..], "short", "last"]);
+    assert_eq!(screen[4].trim_end(), ">");
+}
+
+#[test]
+fn insert_lines_keeps_the_newest_rows_of_a_huge_burst() {
+    let mut rig = Rig::new(0, 1, ScrollMode::default());
+    let lines: Vec<String> = (0..MAX_PENDING_LINES + 5)
+        .map(|i| format!("#{i}"))
+        .collect();
+    rig.term.insert_lines(lines.iter().map(String::as_str));
+    rig.commit(&[], &["> "]);
+    let screen = rig.screen();
+    let last = format!("#{}", MAX_PENDING_LINES + 4);
+    assert_eq!(screen[H as usize - 2].trim_end(), last);
+}
+
+#[test]
+fn insert_lines_does_nothing_in_fullscreen() {
+    let backend = Backend::with_fixed(Vec::new(), Size::new(W, H), Position::new(0, 0));
+    let mut term = Terminal::new(backend).unwrap();
+    term.insert_lines(["ignored"]);
+    term.draw(|_| {}).unwrap();
+    let bytes = String::from_utf8_lossy(term.backend().writer());
+    assert!(!bytes.contains("ignored"));
 }

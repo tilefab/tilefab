@@ -8,7 +8,7 @@
 # Cargo commands run with `--locked`: a Cargo.lock out of sync with Cargo.toml fails instead of
 # being updated silently.
 # The pty scripts of tools/ (check_inline.py, check_app.py) and the fuzzing itself are not run
-# here: see README.md.
+# here: see CONTRIBUTING.md.
 
 set -euo pipefail
 

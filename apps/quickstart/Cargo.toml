@@ -1,0 +1,17 @@
+[package]
+name = "quickstart"
+description = "The smallest tilefab program: a progress bar at the bottom of the terminal, log lines above it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Never published: it is the program of crates/tilefab/QUICKSTART.md, to read and to copy.
+publish = false
+
+[dependencies]
+# In a project of your own: `tilefab = "0.1"`.
+tilefab.workspace = true
+
+[lints]
+workspace = true

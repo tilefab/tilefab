@@ -37,6 +37,9 @@ tilefab-widget = { workspace = true, optional = true }
 
 [dev-dependencies]
 stats_alloc.workspace = true
+# The `tracing` example of GUIDE.md, compiled as a doctest.
+tracing.workspace = true
+tracing-subscriber.workspace = true
 # The allocation tests and the `cell_alloc` example draw on a test backend.
 tilefab-term = { workspace = true, features = ["testing"] }
 

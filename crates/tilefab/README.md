@@ -1,101 +1,99 @@
 # tilefab
 
-A small TUI library for Rust, built directly on [crossterm](https://crates.io/crates/crossterm), whose
-specialty is the **inline viewport**: a fixed area at the bottom of the normal screen (no alternate
-screen) whose height can change from one frame to the next, while log lines scroll above it and stay
-in the terminal history.
+A small terminal UI library for Rust, built on [crossterm](https://crates.io/crates/crossterm),
+for programs that show **live status below their output**: progress bars, a status line or a
+prompt stay at the bottom of the terminal, while log lines scroll above them and remain in the
+terminal history. No alternate screen, no flicker.
 
-- **Single frame commit**: inserted lines, the new viewport height and the redraw are written in one
-  synchronized update; the terminal never shows an intermediate state, and the last viewport line
-  (typically a prompt) does not move when the height changes.
-- **Double buffering**: only the cells that changed are written.
-- **Line widget** (feature `widget`): `LineWidget`, one line composed from a short description
-  (`"B0 T2 B1 B2 S B2 L"`: barriers, time, symbol, log…) and laid out again at every draw, shrinking
-  then dropping components when the window is narrow.
-- **Line editor** (feature `input`): `LineEditor`, readline-style editing with history, hints,
-  completion and horizontal scrolling.
-- No `unsafe` code.
-
-Key events are crossterm's: use the re-exported `tilefab::crossterm` rather than a separate
-`crossterm` dependency, so that both versions always match.
-
-Options and configuration types (`TerminalOptions`, `EditorConfig`, `EditorStyles`, `Candidate`)
-and the enums that will grow (`EditorCommand`, `EditorEvent`, `BuildError`, `UpdateError`, `ClearType`) are
-`#[non_exhaustive]`: build them from `default()` with the chained setters, and give a `match` a
-`_` arm, so that new options and variants can come in minor versions.
+```text
+[INFO] 0% downloaded
+[INFO] 10% downloaded
+[INFO] 20% downloaded
+download ████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  28%
+```
 
 ## Example
 
-```rust,no_run
-use std::io::{self, BufWriter};
-use std::{thread, time::Duration};
+```sh
+cargo add tilefab
+```
 
-use tilefab::{
-    Backend, Entry, LineWidget, Style, Terminal, TerminalGuard, TerminalOptions, Viewport,
-};
+```rust,no_run
+use std::time::Duration;
+
+use tilefab::crossterm::event::KeyCode;
+use tilefab::{Entry, LineWidget, is_ctrl_c, poll_key};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tilefab::install_panic_hook();
-    // Raw mode only: no alternate screen, the log lines stay in the scrollback.
-    let _guard = TerminalGuard::raw()?;
-    let mut terminal = Terminal::with_options(
-        Backend::new(BufWriter::new(io::stdout())),
-        TerminalOptions::default().viewport(Viewport::Inline(1)),
-    )?;
+    // 1. Set the terminal up: a viewport of one row at the bottom of the screen.
+    let mut terminal = tilefab::init_inline(1)?;
 
-    // "build" then the progress bar and the percentage: `B0 I20 B1 P`.
-    let mut widget = LineWidget::builder("B0 I20 B1 P")
-        .barriers([Entry::new("build "), Entry::new(" ")])
-        .illustration(Entry::new("█"), Entry::new("░"))
+    // 2. The row: a name, a space, a progress bar using the free columns, a space, a percentage.
+    let mut bar = LineWidget::builder("N B0 I B0 P")
+        .names([Entry::new("download")])
+        .barriers([Entry::new(" ")])
         .build()?;
 
-    for percent in (0..=100).step_by(10) {
-        // Queued above the viewport, written by the next `draw` in the same frame.
-        terminal.insert_before(1, |buf| {
-            buf.set_string(0, 0, &format!("[INFO] step {percent}%"), Style::default());
-        });
-        widget.set_progress(f64::from(percent))?;
-        terminal.draw(|frame| frame.render_widget(&widget, frame.area()))?;
-        thread::sleep(Duration::from_millis(200));
+    for percent in 0..=100 {
+        // 3. A log line every 10 %: printed above the viewport, it stays in the history.
+        if percent % 10 == 0 {
+            terminal.insert_line(format!("[INFO] {percent}% downloaded"));
+        }
+
+        // 4. Draw a frame: the queued log lines, then the viewport.
+        bar.set_progress(f64::from(percent))?;
+        terminal.draw(|frame| frame.render_widget(&bar, frame.area()))?;
+
+        // 5. Wait a little, and quit early on `q` or Ctrl+C.
+        if let Some(key) = poll_key(Duration::from_millis(50))?
+            && (key.code == KeyCode::Char('q') || is_ctrl_c(&key))
+        {
+            break;
+        }
     }
 
-    terminal.clear()?;
+    // 6. When `terminal` is dropped, the viewport is cleared and the terminal restored.
     Ok(())
 }
 ```
 
-## See it running
-
-- The demo application (tasks drawn with line widgets above a prompt), not on crates.io yet:
-  `cargo install --path apps/widget-demo` from a `git clone`, then run `widget-demo`.
-- The examples of the repository, after a `git clone`:
-  `cargo run --example inline` (variable-height viewport) and `cargo run --example fullscreen`.
+`init_inline` sets the terminal up and restores it on drop, `insert_line` prints above the
+viewport, `draw` writes the frame. The [quickstart](https://github.com/tilefab/tilefab/blob/main/crates/tilefab/QUICKSTART.md)
+explains each line.
 
 ## Features
 
+- **Inline viewport** whose height can change at every frame, anchored at the bottom of the
+  screen; printed lines are wrapped, never cut, and reach the terminal history.
+- **One write per frame**: the printed lines, the new height and the redraw go out in a single
+  synchronized update, with only the cells that changed.
+- **`LineWidget`**: a status row described by a short composition (`"N B0 I B0 P"`: name, bar,
+  percentage), laid out again at every frame to fit the terminal width.
+- **`LineEditor`**: a readline-style prompt with history, hints and completion.
+- Fullscreen mode too, a test backend, and no `unsafe` code.
+
+## Documentation
+
+- [Quickstart](https://github.com/tilefab/tilefab/blob/main/crates/tilefab/QUICKSTART.md): a first program, step by step.
+- [Guide](https://github.com/tilefab/tilefab/blob/main/crates/tilefab/GUIDE.md): every feature, with examples: several rows,
+  keyboard and threads, the prompt, logs from `tracing`, running in a pipe, tests.
+- The API reference, on docs.rs.
+- The repository's [`widget-demo`](https://github.com/tilefab/tilefab/blob/main/apps/widget-demo/README.md) application, a
+  complete program built on tilefab.
+
+## Cargo features
+
 | Feature | Default | Adds |
 |---|---|---|
-| `widget` | on | the widget library (`tilefab-widget`) |
-| `input` | on | the prompt line editor (`tilefab-input`) |
+| `widget` | on | `LineWidget` |
+| `input` | on | `LineEditor` |
+| `testing` | off | a test backend, for dev-dependencies |
 
-For the terminal layer only: `tilefab = { version = "0.1", default-features = false }`.
+`tilefab` re-exports crossterm as `tilefab::crossterm`: use it for key events rather than a
+separate dependency, so that both versions match. The `tilefab-*` crates are its internal
+layers: depend on `tilefab` only.
 
-## Crates
-
-`tilefab` is the crate to depend on: it re-exports everything under `tilefab::…`. It is a façade over
-`tilefab-core`, `tilefab-term`, `tilefab-widget` and `tilefab-input`, which are published only because
-it needs them; their versions always move together.
-
-| Layer | Re-exported here |
-|---|---|
-| `tilefab-core` | cells, buffer, styles, geometry and layout, styled text, the `Widget` traits; module `convert` |
-| `tilefab-term` | `Backend`, `Terminal`, `Frame`, `TerminalGuard`, panic hooks; module `viewport` (placement rule of the inline viewport) |
-| `tilefab-widget` (feature `widget`) | `LineWidget`, its builder, `Entry`, `WallTime` and their errors |
-| `tilefab-input` (feature `input`) | `LineEditor` and its configuration; its `Command` is re-exported as `EditorCommand` |
-
-## Minimum supported Rust version
-
-Rust 1.88.
+Minimum supported Rust version: 1.88.
 
 ## License
 

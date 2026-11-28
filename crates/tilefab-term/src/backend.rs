@@ -303,8 +303,9 @@ impl<W: Write> Backend<W> {
     ///
     /// On a real terminal, this is a **query**: write `ESC[6n` and the terminal replies with
     /// `ESC[row;columnR` on input. Crossterm reads this reply using the same reader as
-    /// keystrokes, so no other thread should be blocked in `event::read()` (see README);
-    /// the query times out after 2 seconds if the terminal does not reply.
+    /// keystrokes, so no other thread should be blocked in `event::read()` (see the guide of
+    /// the `tilefab` crate, "Why `poll` before `read`"); the query times out after 2 seconds if
+    /// the terminal does not reply.
     ///
     /// # Errors
     ///
