@@ -52,8 +52,8 @@ break the API).
   wrapped at the screen width (at most `MAX_PENDING_LINES` rows per call, the newest kept).
 - `tilefab-core`: module `wrap` (`wrap_lines`, `wrap_lines_into`, `render_rows`, `TOO_WIDE`),
   the wrapping of styled lines that the demo had on its own, re-exported as `tilefab::wrap`.
-- `tilefab::poll_key(timeout)` waits for a key press (releases skipped, other events dropped),
-  and `is_ctrl_c(&key)` recognizes Ctrl+C, which raw mode delivers as a key.
+- `tilefab::poll_key(timeout)` waits for a key press (releases skipped, other events dropped;
+  `Duration::MAX` waits without a limit, instead of panicking on the clock overflow), and `is_ctrl_c(&key)` recognizes Ctrl+C, which raw mode delivers as a key.
 - Documentation: `crates/tilefab/QUICKSTART.md` (a first program, step by step) and
   `crates/tilefab/GUIDE.md` (every feature, with examples), shown on docs.rs as the
   `tilefab::quickstart` and `tilefab::guide` modules and compiled as doctests. The `tilefab`
