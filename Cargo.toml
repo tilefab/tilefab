@@ -42,7 +42,11 @@ proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 # Random task durations of the demo: no dependencies of its own.
 fastrand = "2.5.0"
 # Local date and time of the demo's line widgets (`tilefab-widget` has no clock): portable
-# time-zone support on macOS, Linux and Windows.
+# time-zone support on macOS, Linux and Windows. Cargo.lock lists two proc-macro crates under
+# it that are never compiled: `jiff-static` and, through `serde_core`, `serde_derive`. Both
+# are declared under `cfg(any())`, a condition never true, only to keep their versions in
+# step with their parent crate (`jiff-static` is also the optional `static-tz` feature,
+# not enabled here).
 jiff = "1.0.3"
 # Unix flags of the history file (`O_NONBLOCK`, `O_NOFOLLOW`): only constants are used, no
 # `unsafe`. Already in the dependency graph through crossterm.
