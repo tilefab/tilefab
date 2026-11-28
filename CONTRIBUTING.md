@@ -72,7 +72,7 @@ Notable choices:
 
 ## Tests and checks
 
-`tools/ci.sh` runs all the checks below, in the same way as the CI workflow (`.github/workflows/ci.yml`), with `--locked` so that a `Cargo.lock` out of sync with `Cargo.toml` fails; it requires `cargo-deny` 0.21.0, the version the CI installs:
+`tools/ci.sh` runs all the checks below, in the same way as the CI workflow (`.github/workflows/ci.yml`), with `--locked` so that a `Cargo.lock` out of sync with `Cargo.toml` fails; it requires `cargo-deny` 0.21.0, the version the CI installs, and, once a release is tagged, `cargo-semver-checks` 0.51.0:
 
 ```sh
 cargo fmt --check
@@ -83,7 +83,11 @@ cargo test --profile ci       # release build with overflow checks: the debug-on
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 cargo deny check                # advisories, bans, licenses (see deny.toml), sources
 cargo deny --manifest-path fuzz/Cargo.toml check   # the same for the fuzz crate (own Cargo.lock)
+cargo package -p tilefab-core … -p tilefab          # each library crate built from its archive, as `cargo publish` will
+cargo semver-checks -p tilefab-core … --baseline-rev <last v* tag>   # no breaking change without a new version
 ```
+
+The packaging check runs on a copy of the workspace where the root `publish = false` becomes `publish = true`: with `publish = false`, cargo looks for the unpublished workspace crates on crates.io. It needs the network (the crates.io index). `cargo semver-checks` compares each library crate with the newest `v*` tag, and is skipped as long as there is none: before the first release, breaking changes go to the CHANGELOG (“Changed (breaking)”) only. A new toolchain may need a newer `cargo-semver-checks` (rustdoc JSON format): update its version in `tools/ci.sh` and `.github/workflows/ci.yml` with `rust-toolchain.toml`.
 
 The workflow `.github/workflows/advisories.yml` checks the RustSec advisories again every Monday, for both lock files, so that an advisory published on a dependency already locked does not wait for the next push; it can also be started by hand from the Actions tab.
 

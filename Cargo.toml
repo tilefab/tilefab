@@ -21,6 +21,7 @@ categories = ["command-line-interface"]
 # `cargo install --path apps/widget-demo` of the READMEs back into `cargo install widget-demo`.
 # Every crate is published (crates.io needs the dependencies of `tilefab` in the registry),
 # but only `tilefab` is the public entry point; the `tilefab-*` crates say so in their README.
+# The packaging step of tools/ci.sh rewrites this exact line in a copy: remove that copy too.
 publish = false
 
 [workspace.dependencies]
