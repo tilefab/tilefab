@@ -75,7 +75,8 @@ impl From<(u16, u16)> for Size {
     }
 }
 
-/// Inner margin: `horizontal` cells on the left **and** right, `vertical` on the top **and** bottom.
+/// Inner margin: `horizontal` cells on the left **and** right, `vertical` on the top **and**
+/// bottom.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Margin {
     /// Cells removed on the left and right.

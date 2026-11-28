@@ -227,7 +227,8 @@ impl<W: Write> Terminal<W> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the screen size cannot be read, the cursor position query fails (inline mode), or writing to the terminal fails.
+    /// Returns an error if the screen size cannot be read, the cursor position query fails
+    /// (inline mode), or writing to the terminal fails.
     pub fn with_options(mut backend: Backend<W>, options: TerminalOptions) -> io::Result<Self> {
         let screen = capped(backend.size()?, options.viewport);
         match options.viewport {
@@ -654,8 +655,9 @@ impl<W: Write> Terminal<W> {
     }
 
     /// Commit `rows` in chunks of `chunk_cells` cells, the last one with `frame`, already
-    /// rendered in `next` (`None`: not rendered, nothing to draw), then place the cursor. `applied` counts the cells of the chunks committed in full,
-    /// for the caller to queue the others again after an error.
+    /// rendered in `next` (`None`: not rendered, nothing to draw), then place the cursor.
+    /// `applied` counts the cells of the chunks committed in full, for the caller to queue
+    /// the others again after an error.
     fn commit_rows(
         &mut self,
         rows: &[Cell],

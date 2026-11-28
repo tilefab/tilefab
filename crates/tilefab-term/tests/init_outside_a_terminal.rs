@@ -37,11 +37,12 @@ fn init_refuses_a_redirected_stdin_or_stdout() {
         "child failed: {stdout:?} {:?}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let (_, after) = stdout
-        .split_once(DONE)
-        .unwrap_or_else(|| panic!("the child did not finish: {stdout:?}"));
     assert!(
-        !after.contains('\x1b') && !stdout.contains('\x1b'),
+        stdout.contains(DONE),
+        "the child did not finish: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains('\x1b'),
         "escape sequence written: {stdout:?}"
     );
 }

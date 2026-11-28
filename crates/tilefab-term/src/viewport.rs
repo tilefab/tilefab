@@ -86,7 +86,9 @@ pub struct TerminalOptions {
 /// ```
 /// use tilefab_term::{ScrollMode, TerminalOptions, Viewport};
 ///
-/// let options = TerminalOptions::default().viewport(Viewport::Inline(3)).scroll_mode(ScrollMode::Region);
+/// let options = TerminalOptions::default()
+///     .viewport(Viewport::Inline(3))
+///     .scroll_mode(ScrollMode::Region);
 /// assert_eq!(options.viewport, Viewport::Inline(3));
 /// ```
 impl TerminalOptions {
