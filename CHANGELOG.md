@@ -53,8 +53,8 @@ break the API).
   background color, `*` for bold, at least one of them and in this order (`B1.R`, `N.W+:B*`,
   `P.*`). Colors `K` `R` `G` `Y` `B` `M` `C` `W`, followed by `+` for the bright version; `I`
   and `V` take a second part after `/`, for their todo cells and their units (`I20L.G/K+`,
-  `V5U/.W/K+`). It is resolved at construction: drawing stays allocation-free. New `TokenProblem::BadPaint` and
-  `TokenProblem::SecondPart`.
+  `V5U/.W/K+`). It is resolved at construction: drawing stays allocation-free. New
+  `TokenProblem::BadPaint` and `TokenProblem::SecondPart`.
 - `tilefab-widget`: `LineWidget::value_shape` returns the shape of `V` (new type
   `ValueShape`: `size`, `unit`, `total`), the arguments `set_value` accepts, without parsing
   the composition again.
@@ -66,6 +66,15 @@ break the API).
   rule; they all use this one now.
 - `tilefab-input`: `History::file` returns the file the history appends to, `None` when it is
   in memory only.
+- `tilefab-core`: `Buffer::normalize_wide` repairs, in place and without allocating, the
+  pairing of wide characters that cells changed in place may break (a head without its
+  continuation becomes a space, as an orphan continuation does). `Terminal` calls it on every
+  frame.
+- `tilefab-term` (and `tilefab`): `MAX_SCREEN_WIDTH` and `MAX_SCREEN_HEIGHT` (2048 × 1024),
+  the most cells a `Terminal` draws (see "Fixed").
+- `tilefab-term`: the `testing` feature (also on `tilefab`), for the hooks of tests: a backend
+  with a fixed size and cursor, and write access to the stream and the backend (see "Changed
+  (breaking)").
 
 ### Changed
 
@@ -206,6 +215,9 @@ break the API).
   `HOME`, often unset there, left the demo without a history file, and `XDG_STATE_HOME` and
   `HOME` changed with the shell.
 - On Windows, closing the console, logging off or shutting down quit through the clean-up.
+- `tools/dist.sh` builds a demo binary to hand to someone else: a release build whose paths
+  (the panic locations of the dependencies, under the Cargo home) no longer hold the home
+  directory, and so the user name, of the machine that built it; the script checks it.
 
 ## 0.1.0 (not released yet)
 
