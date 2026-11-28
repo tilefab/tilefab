@@ -10,6 +10,19 @@
 // The entire public API is documented; the lint catches omissions.
 #![warn(missing_docs)]
 
+// The quickstart (QUICKSTART.md) and the guide (GUIDE.md), shown on docs.rs as two empty
+// modules: their examples are compiled and run by `cargo test` as doctests, so that the
+// documents cannot drift from the API. They use both optional features.
+#[cfg(all(any(doc, doctest), feature = "widget", feature = "input"))]
+pub mod quickstart {
+    #![doc = include_str!("../QUICKSTART.md")]
+}
+
+#[cfg(all(any(doc, doctest), feature = "widget", feature = "input"))]
+pub mod guide {
+    #![doc = include_str!("../GUIDE.md")]
+}
+
 /// The crossterm version tilefab is built on, for key events (`LineEditor::handle_key`,
 /// `KeyBinding`) and terminal queries: use it instead of a separate `crossterm` dependency,
 /// so that both always match.
@@ -18,7 +31,7 @@ pub use crossterm;
 pub use tilefab_core::{
     Alignment, Buffer, Cell, Color, Constraint, Direction, Layout, Line, Margin, Modifier,
     Position, Rect, Size, Span, StatefulWidget, Style, Stylize, Text, Widget, convert,
-    grapheme_width, str_width,
+    grapheme_width, str_width, wrap,
 };
 #[cfg(feature = "input")]
 pub use tilefab_input::{
@@ -26,9 +39,10 @@ pub use tilefab_input::{
     EditorStyles, Hinter, History, HistoryHinter, KeyBinding, Keymap, LineEditor,
 };
 pub use tilefab_term::{
-    Backend, ClearType, Frame, MAX_PENDING_LINES, MAX_SCREEN_HEIGHT, MAX_SCREEN_WIDTH, ScrollMode,
-    Terminal, TerminalGuard, TerminalOptions, Viewport, install_fatal_panic_hook,
-    install_panic_hook, restore, viewport,
+    Backend, ClearType, DefaultTerminal, Frame, MAX_PENDING_LINES, MAX_SCREEN_HEIGHT,
+    MAX_SCREEN_WIDTH, ScrollMode, Terminal, TerminalGuard, TerminalOptions, Viewport,
+    init_fullscreen, init_inline, init_with_options, install_fatal_panic_hook, install_panic_hook,
+    is_ctrl_c, poll_key, restore, viewport,
 };
 #[cfg(feature = "widget")]
 pub use tilefab_widget::{

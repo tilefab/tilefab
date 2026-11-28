@@ -10,7 +10,6 @@ mod tasks;
 #[cfg(test)]
 mod test_dir;
 mod ui;
-mod wrap;
 
 use std::io::{BufWriter, IsTerminal, Stdout, Write, stdin, stdout};
 use std::path::PathBuf;
@@ -22,7 +21,7 @@ use tilefab::crossterm::event::{self, EnableBracketedPaste, Event};
 use tilefab::crossterm::execute;
 use tilefab::{
     Backend, Line, MAX_PENDING_LINES, ScrollMode, Terminal, TerminalGuard, TerminalOptions,
-    Viewport, install_fatal_panic_hook,
+    Viewport, install_fatal_panic_hook, wrap,
 };
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -417,7 +416,7 @@ fn queue_output<W: Write>(terminal: &mut Terminal<W>, app: &mut App) {
     let width = terminal.area().width;
     // `drain` and a kept list of rows: both lists keep their capacity from one burst to the
     // next (only the lines themselves are new).
-    wrap::wrap_into(app.output.drain(..), width, &mut app.wrapped);
+    wrap::wrap_lines_into(app.output.drain(..), width, &mut app.wrapped);
     let rows = &app.wrapped;
     // The terminal keeps at most MAX_PENDING_LINES rows of one insert, the first ones: pass
     // the newest (a narrow terminal can wrap the kept text into many more rows).
@@ -429,7 +428,7 @@ fn queue_output<W: Write>(terminal: &mut Terminal<W>, app: &mut App) {
         );
     }
     let height = tilefab::convert::saturating_u16(newest.len());
-    terminal.insert_before(height, |buf| wrap::render(newest, buf));
+    terminal.insert_before(height, |buf| wrap::render_rows(newest, buf));
     app.wrapped.clear();
 }
 

@@ -66,7 +66,9 @@ use super::viewport::{CommitPlan, ScrollMode, TerminalOptions, Viewport, plan_co
 use tilefab_core::buffer::{Buffer, Cell};
 use tilefab_core::convert::saturating_u16;
 use tilefab_core::layout::{Position, Rect, Size};
+use tilefab_core::text::Line;
 use tilefab_core::widget::{StatefulWidget, Widget};
+use tilefab_core::wrap::{render_rows, wrap_lines};
 
 /// Maximum number of inserted lines kept pending until a `draw` can show them (viewport
 /// filling the screen, screen with no rows or columns, or simply no `draw` yet): beyond that,
@@ -330,6 +332,45 @@ impl<W: Write> Terminal<W> {
         if matches!(self.viewport, Viewport::Inline(_)) {
             self.wanted_height = height.clamp(1, max_viewport_height(self.screen));
         }
+    }
+
+    /// Queue one text line for insertion above the inline viewport, wrapped at the screen
+    /// width: the simple way to print a log line. See [`Terminal::insert_lines`].
+    ///
+    /// ```no_run
+    /// # fn f(terminal: &mut tilefab_term::Terminal<std::io::Stdout>) {
+    /// terminal.insert_line("[INFO] build started");
+    /// # }
+    /// ```
+    pub fn insert_line<'a>(&mut self, line: impl Into<Line<'a>>) {
+        self.insert_lines([line]);
+    }
+
+    /// Queue text lines for insertion above the inline viewport. Each one (a `&str`, a
+    /// `String`, a [`Span`](tilefab_core::Span) or a styled [`Line`]) is wrapped at the screen
+    /// width known at the last `draw` (see [`wrap_lines`]), so that a long line is never cut.
+    /// Writes nothing: applied on the next `draw`, in the same frame as the height change.
+    ///
+    /// At most [`MAX_PENDING_LINES`] rows are kept from one call: when the lines wrap into more,
+    /// the newest rows are kept, with a warning. No effect in fullscreen mode; while the screen
+    /// has no columns (a pty without a size), the lines are dropped. For full control over the
+    /// rows (reusing their allocations, keeping lines while the width is 0), use
+    /// [`wrap_lines_into`](tilefab_core::wrap::wrap_lines_into) and
+    /// [`Terminal::insert_before`].
+    pub fn insert_lines<'a, L: Into<Line<'a>>>(&mut self, lines: impl IntoIterator<Item = L>) {
+        let width = self.screen.width;
+        if !matches!(self.viewport, Viewport::Inline(_)) || width == 0 {
+            return;
+        }
+        let rows = wrap_lines(lines.into_iter().map(Into::into), width);
+        let newest = &rows[rows.len().saturating_sub(MAX_PENDING_LINES)..];
+        if newest.len() < rows.len() {
+            tracing::warn!(
+                "insert_lines: {} wrapped row(s) dropped, at most {MAX_PENDING_LINES} are kept",
+                rows.len() - newest.len()
+            );
+        }
+        self.insert_before(saturating_u16(newest.len()), |buf| render_rows(newest, buf));
     }
 
     /// Queue lines for insertion above the inline viewport. `render` fills a buffer of

@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn a_paint_is_laid_over_the_styles_of_the_demo() {
-        // The example of the README.
+        // The example of apps/widget-demo/README.md.
         let composition = "N.W+:B* B0 B4.Y T2.Y B5.Y B0 IL.G/K+ B0 P.G* B0 L.C";
         assert_eq!(check(composition), Ok(Vec::new()));
         let mut widget = build(composition, "build", 5).unwrap();

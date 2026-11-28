@@ -1,4 +1,4 @@
-# Weekly fuzzing: each target of fuzz/ (see README.md, "Fuzzing") runs for 60 seconds, so
+# Weekly fuzzing: each target of fuzz/ (see CONTRIBUTING.md, "Fuzzing") runs for 60 seconds, so
 # that an invariant broken by a change shows up even though tools/ci.sh only builds and
 # lints the targets. A crash fails the job and keeps the input that caused it as an artifact
 # of the run, to replay locally (`cargo +nightly fuzz run <target> <file>`). The corpus

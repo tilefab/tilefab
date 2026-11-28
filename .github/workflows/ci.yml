@@ -1,7 +1,7 @@
 # Continuous integration: runs tools/ci.sh (fmt, clippy, tests, doc, cargo-deny) with the
 # toolchain pinned in rust-toolchain.toml, then builds and tests with the MSRV (job `msrv`),
 # and on Windows and macOS (job `platforms`: the code under `cfg(windows)` or `cfg(unix)`).
-# The pty scripts of tools/ are kept local (see README.md).
+# The pty scripts of tools/ are kept local (see CONTRIBUTING.md).
 #
 # Actions are pinned by commit SHA, not by tag (a tag can be moved to other code); the
 # comment gives the version (a format Dependabot understands, if it is enabled). Cargo
