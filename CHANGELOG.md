@@ -106,6 +106,10 @@ break the API).
 
 ### Fixed
 
+- `tilefab-core`: `Layout::split` was quadratic beyond 8 proportional or `Fill` constraints
+  (1.1 ms for 1000 `Fill(1)`); it now sorts them, in 13 µs, with the same sizes.
+- `tilefab-input`: loading the history listed every line read (up to 128 MiB for a 16 MiB file
+  of one-character lines); it now walks them without a list.
 - `tilefab-term`: `DefaultTerminal::finish` reported only the error of clearing the viewport;
   it now reports the error of restoring the terminal too (raw mode, cursor…).
 - `tilefab-term`: `Terminal::draw` wrote the scroll for the inserted lines, or after a resize

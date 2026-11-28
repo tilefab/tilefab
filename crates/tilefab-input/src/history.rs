@@ -251,14 +251,15 @@ fn load(path: &Path, capacity: usize, max_bytes: u64) -> io::Result<Loaded> {
 
 /// The valid lines of `text` (deduplicated, the latest kept) after the entries `older`,
 /// then the newest `capacity` of them, oldest first; and the number of non-empty lines of
-/// `text`. Walks the lines from the newest, copying only the kept ones.
+/// `text`. Walks the lines from the newest, copying only the kept ones, without a list of
+/// all of them (16 MiB of one-character lines would make one of 128 MiB).
 fn newest_entries(text: &[u8], capacity: usize, older: Vec<String>) -> (Vec<String>, usize) {
-    let lines: Vec<&[u8]> = text
-        .split(|&b| b == b'\n')
-        .map(|raw| raw.strip_suffix(b"\r").unwrap_or(raw))
-        .filter(|raw| !raw.is_empty())
-        .collect();
-    let valid = lines.iter().rev().filter_map(|raw| {
+    let lines = || {
+        text.split(|&b| b == b'\n')
+            .map(|raw| raw.strip_suffix(b"\r").unwrap_or(raw))
+            .filter(|raw| !raw.is_empty())
+    };
+    let valid = lines().rev().filter_map(|raw| {
         std::str::from_utf8(raw)
             .ok()
             .filter(|line| !line.chars().any(char::is_control) && !line.trim().is_empty())
@@ -271,7 +272,7 @@ fn newest_entries(text: &[u8], capacity: usize, older: Vec<String>) -> (Vec<Stri
         .take(capacity)
         .collect();
     kept.reverse();
-    (kept, lines.len())
+    (kept, lines().count())
 }
 
 /// On Unix, make an existing history file private to the user (mode `0o600`) if others can

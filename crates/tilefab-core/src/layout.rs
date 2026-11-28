@@ -459,7 +459,7 @@ impl Layout {
 
 /// Write into `sizes` (one per constraint) the size in cells of each constraint for
 /// `available` cells. See the module header. The sum of sizes never exceeds `available`.
-/// Allocates nothing.
+/// Allocates nothing up to [`INLINE`] constraints.
 fn solve(constraints: &[Constraint], available: u16, sizes: &mut [u16]) {
     let avail = u64::from(available);
 
@@ -537,9 +537,10 @@ fn exact_f64(n: u64) -> f64 {
 /// one more to the `missing` shares with the largest fractional parts (ties favor the first).
 /// `give(i, share)` receives the rounded share of each element taking part.
 ///
-/// Without storage: the shares are computed again rather than kept, and a share gets one
-/// more when fewer than `missing` shares come before it in that order. Quadratic in `len`,
-/// the number of constraints of a layout.
+/// Up to [`INLINE`] elements, without storage: the shares are computed again rather than
+/// kept, and a share gets one more when fewer than `missing` shares come before it in that
+/// order (quadratic, but on at most 8 elements). Beyond, the layout already allocates: the
+/// shares are kept and sorted, in `O(len log len)`.
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -555,6 +556,24 @@ fn largest_remainder(
     let target = (shares().map(|(_, share)| share).sum::<f64>() + 1e-6).floor() as u64;
     let floors: u64 = shares().map(|(_, share)| share.floor() as u64).sum();
     let missing = target.saturating_sub(floors);
+    if len > INLINE {
+        let kept: Vec<(usize, f64)> = shares().collect();
+        // Positions in `kept`, by fractional part, largest first; ties favor the first
+        // (stable sort), as in the loop below.
+        let mut order: Vec<usize> = (0..kept.len()).collect();
+        order.sort_by(|&a, &b| kept[b].1.fract().total_cmp(&kept[a].1.fract()));
+        let mut extra = vec![false; kept.len()];
+        for &k in order
+            .iter()
+            .take(usize::try_from(missing).unwrap_or(usize::MAX))
+        {
+            extra[k] = true;
+        }
+        for (&(i, share), extra) in kept.iter().zip(extra) {
+            give(i, share.floor() as u64 + u64::from(extra));
+        }
+        return;
+    }
     for (i, share) in shares() {
         let fraction = share.fract();
         // Shares before this one: a larger fractional part, or the same one earlier.
@@ -1013,7 +1032,7 @@ mod tests {
     proptest::proptest! {
         #[test]
         fn the_solver_agrees_with_the_former_one(
-            constraints in proptest::collection::vec(constraint(), 0..12),
+            constraints in proptest::collection::vec(constraint(), 0..40),
             available in 0u16..2000,
         ) {
             let mut sizes = vec![0; constraints.len()];
