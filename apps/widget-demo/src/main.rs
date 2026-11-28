@@ -32,7 +32,7 @@ use crate::app::{App, AppEvent};
 use crate::logging::DroppedLogs;
 
 /// Maximum number of tasks displayed at once.
-pub const MAX_TASKS: usize = 5;
+pub const MAX_TASKS: usize = 7;
 /// Capacity of the application event channel: far more than one iteration
 /// of the UI loop accumulates, since it empties the queue each time. Each producer
 /// decides what to do when it is full (see `logging`, `tasks`, and the producers below).
