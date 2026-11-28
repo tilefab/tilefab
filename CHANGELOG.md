@@ -106,6 +106,12 @@ break the API).
 
 ### Fixed
 
+- `tilefab-term`: `Terminal::draw` wrote the scroll for the inserted lines, or after a resize
+  the clearing of the screen, before calling `render`. A panic in `render` then left those
+  bytes in the `BufWriter`, sent after the panic report: in fullscreen, `ESC[2J` erased the
+  report. `render` now runs before anything is written. A panic in it writes nothing and,
+  in inline mode, keeps the pending lines for the next `draw` (they were lost, contrary to
+  the documentation).
 - `tilefab-term`: in inline mode, the log lines that scrolled above the viewport were deleted
   instead of entering the scrollback in terminals that do not save the lines leaving a scroll
   region (VS Code's terminal among them).

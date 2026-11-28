@@ -463,13 +463,15 @@ impl<W: Write> Terminal<W> {
     /// (see [`Frame::buffer_mut`]): that frame is then drawn blank, and the terminal state
     /// stays consistent for the next one.
     ///
-    /// A frame interrupted by a write error or a panic of `render` is closed on a best-effort
-    /// basis (scroll region reset, synchronized update ended: see [`Backend::abort_sync`]),
-    /// so that the terminal does not stay frozen; the panic then goes on. The next `draw`
-    /// then starts over as after a resize (the viewport is cleared and redrawn entirely),
-    /// since the screen may show part of the interrupted frame. In inline mode, the inserted
-    /// lines of the interrupted frame that may not have been written are queued again: a
-    /// line can then appear twice, but none is lost.
+    /// `render` runs before anything is written: a panic in it writes nothing (no byte stays
+    /// in a `BufWriter`, to be sent after the panic report) and keeps the pending lines for
+    /// the next `draw`; the panic then goes on. A frame interrupted by a write error is closed
+    /// on a best-effort basis (scroll region reset, synchronized update ended: see
+    /// [`Backend::abort_sync`]), so that the terminal does not stay frozen. After either, the
+    /// next `draw` starts over as after a resize (the viewport is cleared and redrawn
+    /// entirely), since the screen may show part of the interrupted frame. In inline mode,
+    /// the inserted lines of a frame interrupted by a write error that may not have been
+    /// written are queued again: a line can then appear twice, but none is lost.
     pub fn draw(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> io::Result<()> {
         let result = panic::catch_unwind(AssertUnwindSafe(|| match self.viewport {
             Viewport::Fullscreen => self.draw_fullscreen(render),
@@ -495,20 +497,21 @@ impl<W: Write> Terminal<W> {
     /// Return whether `render` replaced the frame buffer (see [`replaced_frame_result`]).
     fn draw_fullscreen(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> io::Result<bool> {
         let size = capped(self.backend.size()?, self.viewport);
-        // Start the synchronized block: everything that follows will appear at once.
-        self.backend.begin_sync()?;
-        if size != self.screen || self.damaged {
-            // The terminal may have reflowed or lost lines, or shows part of an interrupted
-            // frame: start with an empty screen, and the previous (empty) buffer now matches
-            // what is displayed.
-            self.damaged = false;
+        // The terminal may have reflowed or lost lines, or shows part of an interrupted
+        // frame: start with an empty screen, and the previous (empty) buffer then matches
+        // what is displayed.
+        let start_over = size != self.screen || self.damaged;
+        if start_over {
             self.screen = size;
             self.area = Rect::new(0, 0, size.width, size.height);
             self.previous.reset_to(self.area);
-            self.backend.set_cursor_position(0, 0)?;
-            self.backend.clear(ClearType::All)?;
+            // Until the screen is cleared below: a panic of `render` leaves the next frame
+            // to start over too.
+            self.damaged = true;
         }
 
+        // Render before writing anything (see `draw`): a panic of `render` leaves no byte
+        // queued, that the writer would send after the panic report.
         self.next.reset_to(self.area);
         let mut frame = Frame {
             area: self.area,
@@ -522,6 +525,13 @@ impl<W: Write> Terminal<W> {
         // break (a head without its continuation, a continuation copied elsewhere).
         self.next.normalize_wide();
 
+        // Start the synchronized block: everything that follows will appear at once.
+        self.backend.begin_sync()?;
+        if start_over {
+            self.backend.set_cursor_position(0, 0)?;
+            self.backend.clear(ClearType::All)?;
+            self.damaged = false;
+        }
         let mut changed = false;
         self.backend.draw(
             self.next
@@ -559,26 +569,56 @@ impl<W: Write> Terminal<W> {
         let resized = if size == self.screen && !self.damaged {
             None
         } else {
-            Some((size, self.cursor_after_resize(size)))
+            let cursor = self.cursor_after_resize(size);
+            Some((size, self.resized_area(size, cursor)))
         };
+        let (screen, area) = resized.unwrap_or((self.screen, self.area));
 
-        self.backend.begin_sync()?;
-        if let Some((size, cursor)) = resized {
-            self.resize_inline(size, cursor)?;
-            self.damaged = false;
-        }
-
-        let screen_height = self.screen.height;
-        let new_height = self
-            .wanted_height
-            .clamp(1, max_viewport_height(self.screen));
+        let new_height = self.wanted_height.clamp(1, max_viewport_height(screen));
         // How many inserted lines fit on screen with the viewport: apply larger batches
         // in chunks.
-        let per_chunk = usize::from(screen_height.saturating_sub(new_height));
+        let per_chunk = usize::from(screen.height.saturating_sub(new_height));
         // A zero-width screen (possible after a resize since `insert_before`) cannot show
         // the inserted lines, nor a viewport filling the screen: keep them pending for the
         // first draw with room for them (see the module header).
-        let taken = self.screen.width > 0 && per_chunk > 0;
+        let taken = screen.width > 0 && per_chunk > 0;
+        let row_width = self.pending_width.max(1);
+        let chunk_cells = per_chunk.max(1) * row_width;
+
+        // Render before writing anything, and before taking the pending lines (see `draw`):
+        // a panic of `render` leaves no byte queued, that the writer would send after the
+        // panic report, and keeps every pending line. The frame is rendered where the
+        // viewport will be once the lines are applied.
+        let rows: &[Cell] = if taken { &self.pending } else { &[] };
+        let frame_area = final_area(
+            screen,
+            area,
+            chunk_lines(rows, chunk_cells, row_width),
+            new_height,
+        );
+        let mut replaced = false;
+        let frame = match frame_area {
+            Some(frame_area) => {
+                self.next.reset_to(frame_area);
+                let mut frame = Frame {
+                    area: frame_area,
+                    buffer: &mut self.next,
+                    cursor_position: None,
+                };
+                render_checked(render, &mut frame, &mut replaced);
+                let wanted_cursor = frame.cursor_position;
+                // As in fullscreen: the diff needs the pairing of wide characters.
+                self.next.normalize_wide();
+                Some(RenderedFrame { wanted_cursor })
+            }
+            None => None,
+        };
+
+        self.backend.begin_sync()?;
+        if let Some((size, area)) = resized {
+            self.resize_inline(size, area)?;
+            self.damaged = false;
+        }
         let mut rows = if taken {
             self.pending_overflowed = false;
             std::mem::take(&mut self.pending)
@@ -586,16 +626,13 @@ impl<W: Write> Terminal<W> {
             self.limit_pending();
             Vec::new()
         };
-        let row_width = self.pending_width.max(1);
-        let mut replaced = false;
-        let checked = |frame: &mut Frame<'_>| render_checked(render, frame, &mut replaced);
         let mut applied = 0;
         let result = self.commit_rows(
             &rows,
             row_width,
-            per_chunk,
+            chunk_cells,
             new_height,
-            checked,
+            frame,
             &mut applied,
         );
         if taken {
@@ -616,20 +653,20 @@ impl<W: Write> Terminal<W> {
         Ok(replaced)
     }
 
-    /// Commit `rows` in chunks of at most `per_chunk` lines, the last one with the frame
-    /// drawn by `render`, then place the cursor. `applied` counts the cells of the chunks
-    /// committed in full, for the caller to queue the others again after an error.
+    /// Commit `rows` in chunks of `chunk_cells` cells, the last one with `frame`, already
+    /// rendered in `next` (`None`: not rendered, nothing to draw), then place the cursor. `applied` counts the cells of the chunks committed in full,
+    /// for the caller to queue the others again after an error.
     fn commit_rows(
         &mut self,
         rows: &[Cell],
         row_width: usize,
-        per_chunk: usize,
+        chunk_cells: usize,
         new_height: u16,
-        render: impl FnOnce(&mut Frame<'_>),
+        frame: Option<RenderedFrame>,
         applied: &mut usize,
     ) -> io::Result<()> {
         // The last chunk is applied with the frame; the earlier ones, in order, before it.
-        let mut chunks = rows.chunks(per_chunk.max(1) * row_width);
+        let mut chunks = rows.chunks(chunk_cells);
         let last = chunks.next_back().unwrap_or(&[]);
 
         // Did any chunk move the real cursor? (With several chunks, the last one always
@@ -637,14 +674,15 @@ impl<W: Write> Terminal<W> {
         // the accumulation keeps this correct without relying on that.)
         let mut moved = false;
         for chunk in chunks {
-            moved |= self
-                .commit(chunk, row_width, new_height, None::<fn(&mut Frame<'_>)>)?
-                .1;
+            moved |= self.commit(chunk, row_width, new_height, false)?;
             *applied += chunk.len();
         }
-        let (wanted_cursor, last_moved) = self.commit(last, row_width, new_height, Some(render))?;
+        let last_moved = self.commit(last, row_width, new_height, frame.is_some())?;
         *applied += last.len();
-        self.place_cursor(wanted_cursor, moved | last_moved)
+        self.place_cursor(
+            frame.and_then(|frame| frame.wanted_cursor),
+            moved | last_moved,
+        )
     }
 
     /// Cursor position after a resize: queried from the terminal, or estimated if the query
@@ -672,8 +710,9 @@ impl<W: Write> Terminal<W> {
         Position::new(0, self.cursor_row.min(size.height.saturating_sub(1)))
     }
 
-    /// Reposition the viewport after a screen size change (see the module header).
-    fn resize_inline(&mut self, size: Size, cursor: Position) -> io::Result<()> {
+    /// Where the viewport goes after a screen size change, the cursor being at `cursor`
+    /// (see the module header). Writes nothing: [`Terminal::resize_inline`] moves it there.
+    fn resized_area(&self, size: Size, cursor: Position) -> Rect {
         // Where the cursor was within the viewport: the shell repositions it elsewhere itself,
         // but this offset remains the best indication of the viewport's starting row.
         let offset = self
@@ -682,37 +721,41 @@ impl<W: Write> Terminal<W> {
             .min(self.area.height.saturating_sub(1));
         // Never a screen with no rows here (see `draw_inline`).
         let height = self.wanted_height.clamp(1, max_viewport_height(size));
-        self.wanted_height = height;
         let top = cursor
             .y
             .saturating_sub(offset)
             .min(size.height.saturating_sub(height));
+        Rect::new(0, top, size.width, height)
+    }
 
+    /// Move the viewport to `area` (from [`Terminal::resized_area`]) on a screen of `size`.
+    fn resize_inline(&mut self, size: Size, area: Rect) -> io::Result<()> {
         // `ESC[J` is allowed here: the screen content must be redrawn anyway.
-        self.backend.set_cursor_position(0, top)?;
+        self.backend.set_cursor_position(0, area.y)?;
         self.backend.clear(ClearType::AfterCursor)?;
 
         self.screen = size;
-        self.area = Rect::new(0, top, size.width, height);
-        self.previous.reset_to(self.area);
-        self.cursor_row = top;
+        self.wanted_height = area.height;
+        self.area = area;
+        self.previous.reset_to(area);
+        self.cursor_row = area.y;
         Ok(())
     }
 
-    /// Apply a commit: scroll if necessary, write `rows` above the new viewport and,
-    /// if `render` is provided, draw the viewport of `new_height` rows. Return the cursor
-    /// position requested by the frame and a flag indicating that the real cursor moved.
+    /// Apply a commit: scroll if necessary, write `rows` above the new viewport and, with
+    /// `frame`, draw the viewport of `new_height` rows already rendered in `next` (at the
+    /// area [`final_area`] gave). Return whether the real cursor moved.
     ///
     /// Everything goes through **a single diff**: a model of the screen content after
     /// scrolling, compared with the target (inserted lines + viewport). Only differing
     /// cells are written, whether in the logs or the viewport.
-    fn commit<F: FnOnce(&mut Frame<'_>)>(
+    fn commit(
         &mut self,
         rows: &[Cell],
         row_width: usize,
         new_height: u16,
-        render: Option<F>,
-    ) -> io::Result<(Option<Position>, bool)> {
+        frame: bool,
+    ) -> io::Result<bool> {
         let screen = self.screen;
         let width = usize::from(screen.width);
         let lines = saturating_u16(rows.len().div_ceil(row_width));
@@ -720,12 +763,21 @@ impl<W: Write> Terminal<W> {
         // Outside the placement preconditions (callers do not commit on a screen with no
         // rows, nor more lines than fit), committing nothing keeps the state consistent.
         let Some(plan) = plan_commit(screen.height, top, height, lines, new_height) else {
-            return Ok((None, false));
+            return Ok(false);
         };
         let new_area = Rect::new(0, plan.top, screen.width, new_height);
+        debug_assert!(
+            !frame || self.next.area() == new_area,
+            "the frame was rendered at {:?}, the viewport goes to {new_area:?}",
+            self.next.area()
+        );
         // The common frame, a redraw at every tick (see `commit_in_place`).
         if lines == 0 && plan.scroll == 0 && plan.erase.is_empty() && new_area == self.area {
-            return render.map_or(Ok((None, false)), |render| self.commit_in_place(render));
+            return if frame {
+                self.commit_in_place()
+            } else {
+                Ok(false)
+            };
         }
         let scrolled = self.scroll_for_commit(&plan, top, height)?;
         // A fallback scroll erased the old viewport, and the stale lines with it.
@@ -735,7 +787,7 @@ impl<W: Write> Terminal<W> {
             plan.erase.clone()
         };
         self.build_model(scrolled, top - plan.scroll, lines + new_height, top, height);
-        let wanted_cursor = self.build_target(rows, row_width, lines, new_area, render);
+        self.build_target(rows, row_width, lines, frame);
         let written = self.write_commit(erase)?;
         let moved = scrolled != Scrolled::None || written;
 
@@ -744,7 +796,7 @@ impl<W: Write> Terminal<W> {
         self.previous
             .content_mut()
             .clone_from_slice(&self.target.content()[usize::from(lines) * width..]);
-        Ok((wanted_cursor, moved))
+        Ok(moved)
     }
 
     /// Step 1 of [`Terminal::commit`]: make room for `plan.scroll` lines above the viewport
@@ -815,16 +867,9 @@ impl<W: Write> Terminal<W> {
     }
 
     /// Step 3 of [`Terminal::commit`]: the target, the model with the inserted `rows`
-    /// (`lines` of them) at its top and, if drawing, the viewport (`new_area`) rendered by
-    /// the application below them. Return the cursor position the frame asked for.
-    fn build_target<F: FnOnce(&mut Frame<'_>)>(
-        &mut self,
-        rows: &[Cell],
-        row_width: usize,
-        lines: u16,
-        new_area: Rect,
-        render: Option<F>,
-    ) -> Option<Position> {
+    /// (`lines` of them) at its top and, with `frame`, the viewport the application rendered
+    /// (in `next`) below them.
+    fn build_target(&mut self, rows: &[Cell], row_width: usize, lines: u16, frame: bool) {
         let width = usize::from(self.screen.width);
         // The model, copied into the kept buffer's memory…
         self.target.clone_from(&self.model);
@@ -843,20 +888,10 @@ impl<W: Write> Terminal<W> {
             }
         }
         // …and, if drawing, the viewport rendered by the application.
-        let render = render?;
-        self.next.reset_to(new_area);
-        let mut frame = Frame {
-            area: new_area,
-            buffer: &mut self.next,
-            cursor_position: None,
-        };
-        render(&mut frame);
-        let wanted_cursor = frame.cursor_position;
-        // As in fullscreen: the diff needs the pairing of wide characters.
-        self.next.normalize_wide();
-        self.target.content_mut()[usize::from(lines) * width..]
-            .clone_from_slice(self.next.content());
-        wanted_cursor
+        if frame {
+            self.target.content_mut()[usize::from(lines) * width..]
+                .clone_from_slice(self.next.content());
+        }
     }
 
     /// Step 4 of [`Terminal::commit`]: write what differs between the model and the target,
@@ -884,23 +919,11 @@ impl<W: Write> Terminal<W> {
     }
 
     /// The fast path of [`Terminal::commit`], for the common frame (a redraw at every tick):
-    /// nothing inserted nor scrolled, and the viewport keeps its place and height. Render
-    /// into `next`, write what differs from `previous`, then swap them, as in fullscreen,
-    /// instead of building the model and the target (about five copies of the viewport).
-    fn commit_in_place<F: FnOnce(&mut Frame<'_>)>(
-        &mut self,
-        render: F,
-    ) -> io::Result<(Option<Position>, bool)> {
-        self.next.reset_to(self.area);
-        let mut frame = Frame {
-            area: self.area,
-            buffer: &mut self.next,
-            cursor_position: None,
-        };
-        render(&mut frame);
-        let wanted_cursor = frame.cursor_position;
-        // As in the general path: the diff needs the pairing of wide characters.
-        self.next.normalize_wide();
+    /// nothing inserted nor scrolled, and the viewport keeps its place and height. Write
+    /// what differs between the frame rendered in `next` and `previous`, then swap them, as
+    /// in fullscreen, instead of building the model and the target (about five copies of
+    /// the viewport). Return whether the real cursor moved.
+    fn commit_in_place(&mut self) -> io::Result<bool> {
         let mut last_row = None;
         self.backend.draw(
             self.next
@@ -911,7 +934,7 @@ impl<W: Write> Terminal<W> {
             self.cursor_row = y;
         }
         std::mem::swap(&mut self.previous, &mut self.next);
-        Ok((wanted_cursor, last_row.is_some()))
+        Ok(last_row.is_some())
     }
 
     // --- shared --------------------------------------------------------------------------
@@ -1007,6 +1030,49 @@ fn initial_placement(screen: Size, cursor: Position, height: u16) -> (u16, u16) 
         u16::try_from(append).unwrap_or(u16::MAX),
         u16::try_from(top).unwrap_or(0),
     )
+}
+
+/// A frame rendered in `Terminal::next` before the commit that draws it.
+#[derive(Debug, Clone, Copy)]
+struct RenderedFrame {
+    /// The cursor position the frame asked for (`None`: hidden).
+    wanted_cursor: Option<Position>,
+}
+
+/// The number of lines of each chunk of `rows` (`chunk_cells` cells each, rows of
+/// `row_width` cells), as `Terminal::commit_rows` applies them: none when `rows` is empty,
+/// which still commits the frame alone.
+fn chunk_lines(rows: &[Cell], chunk_cells: usize, row_width: usize) -> impl Iterator<Item = u16> {
+    rows.chunks(chunk_cells)
+        .map(move |chunk| saturating_u16(chunk.len().div_ceil(row_width)))
+}
+
+/// Where the viewport is (on `screen`, starting at `area`) after the commits of chunks of
+/// `chunk_lines` lines each, then of the frame (`new_height` rows): the area the frame is
+/// rendered at, before anything is written. `None` when the last commit is outside the
+/// placement preconditions (see [`plan_commit`]): the frame is not drawn. Follows
+/// `Terminal::commit` step by step.
+fn final_area(
+    screen: Size,
+    area: Rect,
+    chunk_lines: impl Iterator<Item = u16>,
+    new_height: u16,
+) -> Option<Rect> {
+    let mut chunk_lines = chunk_lines.peekable();
+    let (mut top, mut height) = (area.y, area.height);
+    loop {
+        // The last commit carries the frame, after the last chunk (or alone, with none).
+        let lines = chunk_lines.next().unwrap_or(0);
+        let last = chunk_lines.peek().is_none();
+        match plan_commit(screen.height, top, height, lines, new_height) {
+            Some(plan) => (top, height) = (plan.top, new_height),
+            None if last => return None,
+            None => {}
+        }
+        if last {
+            return Some(Rect::new(0, top, screen.width, new_height));
+        }
+    }
 }
 
 /// Run `render`, then check that it left the frame buffer covering the frame area. A buffer
@@ -1792,6 +1858,10 @@ mod tests {
     const CLOSING: &[u8] = b"\x1b7\x1b[r\x1b8\x1b[?2026l";
 
     fn failing_terminal() -> Terminal<FailOnce> {
+        failing_terminal_in(ScrollMode::default())
+    }
+
+    fn failing_terminal_in(mode: ScrollMode) -> Terminal<FailOnce> {
         let writer = FailOnce {
             bytes: Vec::new(),
             fail_at: None,
@@ -1799,7 +1869,9 @@ mod tests {
         let backend = Backend::with_fixed(writer, Size::new(10, 6), Position::new(0, 5));
         let mut term = Terminal::with_options(
             backend,
-            TerminalOptions::default().viewport(Viewport::Inline(2)),
+            TerminalOptions::default()
+                .viewport(Viewport::Inline(2))
+                .scroll_mode(mode),
         )
         .unwrap();
         term.draw(|_| {}).unwrap();
@@ -1882,24 +1954,70 @@ mod tests {
     }
 
     #[test]
-    fn a_panic_in_the_render_function_closes_the_synchronized_update() {
+    fn a_panic_in_the_render_function_writes_nothing_and_keeps_the_lines() {
+        for mode in [ScrollMode::Screen, ScrollMode::Region, ScrollMode::Fallback] {
+            let mut term = failing_terminal_in(mode);
+            // A line to insert: making room for it would scroll, but `render` runs first.
+            term.insert_before(1, |b| {
+                b.set_string(0, 0, "log", Style::default());
+            });
+            let before = term.backend().writer().bytes.len();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = term.draw(|_| panic!("render failed"));
+            }));
+            assert!(result.is_err());
+            // Nothing that a `BufWriter` would send after the panic report.
+            let bytes = &term.backend().writer().bytes[before..];
+            assert!(
+                bytes.is_empty(),
+                "{mode:?}: {:?}",
+                String::from_utf8_lossy(bytes)
+            );
+            // The line is still pending: the next frame writes it.
+            term.draw(|f| f.render_widget("ok", f.area())).unwrap();
+            let bytes = &term.backend().writer().bytes[before..];
+            assert!(
+                contains(bytes, b"log") && contains(bytes, b"ok"),
+                "{mode:?}: {:?}",
+                String::from_utf8_lossy(bytes)
+            );
+        }
+    }
+
+    #[test]
+    fn a_panic_after_a_resize_writes_nothing_and_the_next_frame_starts_over() {
+        // Fullscreen: a resize clears the screen, which must not be written before `render`
+        // (it would erase the panic report).
+        let mut term = terminal(10, 4);
+        term.draw(|f| f.render_widget("hi", f.area())).unwrap();
+        term.backend_mut().set_fixed_size(Size::new(12, 5));
+        let before = term.backend().writer().len();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = term.draw(|_| panic!("render failed"));
+        }));
+        assert!(result.is_err());
+        assert_eq!(term.backend().writer().len(), before, "nothing written");
+        term.draw(|f| f.render_widget("again", f.area())).unwrap();
+        let out = String::from_utf8_lossy(&term.backend().writer()[before..]).into_owned();
+        assert!(out.contains("\x1b[2J") && out.contains("again"), "{out:?}");
+        assert_eq!(term.area(), Rect::new(0, 0, 12, 5));
+
+        // Inline: the resize moves and clears the viewport, after `render` too.
         let mut term = failing_terminal();
-        // A line to insert: the scroll that makes room for it is written before `render`,
-        // so the update is open when the panic comes.
-        term.insert_before(1, |b| {
-            b.set_string(0, 0, "log", Style::default());
-        });
+        term.backend_mut().set_fixed_size(Size::new(12, 6));
         let before = term.backend().writer().bytes.len();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = term.draw(|_| panic!("render failed"));
         }));
         assert!(result.is_err());
-        let bytes = &term.backend().writer().bytes[before..];
-        assert!(
-            bytes.starts_with(b"\x1b[?2026h") && bytes.ends_with(CLOSING),
-            "{:?}",
-            String::from_utf8_lossy(bytes)
+        assert_eq!(
+            term.backend().writer().bytes.len(),
+            before,
+            "nothing written"
         );
+        term.draw(|f| f.render_widget("again", f.area())).unwrap();
+        let bytes = &term.backend().writer().bytes[before..];
+        assert!(contains(bytes, b"\x1b[J") && contains(bytes, b"again"));
     }
 
     #[test]
