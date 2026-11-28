@@ -1,4 +1,5 @@
-# Continuous integration: runs tools/ci.sh (fmt, clippy, tests, doc, cargo-deny) with the
+# Continuous integration: runs tools/ci.sh (fmt, clippy, tests, doc, cargo-deny, packaging,
+# and once a release is tagged cargo-semver-checks) with the
 # toolchain pinned in rust-toolchain.toml, then builds and tests with the MSRV (job `msrv`),
 # and on Windows and macOS (job `platforms`: the code under `cfg(windows)` or `cfg(unix)`).
 # The pty scripts of tools/ are kept local (see CONTRIBUTING.md).
@@ -39,6 +40,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The whole history and the tags: `cargo semver-checks` compares the API with the
+          # last release tag (`v*`), which must be in the clone.
+          fetch-depth: 0
 
       # Installs the toolchain and components named in rust-toolchain.toml.
       - name: Install Rust (rust-toolchain.toml)
@@ -47,11 +51,13 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
-      # Fixed version: deny.toml is checked against it (update both together).
-      - name: Install cargo-deny
+      # Fixed versions: deny.toml is checked against cargo-deny (update both together), and
+      # cargo-semver-checks must read the rustdoc JSON of the pinned toolchain (update it
+      # with rust-toolchain.toml). The versions are also in tools/ci.sh.
+      - name: Install cargo-deny and cargo-semver-checks
         uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
         with:
-          tool: cargo-deny@0.21.0
+          tool: cargo-deny@0.21.0,cargo-semver-checks@0.51.0
 
       - name: Run checks
         run: tools/ci.sh
