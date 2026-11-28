@@ -93,7 +93,10 @@ fn main() -> Result<()> {
         }
     };
 
-    let (tx, rx) = mpsc::channel(EVENT_QUEUE);
+    let (tx, mut rx) = mpsc::channel(EVENT_QUEUE);
+    // These threads and tasks are not joined: they end with the process. A panic in one of
+    // them does not go unnoticed, since the fatal panic hook (installed above) ends the
+    // process with its report.
     spawn_keyboard_thread(tx.clone());
     spawn_ticker(tx.clone());
     spawn_signal_listener(tx.clone())?;
@@ -103,19 +106,32 @@ fn main() -> Result<()> {
     }
 
     let history = app::history_path(|name| std::env::var_os(name));
-    let result = run(&mut terminal, tx, rx, &dropped_logs, history);
+    let result = run(&mut terminal, tx, &mut rx, &dropped_logs, history);
 
     // Cleanup runs even if the loop failed: clear the viewport and move the cursor to
     // its start. The shell resumes just below the logs, which remain in scrollback.
     let cleanup: Result<()> = terminal.clear().map_err(Into::into);
+    drop(terminal);
+    // Raw mode off and the cursor shown: the terminal is the shell's again.
+    drop(guard);
+    report_late_logs(&mut rx, std::io::stderr());
     result.and(cleanup)?;
     // Quit on a signal: exit with its code, once the terminal is restored.
     if let Some(code) = SIGNALS.exit_code() {
-        drop(terminal);
-        drop(guard);
         std::process::exit(code);
     }
     Ok(())
+}
+
+/// Write to `out` the log lines that arrived after the UI loop stopped (a task finishing
+/// while the demo quits): the channel is kept open until the terminal is restored, then
+/// emptied here, so that they are not lost. The other events are dropped.
+fn report_late_logs(rx: &mut Receiver<AppEvent>, mut out: impl Write) {
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::Log(line) = event {
+            let _ = writeln!(out, "{line}");
+        }
+    }
 }
 
 /// The scroll mode named by `TILEFAB_SCROLL_MODE` (`screen`, the default, `region` or
@@ -336,7 +352,7 @@ fn spawn_signal_listener(_tx: Sender<AppEvent>) -> Result<()> {
 fn run<W: Write>(
     terminal: &mut Terminal<W>,
     tx: Sender<AppEvent>,
-    mut rx: Receiver<AppEvent>,
+    rx: &mut Receiver<AppEvent>,
     dropped_logs: &DroppedLogs,
     history: Option<PathBuf>,
 ) -> Result<()> {
@@ -600,12 +616,12 @@ mod tests {
             TerminalOptions::default().viewport(Viewport::Inline(1)),
         )
         .unwrap();
-        let (tx, rx) = mpsc::channel(16);
+        let (tx, mut rx) = mpsc::channel(16);
         tx.try_send(AppEvent::InputFailed("tty gone".into()))
             .unwrap();
         // On this thread, so that the log is captured; `run` returns: the application quits.
         let logs = logging::capture(|| {
-            run(&mut terminal, tx, rx, &DroppedLogs::default(), None).unwrap();
+            run(&mut terminal, tx, &mut rx, &DroppedLogs::default(), None).unwrap();
         });
         assert_eq!(logs, ["[ERROR] keyboard input failed (tty gone): quitting"]);
     }
@@ -654,6 +670,22 @@ mod tests {
     }
 
     #[test]
+    fn the_logs_that_arrive_after_the_loop_are_written_out() {
+        let (tx, mut rx) = mpsc::channel(16);
+        tx.try_send(AppEvent::Log("[INFO] task \"a\" finished".into()))
+            .unwrap();
+        tx.try_send(AppEvent::Tick).unwrap();
+        tx.try_send(AppEvent::Log("[WARN] late".into())).unwrap();
+        let mut out = Vec::new();
+        report_late_logs(&mut rx, &mut out);
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "[INFO] task \"a\" finished\n[WARN] late\n"
+        );
+        assert!(rx.try_recv().is_err(), "the channel is emptied");
+    }
+
+    #[test]
     fn the_burst_that_quits_is_written_before_leaving() {
         use tilefab::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -663,7 +695,7 @@ mod tests {
             TerminalOptions::default().viewport(Viewport::Inline(1)),
         )
         .unwrap();
-        let (tx, rx) = mpsc::channel(16);
+        let (tx, mut rx) = mpsc::channel(16);
         // One burst: a log line, then `quit` typed and submitted.
         let key = |code| AppEvent::Key(KeyEvent::new(code, KeyModifiers::NONE));
         tx.try_send(AppEvent::Log("[INFO] last-log".into()))
@@ -673,7 +705,7 @@ mod tests {
         }
         tx.try_send(key(KeyCode::Enter)).unwrap();
 
-        run(&mut terminal, tx, rx, &DroppedLogs::default(), None).unwrap();
+        run(&mut terminal, tx, &mut rx, &DroppedLogs::default(), None).unwrap();
         let written =
             String::from_utf8(std::mem::take(terminal.backend_mut().writer_mut())).unwrap();
         // No space in the searched text: the diff skips unchanged (blank) cells.
