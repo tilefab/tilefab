@@ -9,8 +9,9 @@
 # (`cargo install --locked cargo-semver-checks@0.51.0`): see the end of this script.
 # Cargo commands run with `--locked`: a Cargo.lock out of sync with Cargo.toml fails instead of
 # being updated silently.
-# The pty scripts of tools/ (check_inline.py, check_app.py, check_default_terminal.py) and the fuzzing itself are not run
-# here: see CONTRIBUTING.md.
+# The pty scripts of tools/ (check_inline.py, check_app.py, check_default_terminal.py) run in
+# the `pty` job of the CI workflow, and the fuzzing in fuzz.yml: neither is run here (see
+# CONTRIBUTING.md).
 
 set -euo pipefail
 

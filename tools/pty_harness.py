@@ -4,7 +4,8 @@
 Setup (once, from the repository root):
 
     python3 -m venv tools/.venv
-    tools/.venv/bin/pip install -r tools/requirements.txt
+    tools/.venv/bin/pip install --require-hashes --only-binary=:all: -r tools/requirements-pty.txt
+    tools/.venv/bin/pip install -r tools/requirements.txt   # the video analysis only
 
 Library usage (see tools/scenarios_pty.py):
 

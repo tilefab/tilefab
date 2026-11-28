@@ -1,8 +1,9 @@
 # Continuous integration: runs tools/ci.sh (fmt, clippy, tests, doc, cargo-deny, packaging,
 # and once a release is tagged cargo-semver-checks) with the
 # toolchain pinned in rust-toolchain.toml, then builds and tests with the MSRV (job `msrv`),
-# and on Windows and macOS (job `platforms`: the code under `cfg(windows)` or `cfg(unix)`).
-# The pty scripts of tools/ are kept local (see CONTRIBUTING.md).
+# and on Windows and macOS (job `platforms`: the code under `cfg(windows)` or `cfg(unix)`),
+# and runs the pty scripts of tools/ on Linux (job `pty`: the programs in a pseudo-terminal,
+# their output read by a terminal emulator).
 #
 # Actions are pinned by commit SHA, not by tag (a tag can be moved to other code); the
 # comment gives the version (a format Dependabot understands, if it is enabled). Cargo
@@ -108,3 +109,42 @@ jobs:
 
       - name: Test
         run: cargo test --locked --all-features
+
+  # End to end, in a pseudo-terminal read by a terminal emulator (pyte): the inline viewport
+  # (no flicker, no lost log), the demo (resize, zero width or height, line editor, signals,
+  # panic, degraded mode) and the one-call setup (quickstart, panic report kept on screen).
+  # The scripts are the ones of CONTRIBUTING.md, on the debug builds. Linux only: the pty
+  # module and termios are Unix, and macOS gives the same results locally.
+  pty:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install && rustc --version
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      # The examples (`inline`, `panic_report`) and the binaries (`widget-demo`, `quickstart`).
+      - name: Build the programs the scripts launch
+        run: cargo build --locked --examples && cargo build --locked
+
+      # The Python of the runner, in a venv; the packages pinned with the hash of their wheel.
+      - name: Install the Python packages of the pty scripts
+        run: |
+          python3 --version
+          python3 -m venv tools/.venv
+          tools/.venv/bin/pip install --require-hashes --only-binary=:all: -r tools/requirements-pty.txt
+
+      - name: Inline viewport (check_inline.py)
+        run: tools/.venv/bin/python tools/check_inline.py
+
+      - name: Demo application (check_app.py)
+        run: tools/.venv/bin/python tools/check_app.py
+
+      - name: One-call setup (check_default_terminal.py)
+        run: tools/.venv/bin/python tools/check_default_terminal.py
