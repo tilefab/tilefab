@@ -50,7 +50,7 @@ Keys typed while it waits are echoed by the terminal but not read: stdin is the 
 | `help` | logs the list of commands |
 | `quit`, `exit`, Ctrl+C, Ctrl+D (on an empty line) | clean exit |
 
-At most 5 simultaneous tasks (`MAX_TASKS`); beyond that, the command is refused with a WARN. An unknown command gives a WARN, `start` without a name an ERROR. A name that ends with a quoted part is read as a name and a composition: `start say "hi"` starts `say` with the composition `hi`, which is refused.
+At most 7 simultaneous tasks (`MAX_TASKS`); beyond that, the command is refused with a WARN. An unknown command gives a WARN, `start` without a name an ERROR. A name that ends with a quoted part is read as a name and a composition: `start say "hi"` starts `say` with the composition `hi`, which is refused.
 
 ## Task lines
 
@@ -211,7 +211,7 @@ End to end, in a pty with a terminal emulator (local only, not part of the CI; o
 cargo build --examples && cargo build
 tools/.venv/bin/python tools/check_inline.py   # height cycle 1 → 5 → 1 with logs: a single synchronized block per commit,
                                                # no ESC[J / ESC[2J, no log lost or duplicated, prompt not moving
-tools/.venv/bin/python tools/check_app.py      # Unicode input, burst of 5 tasks, resize, zero width, zero height, line editor (history, completion menu, search, paste), signals (and a second signal on a stuck UI), panic, degraded mode
+tools/.venv/bin/python tools/check_app.py      # Unicode input, burst of 7 tasks (`MAX_TASKS`), resize, zero width, zero height, line editor (history, completion menu, search, paste), signals (and a second signal on a stuck UI), panic, degraded mode
 ```
 
 The same scenarios on the release build (no overflow checks, no `debug_assert!`; `panic` must then be an unknown command): `cargo build --release && tools/.venv/bin/python tools/check_app.py --release`.
@@ -255,7 +255,7 @@ The frame commit tests (`crates/tilefab-term/src/inline_tests.rs`) replay the em
 
 - **Window shrinking**: Terminal.app and iTerm2 rewrap the existing lines when the window shrinks, which makes the viewport position uncertain. The cursor position is queried, everything from the top of the viewport to the bottom of the screen is erased (`ESC[J`, the only case besides exit) and everything is redrawn: copies of the old viewport may remain above, and log lines already displayed may disappear from the screen (depending on the terminal, they may or may not stay in the scrollback).
 - **Terminal as short as the viewport**: with no room for log lines, they wait as long as the viewport fills the whole screen, and are shown once tasks end and the viewport shrinks. At most `MAX_PENDING_LINES` (1,000) lines wait: beyond that, the oldest are dropped, with a warning.
-- **Maximum height**: `MAX_TASKS + 1` lines (6); below 6 terminal lines, the viewport is capped to the screen height.
+- **Maximum height**: `MAX_TASKS + 1` lines (8); below 8 terminal lines, the viewport is capped to the screen height.
 - **Huge screens**: the library draws at most `MAX_SCREEN_WIDTH` × `MAX_SCREEN_HEIGHT` cells (2048 × 1024, above the largest real terminals): a pty set to 65535 × 65535 would otherwise need buffers that do not fit in memory. Beyond that, the rest of the screen is left as it is; an inline viewport keeps the real height of the screen for its placement.
 - **A task ending with fewer log lines than freed lines**: a blank line may appear below the viewport (case `d > n`). In `tilefab` every task end produces a line, so this does not happen.
 - **Synchronized update** (mode 2026): terminals that do not know it ignore it; the frame is then displayed as it is written (still in a single `write`).
